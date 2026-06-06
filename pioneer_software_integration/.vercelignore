@@ -1,0 +1,12 @@
+.dart_tool
+build
+coverage
+
+android
+ios
+linux
+macos
+windows
+
+test
+*.log
