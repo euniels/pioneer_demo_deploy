@@ -1,0 +1,2666 @@
+import 'package:flutter/material.dart';
+import 'dart:async';
+
+import '../config/pioneer_runtime_config.dart';
+import '../widgets/dashboard_layout.dart';
+import '../services/backend_api.dart';
+import '../services/crud_permissions.dart';
+import '../services/fleet_sync_service.dart';
+import '../services/geotab_sync_status_service.dart';
+import '../services/page_cache_service.dart';
+import '../services/vehicles_store.dart';
+import '../utils/display_format.dart';
+import '../utils/form_validation.dart';
+import '../widgets/geotab_push_preview.dart';
+import '../widgets/geotab_sync_status_badge.dart';
+import 'vehicle_details_modal.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import '../theme/app_theme.dart';
+
+class VehiclesPage extends StatefulWidget {
+  const VehiclesPage({super.key});
+
+  @override
+  State<VehiclesPage> createState() => _VehiclesPageState();
+}
+
+class _VehiclesPageState extends State<VehiclesPage> {
+  static const String _cacheKey = 'vehicles_page';
+
+  String _searchQuery = '';
+  String _statusFilter = 'All Status';
+  String _typeFilter = 'All Types';
+  String _fuelFilter = 'All Fuel';
+  String _sortMode = 'Plate A-Z';
+
+  @override
+  void initState() {
+    super.initState();
+    vehiclesNotifier.addListener(_onVehiclesChanged);
+    _primeVehicles();
+  }
+
+  void _onVehiclesChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _primeVehicles({bool forceRefresh = false}) async {
+    await PageCacheService.getOrLoad<int>(
+      key: _cacheKey,
+      ttl: PageCacheService.vehiclesTtl,
+      forceRefresh: forceRefresh,
+      loader: () async {
+        await refreshFleetBootstrap(forceRefresh: forceRefresh);
+        await refreshFleetSnapshot(forceRefresh: forceRefresh);
+        _prewarmVehicleDetails();
+        return vehiclesNotifier.value.length;
+      },
+    ).catchError((_) {
+      refreshFleetBootstrapSilently(forceRefresh: forceRefresh);
+      return vehiclesNotifier.value.length;
+    });
+  }
+
+  Future<void> _refreshVehicles() async {
+    await _primeVehicles(forceRefresh: true);
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _prewarmVehicleDetails() {
+    for (final vehicle in vehiclesNotifier.value.take(5)) {
+      final geotabId = vehicle['geotabId']?.toString().trim() ?? '';
+      if (geotabId.isEmpty) {
+        continue;
+      }
+
+      unawaited(
+        BackendApiService.getFleetTelemetryAsset(geotabId)
+            .timeout(const Duration(seconds: 8))
+            .catchError((_) => <String, dynamic>{}),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    vehiclesNotifier.removeListener(_onVehiclesChanged);
+    super.dispose();
+  }
+
+  List<Map<String, dynamic>> get _filteredVehicles {
+    var list = vehiclesNotifier.value;
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      list = list
+          .where(
+            (v) =>
+                v['plate'].toString().toLowerCase().contains(q) ||
+                v['truckType'].toString().toLowerCase().contains(q) ||
+                (v['makeModel'] ?? '').toString().toLowerCase().contains(q) ||
+                v['driver'].toString().toLowerCase().contains(q),
+          )
+          .toList();
+    }
+    if (_statusFilter != 'All Status') {
+      list = list.where((v) {
+        final vStatus = v['status'].toString().toLowerCase();
+        final fStatus = _statusFilter.toLowerCase();
+        // 'On Trip' filter matches 'on trip' stored value
+        return vStatus == fStatus ||
+            vStatus.replaceAll(' ', '') == fStatus.replaceAll(' ', '');
+      }).toList();
+    }
+    if (_typeFilter != 'All Types') {
+      list = list.where((v) {
+        final type = (v['vehicleType'] ?? v['truckType'] ?? '')
+            .toString()
+            .toLowerCase();
+        return type == _typeFilter.toLowerCase();
+      }).toList();
+    }
+    if (_fuelFilter != 'All Fuel') {
+      list = list.where((v) {
+        final fuel = (v['fuelType'] ?? '').toString().toLowerCase();
+        return fuel == _fuelFilter.toLowerCase();
+      }).toList();
+    }
+    final sorted = List<Map<String, dynamic>>.from(list);
+    sorted.sort((a, b) {
+      return switch (_sortMode) {
+        'Plate Z-A' => _compareText(b['plate'], a['plate']),
+        'Status A-Z' => _compareText(a['status'], b['status']),
+        'Status Z-A' => _compareText(b['status'], a['status']),
+        'Type A-Z' => _compareText(
+          a['vehicleType'] ?? a['truckType'],
+          b['vehicleType'] ?? b['truckType'],
+        ),
+        'Type Z-A' => _compareText(
+          b['vehicleType'] ?? b['truckType'],
+          a['vehicleType'] ?? a['truckType'],
+        ),
+        _ => _compareText(a['plate'], b['plate']),
+      };
+    });
+    return sorted;
+  }
+
+  int get _movingCount => vehiclesNotifier.value
+      .where(
+        (vehicle) =>
+            (vehicle['speed'] as num?)?.toInt() != null &&
+                (vehicle['speed'] as num).toInt() > 0 ||
+            vehicle['isDriving'] == true,
+      )
+      .length;
+
+  int get _reportingCount => vehiclesNotifier.value
+      .where(
+        (vehicle) =>
+            ((vehicle['latitude'] as num?)?.toDouble() ?? 0.0) != 0.0 ||
+            ((vehicle['longitude'] as num?)?.toDouble() ?? 0.0) != 0.0,
+      )
+      .length;
+
+  int get _maintenanceCount => vehiclesNotifier.value
+      .where(
+        (vehicle) =>
+            vehicle['status']?.toString().trim().toLowerCase() == 'maintenance',
+      )
+      .length;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return DashboardLayout(
+      currentRoute: '/vehicles',
+      title: 'Vehicles',
+      child: _buildPageContent(isDark),
+    );
+  }
+
+  Widget _buildPageContent(bool isDark) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 850;
+
+    return Column(
+      children: [
+        Container(
+          padding: EdgeInsets.all(isMobile ? 16 : 24),
+          decoration: BoxDecoration(
+            color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+            border: Border(
+              bottom: BorderSide(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.08)
+                    : AppTheme.black.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+          child: _buildHeader(isDark, screenWidth),
+        ),
+        Container(
+          width: double.infinity,
+          padding: EdgeInsets.fromLTRB(
+            isMobile ? 16 : 24,
+            16,
+            isMobile ? 16 : 24,
+            0,
+          ),
+          color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+          child: _buildSummaryStrip(isDark, isMobile),
+        ),
+        Expanded(
+          child: Container(
+            color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+            child: RefreshIndicator(
+              onRefresh: _refreshVehicles,
+              child: _filteredVehicles.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        SizedBox(height: 420, child: _buildEmptyState(isDark)),
+                      ],
+                    )
+                  : ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.all(isMobile ? 16 : 24),
+                      children: [
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final gap = isMobile ? 12.0 : 20.0;
+                            final width = constraints.maxWidth;
+                            final columns = width >= 1040
+                                ? 3
+                                : width >= 680
+                                ? 2
+                                : 1;
+                            final cardWidth =
+                                (width - (gap * (columns - 1))) / columns;
+
+                            return Wrap(
+                              spacing: gap,
+                              runSpacing: gap,
+                              children: List.generate(
+                                _filteredVehicles.length,
+                                (index) {
+                                  return SizedBox(
+                                    width: cardWidth,
+                                    child:
+                                        _buildVehicleCard(
+                                              _filteredVehicles[index],
+                                              isDark,
+                                            )
+                                            .animate()
+                                            .fadeIn(duration: 500.ms)
+                                            .slideY(
+                                              begin: 0.2,
+                                              end: 0,
+                                              duration: 500.ms,
+                                              curve: Curves.easeOut,
+                                            ),
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ HEADER Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+  Widget _buildHeader(bool isDark, double screenWidth) {
+    if (screenWidth < 500) return _buildMobileHeader(isDark);
+    if (screenWidth < 900) return _buildCompactHeader(isDark);
+    return _buildDesktopHeader(isDark);
+  }
+
+  Widget _buildDesktopHeader(bool isDark) {
+    return Row(
+      children: [
+        Expanded(child: _searchField(isDark)),
+        const SizedBox(width: 12),
+        _statusDropdown(isDark, isExpanded: false),
+        const SizedBox(width: 12),
+        _filterDropdown(
+          isDark,
+          value: _typeFilter,
+          values: const [
+            'All Types',
+            'Light Commercial Vehicle',
+            'Drop-side Truck',
+            'Refrigerated Truck',
+            'Tanker',
+            'Other',
+          ],
+          onChanged: (value) => setState(() => _typeFilter = value),
+        ),
+        const SizedBox(width: 12),
+        _filterDropdown(
+          isDark,
+          value: _fuelFilter,
+          values: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
+          onChanged: (value) => setState(() => _fuelFilter = value),
+        ),
+        const SizedBox(width: 12),
+        _filterDropdown(
+          isDark,
+          value: _sortMode,
+          values: const [
+            'Plate A-Z',
+            'Plate Z-A',
+            'Status A-Z',
+            'Status Z-A',
+            'Type A-Z',
+            'Type Z-A',
+          ],
+          onChanged: (value) => setState(() => _sortMode = value),
+        ),
+        const SizedBox(width: 12),
+        _addButton(label: 'Add Vehicle'),
+      ],
+    );
+  }
+
+  Widget _buildCompactHeader(bool isDark) {
+    return Column(
+      children: [
+        _searchField(isDark),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: _statusDropdown(isDark, isExpanded: true)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _filterDropdown(
+                isDark,
+                value: _typeFilter,
+                values: const [
+                  'All Types',
+                  'Light Commercial Vehicle',
+                  'Drop-side Truck',
+                  'Refrigerated Truck',
+                  'Tanker',
+                  'Other',
+                ],
+                onChanged: (value) => setState(() => _typeFilter = value),
+                isExpanded: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _filterDropdown(
+                isDark,
+                value: _fuelFilter,
+                values: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
+                onChanged: (value) => setState(() => _fuelFilter = value),
+                isExpanded: true,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _filterDropdown(
+                isDark,
+                value: _sortMode,
+                values: const [
+                  'Plate A-Z',
+                  'Plate Z-A',
+                  'Status A-Z',
+                  'Status Z-A',
+                  'Type A-Z',
+                  'Type Z-A',
+                ],
+                onChanged: (value) => setState(() => _sortMode = value),
+                isExpanded: true,
+              ),
+            ),
+            const SizedBox(width: 12),
+            _addButton(label: 'Add'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileHeader(bool isDark) {
+    return Column(
+      children: [
+        _searchField(isDark),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: _statusDropdown(isDark, isExpanded: true)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _filterDropdown(
+                isDark,
+                value: _typeFilter,
+                values: const [
+                  'All Types',
+                  'Light Commercial Vehicle',
+                  'Drop-side Truck',
+                  'Refrigerated Truck',
+                  'Tanker',
+                  'Other',
+                ],
+                onChanged: (value) => setState(() => _typeFilter = value),
+                isExpanded: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _filterDropdown(
+                isDark,
+                value: _fuelFilter,
+                values: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
+                onChanged: (value) => setState(() => _fuelFilter = value),
+                isExpanded: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _filterDropdown(
+                isDark,
+                value: _sortMode,
+                values: const [
+                  'Plate A-Z',
+                  'Plate Z-A',
+                  'Status A-Z',
+                  'Status Z-A',
+                  'Type A-Z',
+                  'Type Z-A',
+                ],
+                onChanged: (value) => setState(() => _sortMode = value),
+                isExpanded: true,
+              ),
+            ),
+            const SizedBox(width: 12),
+            _addButton(label: 'Add'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _searchField(bool isDark) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.search_rounded,
+            color: isDark ? AppTheme.gray600 : AppTheme.gray500,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Search vehicles...',
+                hintStyle: TextStyle(
+                  color: isDark ? AppTheme.gray600 : AppTheme.gray500,
+                  fontSize: 14,
+                ),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusDropdown(bool isDark, {required bool isExpanded}) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: DropdownButton<String>(
+        value: _statusFilter,
+        underline: const SizedBox(),
+        isExpanded: isExpanded,
+        icon: Icon(
+          Icons.keyboard_arrow_down_rounded,
+          color: isDark ? AppTheme.gray400 : AppTheme.gray700,
+          size: 20,
+        ),
+        style: TextStyle(
+          fontSize: 14,
+          color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+          fontWeight: FontWeight.w500,
+        ),
+        dropdownColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        items: [
+          'All Status',
+          'Available',
+          'On Trip',
+          'Maintenance',
+          'Inactive',
+        ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+        onChanged: (v) => setState(() => _statusFilter = v!),
+      ),
+    );
+  }
+
+  Widget _filterDropdown(
+    bool isDark, {
+    required String value,
+    required List<String> values,
+    required ValueChanged<String> onChanged,
+    bool isExpanded = false,
+  }) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: DropdownButton<String>(
+        value: value,
+        underline: const SizedBox(),
+        isExpanded: isExpanded,
+        icon: Icon(
+          Icons.keyboard_arrow_down_rounded,
+          color: isDark ? AppTheme.gray400 : AppTheme.gray700,
+          size: 20,
+        ),
+        style: TextStyle(
+          fontSize: 14,
+          color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+          fontWeight: FontWeight.w500,
+        ),
+        dropdownColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        items: values
+            .map((item) => DropdownMenuItem(value: item, child: Text(item)))
+            .toList(),
+        onChanged: (next) {
+          if (next != null) onChanged(next);
+        },
+      ),
+    );
+  }
+
+  Widget _addButton({required String label}) {
+    if (!CrudPermissions.canCreate(CrudEntity.vehicles)) {
+      return const SizedBox.shrink();
+    }
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: _showAddVehicleModal,
+        child: Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [AppTheme.colorFF4B7BE5, AppTheme.colorFF00D4FF],
+            ),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.3),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.add_rounded, color: AppTheme.white, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ); // MouseRegion
+  }
+
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ ADD VEHICLE MODAL Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+  void _showAddVehicleModal() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => _VehicleEditorDialog(
+        existingPlates: vehiclesNotifier.value
+            .map((vehicle) => vehicle['plate']?.toString() ?? '')
+            .where((plate) => plate.trim().isNotEmpty)
+            .toSet(),
+        onSave: (payload) async {
+          await createVehicleInBackend(payload);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Changes saved locally.')),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  void _showEditVehicleModal(Map<String, dynamic> vehicle) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => _VehicleEditorDialog(
+        vehicle: vehicle,
+        existingPlates: vehiclesNotifier.value
+            .where((item) => item['plate'] != vehicle['plate'])
+            .map((item) => item['plate']?.toString() ?? '')
+            .where((plate) => plate.trim().isNotEmpty)
+            .toSet(),
+        onSave: (payload) async {
+          final id =
+              vehicle['localId']?.toString() ??
+              vehicle['id']?.toString().replaceFirst('manual-vehicle-', '') ??
+              '';
+          if (id.isEmpty) {
+            throw const BackendApiException(
+              'Only managed PioneerPath vehicles can be edited.',
+            );
+          }
+          await updateVehicleInBackend(id, payload);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Changes saved locally.')),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _confirmDeactivateVehicle(Map<String, dynamic> vehicle) async {
+    final id =
+        vehicle['localId']?.toString() ??
+        vehicle['id']?.toString().replaceFirst('manual-vehicle-', '') ??
+        '';
+    if (id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Only managed PioneerPath vehicles can be deactivated.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final reasonCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Deactivate vehicle?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${vehicle['plate']} will be removed from assignment dropdowns.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                hintText: 'Optional operations note',
+              ),
+              maxLines: 2,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Deactivate'),
+          ),
+        ],
+      ),
+    );
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+
+    if (confirmed != true) return;
+
+    try {
+      await deactivateVehicleInBackend(
+        id,
+        reason: reason.isEmpty ? 'Deactivated from Vehicles page.' : reason,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Changes saved locally.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteVehicle(Map<String, dynamic> vehicle) async {
+    if (vehicle['managedLocally'] != true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Only managed PioneerPath vehicles can be deleted.'),
+        ),
+      );
+      return;
+    }
+
+    final plate = _displayValue(vehicle['plate']);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete $plate?'),
+        content: const Text(
+          'This cannot be undone. Vehicles with trip history cannot be deleted; use Deactivate instead to preserve records.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.colorFFE74C3C,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await deleteVehicleInBackend(vehicle);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vehicle deleted successfully.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _pushVehicleToGeotab(Map<String, dynamic> vehicle) async {
+    final preview = await pushVehicleToGeotab(vehicle, previewOnly: true);
+    if (!mounted) return;
+    if (!await guardGeotabPushPreview(context: context, preview: preview)) {
+      return;
+    }
+    final confirmed = await showGeotabPushPreview(
+      context: context,
+      entityType: 'Vehicle',
+      entityName: (vehicle['plate'] ?? vehicle['plateNumber'] ?? '').toString(),
+      payload: preview['preview'],
+      snapshot: preview['geotabSnapshot'],
+      previewPayload: preview['previewPayload'],
+    );
+    if (confirmed != true) return;
+
+    try {
+      await pushVehicleToGeotab(vehicle);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('GeoTab push request staged for admin approval.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ VEHICLE CARD Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+  Widget _buildVehicleCard(Map<String, dynamic> vehicle, bool isDark) {
+    final statusColor = vehicle['statusColor'] is Color
+        ? vehicle['statusColor'] as Color
+        : _statusColorForVehicle(vehicle);
+
+    String statusLabel;
+    switch ((vehicle['status']?.toString() ?? '').toLowerCase()) {
+      case 'available':
+      case 'active':
+        statusLabel = 'Available';
+        break;
+      case 'on trip':
+      case 'ontrip':
+        statusLabel = 'On Trip';
+        break;
+      case 'maintenance':
+      case 'under maintenance':
+        statusLabel = 'Maintenance';
+        break;
+      case 'inactive':
+        statusLabel = 'Inactive';
+        break;
+      default:
+        statusLabel = vehicle['status']?.toString() ?? 'Available';
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final scale = (constraints.maxWidth / 350).clamp(0.84, 1.08);
+        final p = 16.0 * scale;
+        final locationLabel =
+            vehicle['currentLocationLabel']?.toString().trim() ?? '';
+        final importedOnly = _isGeotabOnlyVehicle(vehicle);
+        final samples = _sampleVehicleSpecifications(vehicle);
+        final makeModelSample =
+            PioneerRuntimeConfig.showMockData &&
+            importedOnly &&
+            !_hasDisplayValue(vehicle['makeModel']);
+        final makeModel = _hasDisplayValue(vehicle['makeModel'])
+            ? _displayValue(vehicle['makeModel'])
+            : (makeModelSample ? samples['makeModel']! : '');
+        final fuelCapacitySample =
+            PioneerRuntimeConfig.showMockData &&
+            importedOnly &&
+            !_hasDisplayValue(vehicle['fuelCapacity']);
+        final fuelCapacity = _hasDisplayValue(vehicle['fuelCapacity'])
+            ? '${_displayValue(vehicle['fuelCapacity'])} L cap.'
+            : (fuelCapacitySample ? '${samples['fuelCapacity']} L cap.' : '');
+        final yearSample =
+            PioneerRuntimeConfig.showMockData &&
+            importedOnly &&
+            !_hasDisplayValue(vehicle['year']);
+        final year = _hasDisplayValue(vehicle['year'])
+            ? _displayValue(vehicle['year'])
+            : (yearSample ? samples['year']! : '');
+        final cargoSample =
+            PioneerRuntimeConfig.showMockData &&
+            importedOnly &&
+            !_hasDisplayValue(vehicle['cargoCapacityKg']);
+        final cargoCapacity = _hasDisplayValue(vehicle['cargoCapacityKg'])
+            ? '${_displayValue(vehicle['cargoCapacityKg'])} kg cargo'
+            : (cargoSample ? '${samples['cargoCapacity']} kg cargo' : '');
+        final infoItems = <Widget>[
+          if (fuelCapacity.isNotEmpty)
+            _infoItem(
+              Icons.local_gas_station_rounded,
+              fuelCapacity,
+              isDark,
+              scale,
+              isSample: fuelCapacitySample,
+            ),
+          if (_hasDisplayValue(vehicle['mileage']))
+            _infoItem(
+              Icons.speed_rounded,
+              _displayValue(vehicle['mileage']),
+              isDark,
+              scale,
+            ),
+          if (year.isNotEmpty)
+            _infoItem(
+              Icons.calendar_today_rounded,
+              year,
+              isDark,
+              scale,
+              isSample: yearSample,
+            ),
+          if (cargoCapacity.isNotEmpty)
+            _infoItem(
+              Icons.inventory_2_rounded,
+              cargoCapacity,
+              isDark,
+              scale,
+              isSample: cargoSample,
+            ),
+          _infoItem(
+            Icons.route_rounded,
+            '${vehicle['numTrips'] ?? 0} trips',
+            isDark,
+            scale,
+          ),
+        ];
+
+        return InkWell(
+          onTap: () {
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: AppTheme.transparent,
+              builder: (_) => DraggableScrollableSheet(
+                initialChildSize: 0.75,
+                minChildSize: 0.5,
+                maxChildSize: 0.95,
+                expand: false,
+                builder: (_, __) => VehicleDetailsModal(vehicle: vehicle),
+              ),
+            );
+          },
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.08)
+                    : AppTheme.black.withValues(alpha: 0.08),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.black.withValues(alpha: isDark ? 0.22 : 0.05),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(p),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 44 * scale,
+                        height: 44 * scale,
+                        decoration: BoxDecoration(
+                          color: AppTheme.colorFF1B2A4A,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Icon(
+                          Icons.local_shipping_rounded,
+                          color: AppTheme.colorFF4B7BE5,
+                          size: 22 * scale,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _displayValue(vehicle['plate']),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 17 * scale,
+                                fontWeight: FontWeight.w800,
+                                color: isDark
+                                    ? AppTheme.white
+                                    : AppTheme.colorFF233244,
+                              ),
+                            ),
+                            if (_hasDisplayValue(vehicle['truckType']) ||
+                                makeModel.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Wrap(
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 5,
+                                runSpacing: 3,
+                                children: [
+                                  if (_hasDisplayValue(vehicle['truckType']))
+                                    Text(
+                                      _displayValue(vehicle['truckType']),
+                                      style: TextStyle(
+                                        fontSize: 12 * scale,
+                                        color: isDark
+                                            ? AppTheme.gray400
+                                            : AppTheme.gray600,
+                                      ),
+                                    ),
+                                  if (makeModel.isNotEmpty)
+                                    Text(
+                                      '${_hasDisplayValue(vehicle['truckType']) ? '- ' : ''}$makeModel',
+                                      style: TextStyle(
+                                        fontSize: 12 * scale,
+                                        fontStyle: makeModelSample
+                                            ? FontStyle.italic
+                                            : FontStyle.normal,
+                                        color: isDark
+                                            ? AppTheme.gray400
+                                            : AppTheme.gray600,
+                                      ),
+                                    ),
+                                  if (makeModelSample) _sampleChip(scale),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: 112 * scale),
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 10 * scale,
+                            vertical: 5 * scale,
+                          ),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            statusLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: statusColor,
+                            ),
+                          ),
+                        ),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: 'Vehicle actions',
+                        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+                        icon: Icon(
+                          Icons.more_vert_rounded,
+                          color: isDark ? AppTheme.gray300 : AppTheme.gray600,
+                        ),
+                        onSelected: (action) {
+                          if (action == 'edit') {
+                            _showEditVehicleModal(vehicle);
+                          } else if (action == 'deactivate') {
+                            unawaited(_confirmDeactivateVehicle(vehicle));
+                          } else if (action == 'delete') {
+                            unawaited(_confirmDeleteVehicle(vehicle));
+                          } else if (action == 'push_geotab') {
+                            unawaited(_pushVehicleToGeotab(vehicle));
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          if (CrudPermissions.canEdit(CrudEntity.vehicles))
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Text('Edit vehicle'),
+                            ),
+                          PopupMenuItem(
+                            value: 'push_geotab',
+                            enabled: canPushToGeotab(vehicle),
+                            child: const Text('Push to GeoTab'),
+                          ),
+                          if (CrudPermissions.canDelete(CrudEntity.vehicles))
+                            const PopupMenuItem(
+                              value: 'deactivate',
+                              child: Text('Deactivate'),
+                            ),
+                          if (CrudPermissions.canDelete(CrudEntity.vehicles) &&
+                              vehicle['managedLocally'] == true)
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Text('Delete'),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 14 * scale),
+                  _vehicleInfoWrap(infoItems, scale),
+                  SizedBox(height: 12 * scale),
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(12 * scale),
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? AppTheme.colorFF11161F
+                          : AppTheme.colorFFF7F9FC,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        Text(
+                          'Driver:',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+                          ),
+                        ),
+                        SizedBox(width: 6 * scale),
+                        Expanded(
+                          child: Text(
+                            _displayValue(vehicle['driver']),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5 * scale,
+                              fontWeight: FontWeight.w700,
+                              color: isDark
+                                  ? AppTheme.white
+                                  : AppTheme.colorFF233244,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 12 * scale),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _vehicleMetaChip(
+                        label: _currencyLabel(vehicle['totalRevenue']),
+                        color: AppTheme.colorFFD4AF37,
+                        isDark: isDark,
+                      ),
+                      _vehicleMetaChip(
+                        label: _registrationLabel(vehicle),
+                        color: _registrationColorForVehicle(vehicle),
+                        isDark: isDark,
+                      ),
+                      _vehicleMetaChip(
+                        label: _healthLabel(vehicle),
+                        color: _healthColorForVehicle(vehicle),
+                        isDark: isDark,
+                      ),
+                      if (_routeSummary(vehicle).isNotEmpty)
+                        _vehicleMetaChip(
+                          label: _routeSummary(vehicle),
+                          color: AppTheme.colorFF4B7BE5,
+                          isDark: isDark,
+                        ),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: 150 * scale),
+                        child: GeoTabSyncStatusBadge.fromEntity(
+                          vehicle,
+                          compact: true,
+                          scale: scale,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (locationLabel.isNotEmpty) ...[
+                    SizedBox(height: 12 * scale),
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12 * scale,
+                        vertical: 10 * scale,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? AppTheme.colorFF131A24
+                            : AppTheme.colorFFF7F9FC,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isDark
+                              ? AppTheme.white.withValues(alpha: 0.05)
+                              : AppTheme.black.withValues(alpha: 0.05),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.place_rounded,
+                            size: 14 * scale,
+                            color: AppTheme.colorFF4B7BE5,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              locationLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark
+                                    ? AppTheme.gray300
+                                    : AppTheme.colorFF425466,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _vehicleInfoWrap(List<Widget> items, double scale) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = 8 * scale;
+        final itemWidth = constraints.maxWidth < 260
+            ? constraints.maxWidth
+            : (constraints.maxWidth - gap) / 2;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: items
+              .map((item) => SizedBox(width: itemWidth, child: item))
+              .toList(),
+        );
+      },
+    );
+  }
+
+  Widget _infoItem(
+    IconData icon,
+    String label,
+    bool isDark,
+    double scale, {
+    bool isSample = false,
+  }) {
+    final displayLabel = _displayValue(label).replaceAll('₱', 'PHP ');
+    return Row(
+      children: [
+        Icon(
+          icon,
+          size: 14 * scale,
+          color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            displayLabel,
+            style: TextStyle(
+              fontSize: 13 * scale,
+              fontStyle: isSample ? FontStyle.italic : FontStyle.normal,
+              color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (isSample) ...[const SizedBox(width: 4), _sampleChip(scale)],
+      ],
+    );
+  }
+
+  Widget _sampleChip(double scale) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 5 * scale, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFFF39C12.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: AppTheme.colorFFF39C12.withValues(alpha: 0.42),
+        ),
+      ),
+      child: Text(
+        'Sample',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.colorFFF39C12,
+        ),
+      ),
+    );
+  }
+
+  Widget _vehicleMetaChip({
+    required String label,
+    required Color color,
+    required bool isDark,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.18 : 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Color _healthColorForVehicle(Map<String, dynamic> vehicle) {
+    switch ((vehicle['healthStatus']?.toString().trim().toLowerCase() ?? '')) {
+      case 'offline':
+        return AppTheme.colorFFE74C3C;
+      case 'critical':
+        return AppTheme.colorFFE67E22;
+      case 'warning':
+        return AppTheme.colorFFF39C12;
+      default:
+        return AppTheme.colorFF27AE60;
+    }
+  }
+
+  Color _statusColorForVehicle(Map<String, dynamic> vehicle) {
+    switch ((vehicle['status']?.toString().trim().toLowerCase() ?? '')) {
+      case 'on trip':
+      case 'ontrip':
+      case 'in transit':
+        return AppTheme.colorFF4B7BE5;
+      case 'maintenance':
+      case 'under maintenance':
+        return AppTheme.colorFFF39C12;
+      case 'inactive':
+      case 'deactivated':
+        return AppTheme.gray500;
+      default:
+        return AppTheme.colorFF27AE60;
+    }
+  }
+
+  String _registrationLabel(Map<String, dynamic> vehicle) {
+    final days = int.tryParse(
+      vehicle['registrationDaysRemaining']?.toString() ?? '',
+    );
+    if (days == null) {
+      return 'Reg N/A';
+    }
+    if (days < 0) {
+      return 'Reg expired';
+    }
+    return 'Reg ${days}d';
+  }
+
+  Color _registrationColorForVehicle(Map<String, dynamic> vehicle) {
+    final days = int.tryParse(
+      vehicle['registrationDaysRemaining']?.toString() ?? '',
+    );
+    if (days != null && days <= 30) {
+      return AppTheme.colorFFE74C3C;
+    }
+    return AppTheme.colorFF14B8A6;
+  }
+
+  String _healthLabel(Map<String, dynamic> vehicle) {
+    final status =
+        vehicle['healthStatus']?.toString().trim().toLowerCase() ?? 'healthy';
+    final score = vehicle['healthScore']?.toString().trim() ?? '100';
+    final title = status.isEmpty
+        ? 'Healthy'
+        : status[0].toUpperCase() + status.substring(1);
+    return '$title $score';
+  }
+
+  String _routeSummary(Map<String, dynamic> vehicle) {
+    final currentZone = vehicle['currentZone']?.toString().trim() ?? '';
+    final destinationZone = vehicle['destinationZone']?.toString().trim() ?? '';
+    final assignedRoute = vehicle['assignedRoute']?.toString().trim() ?? '';
+
+    if (currentZone.isNotEmpty && destinationZone.isNotEmpty) {
+      return '$currentZone -> $destinationZone';
+    }
+
+    if (assignedRoute.isNotEmpty) {
+      return assignedRoute;
+    }
+
+    return '';
+  }
+
+  String _currencyLabel(dynamic value) {
+    final amount = int.tryParse(value?.toString() ?? '') ?? 0;
+    final formatted = amount.toString().replaceAllMapped(
+      RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+      (match) => '${match[1]},',
+    );
+    return 'PHP $formatted';
+  }
+
+  String _displayValue(dynamic value) {
+    return formatValue(value);
+  }
+
+  bool _hasDisplayValue(dynamic value) {
+    final text = _displayValue(value).trim();
+    if (text.isEmpty) {
+      return false;
+    }
+    final normalized = text.toLowerCase();
+    return normalized != 'n/a' &&
+        normalized != 'na' &&
+        normalized != 'null' &&
+        normalized != 'unavailable' &&
+        normalized != '--';
+  }
+
+  bool _isGeotabOnlyVehicle(Map<String, dynamic> vehicle) {
+    return vehicle['managedLocally'] != true &&
+        (vehicle['geotabId']?.toString().trim().isNotEmpty ?? false);
+  }
+
+  Map<String, String> _sampleVehicleSpecifications(
+    Map<String, dynamic> vehicle,
+  ) {
+    final plate = (vehicle['plate'] ?? vehicle['geotabId'] ?? '').toString();
+    final seed = plate.codeUnits.fold<int>(0, (sum, value) => sum + value);
+    const specs = [
+      {
+        'makeModel': 'Isuzu N-Series NPR',
+        'year': '2022',
+        'fuelCapacity': '75',
+        'cargoCapacity': '3000',
+      },
+      {
+        'makeModel': 'Fuso Canter FE',
+        'year': '2021',
+        'fuelCapacity': '70',
+        'cargoCapacity': '2500',
+      },
+      {
+        'makeModel': 'Isuzu Forward FTR',
+        'year': '2020',
+        'fuelCapacity': '100',
+        'cargoCapacity': '5000',
+      },
+      {
+        'makeModel': 'Fuso Fighter FK',
+        'year': '2023',
+        'fuelCapacity': '90',
+        'cargoCapacity': '4000',
+      },
+    ];
+    return specs[seed % specs.length];
+  }
+
+  int _compareText(dynamic a, dynamic b) {
+    return _displayValue(
+      a,
+    ).toLowerCase().compareTo(_displayValue(b).toLowerCase());
+  }
+
+  Widget _buildEmptyState(bool isDark) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.local_shipping_rounded,
+            size: 80,
+            color: isDark ? AppTheme.gray700 : AppTheme.gray300,
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'No vehicles found',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: isDark ? AppTheme.gray600 : AppTheme.gray400,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Try adjusting your search or filter',
+            style: TextStyle(
+              fontSize: 14,
+              color: isDark ? AppTheme.gray500 : AppTheme.gray500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryStrip(bool isDark, bool isMobile) {
+    final total = vehiclesNotifier.value.length;
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        _summaryCard(
+          title: 'Fleet',
+          value: '$total vehicles',
+          color: AppTheme.colorFF4B7BE5,
+          icon: Icons.local_shipping_rounded,
+          isDark: isDark,
+          isMobile: isMobile,
+        ),
+        _summaryCard(
+          title: 'Reporting',
+          value: '$_reportingCount live',
+          color: AppTheme.colorFF14B8A6,
+          icon: Icons.gps_fixed_rounded,
+          isDark: isDark,
+          isMobile: isMobile,
+        ),
+        _summaryCard(
+          title: 'Moving',
+          value: '$_movingCount active',
+          color: AppTheme.colorFF27AE60,
+          icon: Icons.route_rounded,
+          isDark: isDark,
+          isMobile: isMobile,
+        ),
+        _summaryCard(
+          title: 'Maintenance',
+          value: '$_maintenanceCount due',
+          color: AppTheme.colorFFF39C12,
+          icon: Icons.build_circle_rounded,
+          isDark: isDark,
+          isMobile: isMobile,
+        ),
+        InkWell(
+          onTap: () => refreshFleetSnapshotSilently(forceRefresh: true),
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: isMobile ? 14 : 16,
+              vertical: isMobile ? 12 : 14,
+            ),
+            decoration: BoxDecoration(
+              color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.08)
+                    : AppTheme.black.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.refresh_rounded,
+                  size: 18,
+                  color: AppTheme.colorFF4B7BE5,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Refresh fleet',
+                  style: TextStyle(
+                    fontSize: isMobile ? 12 : 13,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _summaryCard({
+    required String title,
+    required String value,
+    required Color color,
+    required IconData icon,
+    required bool isDark,
+    required bool isMobile,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 14 : 16,
+        vertical: isMobile ? 12 : 14,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: color),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: isMobile ? 11 : 12,
+                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: isMobile ? 13 : 14,
+                  fontWeight: FontWeight.w800,
+                  color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ADD VEHICLE DIALOG
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+class _AddVehicleDialog extends StatefulWidget {
+  final void Function(Map<String, dynamic>) onAdd;
+  const _AddVehicleDialog({required this.onAdd});
+
+  @override
+  State<_AddVehicleDialog> createState() => _AddVehicleDialogState();
+}
+
+class _AddVehicleDialogState extends State<_AddVehicleDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _plateCtrl = TextEditingController();
+  final _fuelCtrl = TextEditingController();
+  final _yearCtrl = TextEditingController();
+
+  String _truckType = '6 Wheeler';
+  bool _saving = false;
+
+  static const _truckTypes = [
+    '4 Wheeler',
+    '6 Wheeler',
+    '8 Wheeler',
+    '10 Wheeler',
+    '12 Wheeler',
+  ];
+
+  @override
+  void dispose() {
+    _plateCtrl.dispose();
+    _fuelCtrl.dispose();
+    _yearCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+
+    final newVehicle = {
+      'plate': _plateCtrl.text.trim().toUpperCase(),
+      'truckType': _truckType,
+      'fuelCapacity': _fuelCtrl.text.trim(),
+      'year': _yearCtrl.text.trim(),
+      'status': 'available',
+      'statusColor': AppTheme.colorFF27AE60,
+      'mileage': '0 km',
+      'numTrips': 0,
+      'totalRevenue': 0,
+      'driver': 'Unassigned',
+    };
+
+    widget.onAdd(newVehicle);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sw = MediaQuery.of(context).size.width;
+    final sh = MediaQuery.of(context).size.height;
+    final keyboardH = MediaQuery.of(context).viewInsets.bottom;
+    final isVerySmall = sw < 360;
+    final isMobile = sw < 600;
+    final verticalInset = isVerySmall ? 16.0 : 24.0;
+
+    return Dialog(
+          backgroundColor: AppTheme.transparent,
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: isVerySmall ? 8 : (isMobile ? 16 : 80),
+            vertical: verticalInset,
+          ),
+          child: Container(
+            constraints: BoxConstraints(
+              maxWidth: isVerySmall ? sw - 16 : 480,
+              maxHeight: sh - keyboardH - verticalInset * 2,
+            ),
+            decoration: BoxDecoration(
+              color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+              borderRadius: BorderRadius.circular(isVerySmall ? 14 : 24),
+              border: Border.all(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.08)
+                    : AppTheme.black.withValues(alpha: 0.08),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.black.withValues(alpha: 0.3),
+                  blurRadius: 40,
+                  offset: const Offset(0, 16),
+                ),
+              ],
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Ã¢â€â‚¬Ã¢â€â‚¬ Dialog header Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+                  Container(
+                    padding: EdgeInsets.all(isVerySmall ? 16 : 24),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [
+                          AppTheme.colorFF4B7BE5,
+                          AppTheme.colorFF1B2A4A,
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(isVerySmall ? 14 : 24),
+                        topRight: Radius.circular(isVerySmall ? 14 : 24),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: AppTheme.white.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.local_shipping_rounded,
+                            color: AppTheme.white,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Add New Vehicle',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppTheme.white,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Fill in the vehicle details below',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppTheme.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: AppTheme.white.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.close_rounded,
+                              color: AppTheme.white,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Ã¢â€â‚¬Ã¢â€â‚¬ Form Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        children: [
+                          // Plate number
+                          _formField(
+                            controller: _plateCtrl,
+                            label: 'Plate Number',
+                            hint: 'e.g. ABC 1234',
+                            icon: Icons.pin_rounded,
+                            isDark: isDark,
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty)
+                                return 'Plate number is required';
+                              final existing = vehiclesNotifier.value.any(
+                                (veh) =>
+                                    veh['plate'].toString().toLowerCase() ==
+                                    v.trim().toLowerCase(),
+                              );
+                              if (existing)
+                                return 'A vehicle with this plate already exists';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Truck type dropdown
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Truck Type',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDark
+                                      ? AppTheme.gray300
+                                      : AppTheme.colorFF2C3E50,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                height: 52,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? AppTheme.colorFF0F1117
+                                      : AppTheme.colorFFF5F6F8,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? AppTheme.white.withValues(alpha: 0.1)
+                                        : AppTheme.black.withValues(alpha: 0.1),
+                                  ),
+                                ),
+                                child: DropdownButton<String>(
+                                  value: _truckType,
+                                  underline: const SizedBox(),
+                                  isExpanded: true,
+                                  icon: Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    color: isDark
+                                        ? AppTheme.gray400
+                                        : AppTheme.gray600,
+                                  ),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: isDark
+                                        ? AppTheme.white
+                                        : AppTheme.colorFF2C3E50,
+                                  ),
+                                  dropdownColor: isDark
+                                      ? AppTheme.colorFF1A1D23
+                                      : AppTheme.white,
+                                  items: _truckTypes
+                                      .map(
+                                        (t) => DropdownMenuItem(
+                                          value: t,
+                                          child: Text(t),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (v) =>
+                                      setState(() => _truckType = v!),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Fuel capacity
+                          _formField(
+                            controller: _fuelCtrl,
+                            label: 'Fuel Capacity (Liters)',
+                            hint: 'e.g. 300',
+                            icon: Icons.local_gas_station_rounded,
+                            isDark: isDark,
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty)
+                                return 'Fuel capacity is required';
+                              if (int.tryParse(v.trim()) == null)
+                                return 'Enter a valid number';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Year
+                          _formField(
+                            controller: _yearCtrl,
+                            label: 'Year',
+                            hint: 'e.g. 2023',
+                            icon: Icons.calendar_today_rounded,
+                            isDark: isDark,
+                            keyboardType: TextInputType.number,
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty)
+                                return 'Year is required';
+                              final yr = int.tryParse(v.trim());
+                              if (yr == null || yr < 1990 || yr > 2030)
+                                return 'Enter a valid year (1990-2030)';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 28),
+
+                          // Action buttons
+                          Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => Navigator.pop(context),
+                                  child: Container(
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      color: isDark
+                                          ? AppTheme.colorFF0F1117
+                                          : AppTheme.colorFFF5F6F8,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: isDark
+                                            ? AppTheme.white.withValues(
+                                                alpha: 0.1,
+                                              )
+                                            : AppTheme.black.withValues(
+                                                alpha: 0.1,
+                                              ),
+                                      ),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        'Cancel',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: isDark
+                                              ? AppTheme.gray300
+                                              : AppTheme.gray700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: _saving ? null : _submit,
+                                  child: Container(
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          AppTheme.colorFF4B7BE5,
+                                          AppTheme.colorFF00D4FF,
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: const Color(
+                                            0xFF4B7BE5,
+                                          ).withValues(alpha: 0.4),
+                                          blurRadius: 12,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Center(
+                                      child: _saving
+                                          ? const SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                color: AppTheme.white,
+                                                strokeWidth: 2,
+                                              ),
+                                            )
+                                          : const Text(
+                                              'Add Vehicle',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                                color: AppTheme.white,
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        )
+        .animate()
+        .fadeIn(duration: 200.ms)
+        .scale(
+          begin: const Offset(0.95, 0.95),
+          end: const Offset(1, 1),
+          duration: 200.ms,
+        );
+  }
+
+  Widget _formField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    required IconData icon,
+    required bool isDark,
+    required String? Function(String?) validator,
+    TextInputType keyboardType = TextInputType.text,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: isDark ? AppTheme.gray300 : AppTheme.colorFF2C3E50,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          validator: validator,
+          keyboardType: keyboardType,
+          style: TextStyle(
+            fontSize: 14,
+            color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+          ),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(
+              color: isDark ? AppTheme.gray600 : AppTheme.gray500,
+              fontSize: 14,
+            ),
+            prefixIcon: Icon(
+              icon,
+              size: 18,
+              color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+            ),
+            filled: true,
+            fillColor: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.1)
+                    : AppTheme.black.withValues(alpha: 0.1),
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.1)
+                    : AppTheme.black.withValues(alpha: 0.1),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(
+                color: AppTheme.colorFF4B7BE5,
+                width: 2,
+              ),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppTheme.colorFFE74C3C),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(
+                color: AppTheme.colorFFE74C3C,
+                width: 2,
+              ),
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+            isDense: true,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _VehicleEditorDialog extends StatefulWidget {
+  const _VehicleEditorDialog({
+    required this.existingPlates,
+    required this.onSave,
+    this.vehicle,
+  });
+
+  final Map<String, dynamic>? vehicle;
+  final Set<String> existingPlates;
+  final Future<void> Function(Map<String, dynamic> payload) onSave;
+
+  @override
+  State<_VehicleEditorDialog> createState() => _VehicleEditorDialogState();
+}
+
+class _VehicleEditorDialogState extends State<_VehicleEditorDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _plateCtrl;
+  late final TextEditingController _makeModelCtrl;
+  late final TextEditingController _yearCtrl;
+  late final TextEditingController _chassisCtrl;
+  late final TextEditingController _vinCtrl;
+  late final TextEditingController _fuelCapacityCtrl;
+  late final TextEditingController _cargoCapacityCtrl;
+  late final TextEditingController _geotabDeviceCtrl;
+  late final TextEditingController _registrationExpiryCtrl;
+  late final TextEditingController _insuranceExpiryCtrl;
+
+  String _vehicleType = 'Light Commercial Vehicle';
+  String _fuelType = 'Diesel';
+  String _status = 'Active';
+  bool _saving = false;
+
+  static const _vehicleTypes = [
+    'Light Commercial Vehicle',
+    'Drop-side Truck',
+    'Refrigerated Truck',
+    'Tanker',
+    'Other',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final vehicle = widget.vehicle ?? const {};
+    _plateCtrl = TextEditingController(
+      text: (vehicle['plate'] ?? vehicle['plateNumber'] ?? '').toString(),
+    );
+    _makeModelCtrl = TextEditingController(
+      text: _optionalText(vehicle['makeModel']),
+    );
+    _yearCtrl = TextEditingController(text: _optionalText(vehicle['year']));
+    _chassisCtrl = TextEditingController(
+      text: _optionalText(vehicle['chassisNumber']),
+    );
+    _vinCtrl = TextEditingController(text: _optionalText(vehicle['vin']));
+    _fuelCapacityCtrl = TextEditingController(
+      text: _optionalText(
+        vehicle['fuelCapacityLiters'] ?? vehicle['fuelCapacity'],
+      ),
+    );
+    _cargoCapacityCtrl = TextEditingController(
+      text: _optionalText(vehicle['cargoCapacityKg']),
+    );
+    _geotabDeviceCtrl = TextEditingController(
+      text: _optionalText(vehicle['geotabDeviceId'] ?? vehicle['geotabId']),
+    );
+    _registrationExpiryCtrl = TextEditingController(
+      text: _optionalText(vehicle['registrationExpiryDate']),
+    );
+    _insuranceExpiryCtrl = TextEditingController(
+      text: _optionalText(vehicle['insuranceExpiryDate']),
+    );
+    _vehicleType = _firstAllowed(
+      _optionalText(vehicle['vehicleType'] ?? vehicle['truckType']),
+      _vehicleTypes,
+      'Light Commercial Vehicle',
+    );
+    _fuelType = _firstAllowed(_optionalText(vehicle['fuelType']), const [
+      'Diesel',
+      'Gasoline',
+      'Electric',
+    ], 'Diesel');
+    _status = switch ((vehicle['status']?.toString().toLowerCase() ?? '')) {
+      'maintenance' || 'under maintenance' => 'Under Maintenance',
+      'inactive' => 'Inactive',
+      _ => 'Active',
+    };
+  }
+
+  @override
+  void dispose() {
+    _plateCtrl.dispose();
+    _makeModelCtrl.dispose();
+    _yearCtrl.dispose();
+    _chassisCtrl.dispose();
+    _vinCtrl.dispose();
+    _fuelCapacityCtrl.dispose();
+    _cargoCapacityCtrl.dispose();
+    _geotabDeviceCtrl.dispose();
+    _registrationExpiryCtrl.dispose();
+    _insuranceExpiryCtrl.dispose();
+    super.dispose();
+  }
+
+  static String _optionalText(dynamic value) {
+    final text = value?.toString().trim() ?? '';
+    return text == 'N/A' || text == 'null' ? '' : text;
+  }
+
+  static String _firstAllowed(
+    String value,
+    List<String> options,
+    String fallback,
+  ) {
+    for (final option in options) {
+      if (option.toLowerCase() == value.toLowerCase()) return option;
+    }
+    return fallback;
+  }
+
+  Future<void> _pickDate(TextEditingController controller) async {
+    final now = DateTime.now();
+    final initial = DateTime.tryParse(controller.text) ?? now;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial.isBefore(now) ? now : initial,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 15),
+    );
+    if (picked != null) {
+      controller.text = picked.toIso8601String().substring(0, 10);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      await widget.onSave({
+        'plateNumber': _plateCtrl.text.trim().toUpperCase(),
+        'vehicleType': _vehicleType,
+        'makeModel': _emptyToNull(_makeModelCtrl.text),
+        'year': int.tryParse(_yearCtrl.text.trim()),
+        'chassisNumber': _emptyToNull(_chassisCtrl.text),
+        'vin': _emptyToNull(_vinCtrl.text),
+        'fuelType': _fuelType,
+        'fuelCapacityLiters': double.tryParse(_fuelCapacityCtrl.text.trim()),
+        'cargoCapacityKg': double.tryParse(_cargoCapacityCtrl.text.trim()),
+        'geotabDeviceId': _emptyToNull(_geotabDeviceCtrl.text),
+        'registrationExpiryDate': _registrationExpiryCtrl.text.trim(),
+        'insuranceExpiryDate': _emptyToNull(_insuranceExpiryCtrl.text),
+        'status': _status,
+      });
+      if (mounted) Navigator.pop(context);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Object? _emptyToNull(String value) {
+    final text = value.trim();
+    return text.isEmpty ? null : text;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final width = MediaQuery.of(context).size.width;
+    final isEditing = widget.vehicle != null;
+
+    return Dialog(
+      backgroundColor: AppTheme.transparent,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: width < 640 ? 16 : 48,
+        vertical: 24,
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760, maxHeight: 820),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark
+                  ? AppTheme.white.withValues(alpha: 0.08)
+                  : AppTheme.black.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.colorFF1B2A4A, AppTheme.colorFF4B7BE5],
+                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.local_shipping_rounded,
+                      color: AppTheme.white,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        isEditing ? 'Edit Vehicle' : 'Add Vehicle',
+                        style: const TextStyle(
+                          color: AppTheme.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Form(
+                  key: _formKey,
+                  child: ListView(
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      _sectionLabel('Identity', isDark),
+                      _responsiveRow(width, [
+                        _field(
+                          _plateCtrl,
+                          'Plate number',
+                          isDark,
+                          required: true,
+                          validator: (value) {
+                            final plate = value?.trim().toUpperCase() ?? '';
+                            if (plate.isEmpty)
+                              return 'Plate number is required';
+                            final exists = widget.existingPlates.any(
+                              (item) => item.trim().toUpperCase() == plate,
+                            );
+                            if (exists) return 'Plate number must be unique';
+                            return null;
+                          },
+                        ),
+                        _dropdown(
+                          'Vehicle type',
+                          _vehicleType,
+                          _vehicleTypes,
+                          isDark,
+                          (value) => setState(() => _vehicleType = value),
+                        ),
+                      ]),
+                      _responsiveRow(width, [
+                        _field(_makeModelCtrl, 'Make and model', isDark),
+                        _field(
+                          _yearCtrl,
+                          'Year',
+                          isDark,
+                          keyboardType: TextInputType.number,
+                        ),
+                      ]),
+                      _responsiveRow(width, [
+                        _field(_chassisCtrl, 'Chassis number', isDark),
+                        _field(_vinCtrl, 'VIN', isDark),
+                      ]),
+                      const SizedBox(height: 14),
+                      _sectionLabel('Capacity And Fuel', isDark),
+                      _responsiveRow(width, [
+                        _dropdown(
+                          'Fuel type',
+                          _fuelType,
+                          const ['Diesel', 'Gasoline', 'Electric'],
+                          isDark,
+                          (value) => setState(() => _fuelType = value),
+                        ),
+                        _field(
+                          _fuelCapacityCtrl,
+                          'Fuel capacity in liters',
+                          isDark,
+                          keyboardType: TextInputType.number,
+                        ),
+                      ]),
+                      _field(
+                        _cargoCapacityCtrl,
+                        'Cargo capacity in kg',
+                        isDark,
+                        required: true,
+                        keyboardType: TextInputType.number,
+                      ),
+                      const SizedBox(height: 14),
+                      _sectionLabel('Compliance And GeoTab', isDark),
+                      _field(_geotabDeviceCtrl, 'GeoTab Device ID', isDark),
+                      _responsiveRow(width, [
+                        _dateField(
+                          _registrationExpiryCtrl,
+                          'Registration expiry date',
+                          isDark,
+                          required: true,
+                        ),
+                        _dateField(
+                          _insuranceExpiryCtrl,
+                          'Insurance expiry date',
+                          isDark,
+                        ),
+                      ]),
+                      _dropdown(
+                        'Status',
+                        _status,
+                        const ['Active', 'Under Maintenance', 'Inactive'],
+                        isDark,
+                        (value) => setState(() => _status = value),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _saving ? null : _submit,
+                        icon: _saving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppTheme.white,
+                                ),
+                              )
+                            : const Icon(Icons.save_rounded),
+                        label: Text(isEditing ? 'Save Changes' : 'Add Vehicle'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _responsiveRow(double width, List<Widget> children) {
+    if (width < 720) {
+      return Column(children: children);
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          Expanded(child: children[i]),
+          if (i != children.length - 1) const SizedBox(width: 12),
+        ],
+      ],
+    );
+  }
+
+  Widget _sectionLabel(String label, bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: isDark ? AppTheme.gray300 : AppTheme.colorFF233244,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _field(
+    TextEditingController controller,
+    String label,
+    bool isDark, {
+    bool required = false,
+    TextInputType keyboardType = TextInputType.text,
+    String? Function(String?)? validator,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        controller: controller,
+        keyboardType: keyboardType,
+        validator:
+            validator ??
+            (value) {
+              if (required && (value?.trim().isEmpty ?? true)) {
+                return '$label is required';
+              }
+              if (keyboardType == TextInputType.number &&
+                  (value?.trim().isNotEmpty ?? false) &&
+                  double.tryParse(value!.trim()) == null) {
+                return 'Enter a valid number';
+              }
+              if (keyboardType == TextInputType.number &&
+                  (value?.trim().isNotEmpty ?? false) &&
+                  (double.tryParse(value!.trim()) ?? 0) < 0) {
+                return '$label cannot be negative';
+              }
+              return null;
+            },
+        decoration: InputDecoration(labelText: label),
+        style: TextStyle(
+          color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+        ),
+      ),
+    );
+  }
+
+  Widget _dateField(
+    TextEditingController controller,
+    String label,
+    bool isDark, {
+    bool required = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        controller: controller,
+        readOnly: true,
+        onTap: () => _pickDate(controller),
+        validator: (value) {
+          if (required && (value?.trim().isEmpty ?? true)) {
+            return '$label is required';
+          }
+          return FormValidation.futureOrTodayDateText(
+            label,
+            value,
+            required: required,
+          );
+        },
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: const Icon(Icons.calendar_today_rounded),
+        ),
+        style: TextStyle(
+          color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+        ),
+      ),
+    );
+  }
+
+  Widget _dropdown(
+    String label,
+    String value,
+    List<String> values,
+    bool isDark,
+    ValueChanged<String> onChanged,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DropdownButtonFormField<String>(
+        initialValue: values.contains(value) ? value : null,
+        hint: const Text('Select...'),
+        decoration: InputDecoration(labelText: label),
+        dropdownColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        style: TextStyle(
+          color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+        ),
+        items: values
+            .map((item) => DropdownMenuItem(value: item, child: Text(item)))
+            .toList(),
+        onChanged: (next) {
+          if (next != null) onChanged(next);
+        },
+        validator: (value) =>
+            FormValidation.requiredSelection(label.toLowerCase(), value),
+      ),
+    );
+  }
+}

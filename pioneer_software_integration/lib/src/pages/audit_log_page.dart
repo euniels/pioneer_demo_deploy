@@ -1,0 +1,1225 @@
+import 'package:flutter/material.dart';
+
+import '../services/backend_api.dart';
+import '../theme/app_theme.dart';
+import '../widgets/dashboard_layout.dart';
+import '../widgets/page_skeletons.dart';
+
+class AuditLogPage extends StatefulWidget {
+  const AuditLogPage({super.key});
+
+  @override
+  State<AuditLogPage> createState() => _AuditLogPageState();
+}
+
+class _AuditLogPageState extends State<AuditLogPage> {
+  late Future<PaginatedBackendList> _future;
+  int _page = 1;
+  final _actorController = TextEditingController();
+  final _fromController = TextEditingController();
+  final _toController = TextEditingController();
+  String _entityType = 'all';
+  String _actionType = 'all';
+  String _sortMode = 'Date Newest';
+  bool _filtersExpanded = false;
+
+  static const _entityTypes = [
+    'all',
+    'session',
+    'user',
+    'system_setting',
+    'client',
+    'geotab_write_job',
+    'invoice',
+  ];
+  static const _actionTypes = [
+    'all',
+    'login',
+    'login_failed',
+    'create',
+    'update',
+    'delete',
+    'role_change',
+    'deactivate',
+    'password_reset',
+    'approved',
+    'failed',
+    'cancelled',
+    'status_changed',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  void dispose() {
+    _actorController.dispose();
+    _fromController.dispose();
+    _toController.dispose();
+    super.dispose();
+  }
+
+  Future<PaginatedBackendList> _load({bool forceRefresh = false}) {
+    return BackendApiService.getAuditLogsPage(
+      page: _page,
+      perPage: 25,
+      forceRefresh: forceRefresh,
+      actor: _actorController.text,
+      from: _fromController.text,
+      to: _toController.text,
+      entityType: _entityType,
+      actionType: _actionType,
+    );
+  }
+
+  void _reload({bool resetPage = false}) {
+    setState(() {
+      if (resetPage) _page = 1;
+      _future = _load(forceRefresh: true);
+    });
+  }
+
+  Future<void> _pickDate(TextEditingController controller) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 1),
+    );
+    if (picked == null) return;
+    controller.text =
+        '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+    _reload(resetPage: true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DashboardLayout(
+      currentRoute: '/audit-logs',
+      title: 'Audit Logs',
+      subtitle: 'Read-only history of administrative and operational changes',
+      actions: [
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: () => _reload(),
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+      child: FutureBuilder<PaginatedBackendList>(
+        future: _future,
+        builder: (context, snapshot) {
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const PioneerRouteSkeletonBody(routeName: '/audit-logs');
+          }
+          if (snapshot.hasError) {
+            return _AuditEmptyState(
+              isDark: isDark,
+              title: 'Audit logs are unavailable',
+              message:
+                  'The backend could not return the audit trail right now.',
+              actionLabel: 'Retry',
+              onTap: () => _reload(),
+            );
+          }
+          final page = snapshot.data;
+          final entries = _sortedEntries(
+            page?.items ?? const <Map<String, dynamic>>[],
+          );
+          return RefreshIndicator(
+            onRefresh: () async => _reload(),
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                _buildFilterPanel(isDark),
+                const SizedBox(height: 16),
+                if (entries.isEmpty)
+                  _AuditEmptyState(
+                    isDark: isDark,
+                    title: 'No audit entries found',
+                    message: 'Try widening the date range or clearing filters.',
+                  )
+                else
+                  ...entries.asMap().entries.map(
+                    (indexed) => _AuditLogCard(
+                      entry: indexed.value,
+                      alternate: indexed.key.isOdd,
+                    ),
+                  ),
+                if (page != null && page.lastPage > 1) ...[
+                  const SizedBox(height: 12),
+                  _buildPagination(page, isDark),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFilterPanel(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space16),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(
+          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
+        ),
+        boxShadow: AppTheme.getCardShadow(context),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: () =>
+                    setState(() => _filtersExpanded = !_filtersExpanded),
+                icon: Icon(
+                  _filtersExpanded
+                      ? Icons.filter_alt_off_rounded
+                      : Icons.filter_alt_rounded,
+                ),
+                label: const Text('Filters'),
+              ),
+              if (_activeFilterCount > 0) ...[
+                const SizedBox(width: AppTheme.space8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppTheme.space8,
+                    vertical: AppTheme.space4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryBlue,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                  ),
+                  child: Text(
+                    '$_activeFilterCount active',
+                    style: const TextStyle(
+                      color: AppTheme.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              Text(
+                'Read-only audit trail',
+                style: TextStyle(
+                  color: isDark
+                      ? AppTheme.darkSubtleText
+                      : AppTheme.lightSubtleText,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            alignment: Alignment.topCenter,
+            child: !_filtersExpanded
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: AppTheme.space16),
+                    child: _buildFilters(isDark),
+                  ),
+          ),
+          if (_hasActiveFilters) ...[
+            const SizedBox(height: AppTheme.space12),
+            _buildActiveFilterBar(isDark),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilters(bool isDark) {
+    return Wrap(
+      spacing: AppTheme.space12,
+      runSpacing: AppTheme.space12,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _filterField(
+          width: 240,
+          child: TextField(
+            controller: _actorController,
+            onChanged: (_) => _reload(resetPage: true),
+            onSubmitted: (_) => _reload(resetPage: true),
+            decoration: _decoration(
+              isDark,
+              const Icon(Icons.person_search_rounded),
+              'Actor name or role',
+            ),
+          ),
+        ),
+        _filterField(
+          width: 180,
+          child: TextField(
+            controller: _fromController,
+            readOnly: true,
+            onTap: () => _pickDate(_fromController),
+            decoration: _decoration(
+              isDark,
+              const Icon(Icons.date_range_rounded),
+              'From date',
+            ),
+          ),
+        ),
+        _filterField(
+          width: 180,
+          child: TextField(
+            controller: _toController,
+            readOnly: true,
+            onTap: () => _pickDate(_toController),
+            decoration: _decoration(
+              isDark,
+              const Icon(Icons.event_rounded),
+              'To date',
+            ),
+          ),
+        ),
+        _filterField(
+          width: 210,
+          child: DropdownButtonFormField<String>(
+            initialValue: _entityType,
+            decoration: _decoration(
+              isDark,
+              const Icon(Icons.category_rounded),
+              'Entity type',
+            ),
+            items: _entityTypes
+                .map(
+                  (value) => DropdownMenuItem(
+                    value: value,
+                    child: Text(_label(value)),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              _entityType = value ?? 'all';
+              _reload(resetPage: true);
+            },
+          ),
+        ),
+        _filterField(
+          width: 210,
+          child: DropdownButtonFormField<String>(
+            initialValue: _actionType,
+            decoration: _decoration(
+              isDark,
+              const Icon(Icons.rule_rounded),
+              'Action type',
+            ),
+            items: _actionTypes
+                .map(
+                  (value) => DropdownMenuItem(
+                    value: value,
+                    child: Text(_label(value)),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              _actionType = value ?? 'all';
+              _reload(resetPage: true);
+            },
+          ),
+        ),
+        _filterField(
+          width: 190,
+          child: DropdownButtonFormField<String>(
+            initialValue: _sortMode,
+            decoration: _decoration(
+              isDark,
+              const Icon(Icons.sort_rounded),
+              'Sort',
+            ),
+            items: const [
+              DropdownMenuItem(
+                value: 'Date Newest',
+                child: Text('Date Newest'),
+              ),
+              DropdownMenuItem(
+                value: 'Date Oldest',
+                child: Text('Date Oldest'),
+              ),
+              DropdownMenuItem(value: 'Entity A-Z', child: Text('Entity A-Z')),
+              DropdownMenuItem(value: 'Entity Z-A', child: Text('Entity Z-A')),
+              DropdownMenuItem(value: 'Actor A-Z', child: Text('Actor A-Z')),
+              DropdownMenuItem(value: 'Actor Z-A', child: Text('Actor Z-A')),
+            ],
+            onChanged: (value) {
+              _sortMode = value ?? 'Date Newest';
+              _reload(resetPage: true);
+            },
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: _clearFilters,
+          icon: const Icon(Icons.filter_alt_off_rounded),
+          label: const Text('Clear All'),
+        ),
+      ],
+    );
+  }
+
+  Widget _filterField({required double width, required Widget child}) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: width, minWidth: width),
+      child: child,
+    );
+  }
+
+  bool get _hasActiveFilters =>
+      _actorController.text.trim().isNotEmpty ||
+      _fromController.text.trim().isNotEmpty ||
+      _toController.text.trim().isNotEmpty ||
+      _entityType != 'all' ||
+      _actionType != 'all' ||
+      _sortMode != 'Date Newest';
+
+  int get _activeFilterCount {
+    var count = 0;
+    if (_actorController.text.trim().isNotEmpty) count++;
+    if (_fromController.text.trim().isNotEmpty) count++;
+    if (_toController.text.trim().isNotEmpty) count++;
+    if (_entityType != 'all') count++;
+    if (_actionType != 'all') count++;
+    if (_sortMode != 'Date Newest') count++;
+    return count;
+  }
+
+  void _clearFilters() {
+    _actorController.clear();
+    _fromController.clear();
+    _toController.clear();
+    _entityType = 'all';
+    _actionType = 'all';
+    _sortMode = 'Date Newest';
+    _reload(resetPage: true);
+  }
+
+  Widget _buildActiveFilterBar(bool isDark) {
+    final chips = <Widget>[];
+    void addChip(String label) {
+      chips.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppTheme.colorFF1A3A6B.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.35),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.white : AppTheme.colorFF1A3A6B,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_actorController.text.trim().isNotEmpty) {
+      addChip('Actor: ${_actorController.text.trim()}');
+    }
+    if (_fromController.text.trim().isNotEmpty) {
+      addChip('From: ${_fromController.text.trim()}');
+    }
+    if (_toController.text.trim().isNotEmpty) {
+      addChip('To: ${_toController.text.trim()}');
+    }
+    if (_entityType != 'all') {
+      addChip('Entity: ${_label(_entityType)}');
+    }
+    if (_actionType != 'all') {
+      addChip('Action: ${_label(_actionType)}');
+    }
+    if (_sortMode != 'Date Newest') {
+      addChip('Sort: $_sortMode');
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        ...chips,
+        TextButton.icon(
+          onPressed: _clearFilters,
+          icon: const Icon(Icons.close_rounded, size: 16),
+          label: const Text('Clear All'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPagination(PaginatedBackendList page, bool isDark) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        Text(
+          'Page ${page.currentPage} of ${page.lastPage}',
+          style: TextStyle(
+            color: isDark ? AppTheme.white70 : AppTheme.colorFF64748B,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(width: 12),
+        IconButton(
+          onPressed: page.previousPage == null
+              ? null
+              : () {
+                  _page = page.previousPage!;
+                  _reload();
+                },
+          icon: const Icon(Icons.chevron_left_rounded),
+        ),
+        IconButton(
+          onPressed: page.nextPage == null
+              ? null
+              : () {
+                  _page = page.nextPage!;
+                  _reload();
+                },
+          icon: const Icon(Icons.chevron_right_rounded),
+        ),
+      ],
+    );
+  }
+
+  InputDecoration _decoration(bool isDark, Widget icon, String hint) {
+    return InputDecoration(
+      prefixIcon: icon,
+      hintText: hint,
+      filled: true,
+      fillColor: isDark ? AppTheme.colorFF141924 : AppTheme.colorFFF8FAFC,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+    );
+  }
+
+  String _label(String value) {
+    if (value == 'all') return 'All';
+    return value
+        .split('_')
+        .map(
+          (part) => part.isEmpty
+              ? part
+              : '${part[0].toUpperCase()}${part.substring(1)}',
+        )
+        .join(' ');
+  }
+
+  List<Map<String, dynamic>> _sortedEntries(List<Map<String, dynamic>> rows) {
+    final sorted = List<Map<String, dynamic>>.from(rows);
+    sorted.sort((a, b) {
+      return switch (_sortMode) {
+        'Date Oldest' => _compareAuditDates(a, b, newestFirst: false),
+        'Entity A-Z' => _compareAuditText(a, b, 'entityType'),
+        'Entity Z-A' => _compareAuditText(b, a, 'entityType'),
+        'Actor A-Z' => _compareAuditText(a, b, 'actorName'),
+        'Actor Z-A' => _compareAuditText(b, a, 'actorName'),
+        _ => _compareAuditDates(a, b, newestFirst: true),
+      };
+    });
+    return sorted;
+  }
+
+  int _compareAuditDates(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b, {
+    required bool newestFirst,
+  }) {
+    final dateA = DateTime.tryParse(a['timestamp']?.toString() ?? '');
+    final dateB = DateTime.tryParse(b['timestamp']?.toString() ?? '');
+    if (dateA == null && dateB == null) return 0;
+    if (dateA == null) return 1;
+    if (dateB == null) return -1;
+    return newestFirst ? dateB.compareTo(dateA) : dateA.compareTo(dateB);
+  }
+
+  int _compareAuditText(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+    String field,
+  ) {
+    return (a[field]?.toString().toLowerCase() ?? '').compareTo(
+      b[field]?.toString().toLowerCase() ?? '',
+    );
+  }
+}
+
+class _AuditLogCard extends StatelessWidget {
+  const _AuditLogCard({required this.entry, required this.alternate});
+
+  final Map<String, dynamic> entry;
+  final bool alternate;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final allBefore = _mapOf(entry['before']);
+    final allAfter = _mapOf(entry['after']);
+    final actionType = _text(entry['actionType']).toLowerCase();
+    final actionLabel = _actionLabel(entry);
+    final isSession =
+        entry['isSessionEvent'] == true ||
+        actionType == 'login' ||
+        actionType == 'login_failed';
+    final timestamp = _timestampText(entry);
+    final diff = _changedDiff(allBefore, allAfter, actionType);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(AppTheme.space16),
+      decoration: BoxDecoration(
+        color: isDark
+            ? (alternate ? AppTheme.darkPanelAlt : AppTheme.darkCardBg)
+            : (alternate ? AppTheme.colorFFF8FBFF : AppTheme.lightCardBg),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(
+          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
+        ),
+        boxShadow: AppTheme.getCardShadow(context),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Flexible(
+                child: _ActionChip(
+                  icon: _actionIcon(actionType),
+                  label: actionLabel,
+                  color: _actionColor(actionType),
+                ),
+              ),
+              const SizedBox(width: AppTheme.space12),
+              Expanded(
+                child: Text(
+                  timestamp,
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark
+                        ? AppTheme.darkSubtleText
+                        : AppTheme.lightSubtleText,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppTheme.space8),
+          _buildActorSection(context),
+          const SizedBox(height: AppTheme.space8),
+          _buildEventContext(context, actionType, isSession, diff),
+          if (!isSession) ...[
+            const SizedBox(height: AppTheme.space8),
+            _buildDiffPanes(context, diff.$1, diff.$2, actionType),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActorSection(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final email = _actorEmail(entry);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.person_outline_rounded,
+          size: 20,
+          color: isDark ? AppTheme.darkSubtleText : AppTheme.lightSubtleText,
+        ),
+        const SizedBox(width: AppTheme.space8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _actorName(entry),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: isDark ? AppTheme.darkText : AppTheme.lightText,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                _actorRole(entry),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isDark
+                      ? AppTheme.darkSubtleText
+                      : AppTheme.lightSubtleText,
+                ),
+              ),
+              if (email != 'N/A') ...[
+                const SizedBox(height: 2),
+                SelectableText(
+                  email,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark
+                        ? AppTheme.darkMutedText
+                        : AppTheme.lightSubtleText,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEventContext(
+    BuildContext context,
+    String actionType,
+    bool isSession,
+    (Map<String, dynamic>, Map<String, dynamic>) diff,
+  ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final entityId = _entityId(entry);
+    final entityLabel = _text(entry['entityLabel']);
+    final failureReason = _text(entry['failureReason']);
+    final contextColor = isDark
+        ? AppTheme.darkSubtleText
+        : AppTheme.lightSubtleText;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppTheme.space10),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.darkPanel : AppTheme.lightPanel,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tag_rounded, size: 16, color: contextColor),
+              const SizedBox(width: AppTheme.space6),
+              Text(
+                '${_entityTypeLabel(entry)}:',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: contextColor,
+                ),
+              ),
+              const SizedBox(width: AppTheme.space6),
+              Flexible(
+                child: SelectableText(
+                  entityId,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.darkText : AppTheme.lightText,
+                  ),
+                ),
+              ),
+              if (entityLabel != 'N/A') ...[
+                const SizedBox(width: AppTheme.space6),
+                Expanded(
+                  child: Text(
+                    entityLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: contextColor),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: AppTheme.space8),
+          if (isSession) ...[
+            Row(
+              children: [
+                Icon(Icons.language_rounded, size: 16, color: contextColor),
+                const SizedBox(width: AppTheme.space6),
+                Text(
+                  'IP address:',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: contextColor,
+                  ),
+                ),
+                const SizedBox(width: AppTheme.space6),
+                Flexible(
+                  child: SelectableText(
+                    _text(entry['ipAddress']),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? AppTheme.darkText : AppTheme.lightText,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppTheme.space12),
+                Expanded(
+                  child: Text(
+                    'Session duration: ${_sessionDuration(entry)}',
+                    textAlign: TextAlign.right,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: contextColor),
+                  ),
+                ),
+              ],
+            ),
+            if (actionType == 'login_failed' && failureReason != 'N/A') ...[
+              const SizedBox(height: AppTheme.space8),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    size: 16,
+                    color: AppTheme.errorRed,
+                  ),
+                  const SizedBox(width: AppTheme.space6),
+                  Expanded(
+                    child: Text(
+                      'Failure reason: $failureReason',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.errorRed,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ] else
+            Row(
+              children: [
+                Icon(Icons.edit_note_rounded, size: 16, color: contextColor),
+                const SizedBox(width: AppTheme.space6),
+                Text(
+                  'Changed ${_changedFieldCount(diff)} fields',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: contextColor,
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDiffPanes(
+    BuildContext context,
+    Map<String, dynamic> before,
+    Map<String, dynamic> after,
+    String actionType,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final panes = [
+          _AuditDiffBox(
+            title: 'Before',
+            data: before,
+            tone: _DiffTone.before,
+            emptyMessage: actionType == 'create'
+                ? 'New record created'
+                : 'No previous value recorded',
+          ),
+          _AuditDiffBox(
+            title: 'After',
+            data: after,
+            tone: _DiffTone.after,
+            emptyMessage: 'No changed value recorded',
+          ),
+        ];
+        if (constraints.maxWidth < 700) {
+          return Column(
+            children: [
+              panes.first,
+              const SizedBox(height: AppTheme.space12),
+              panes.last,
+            ],
+          );
+        }
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: panes.first),
+              const SizedBox(width: AppTheme.space8),
+              Expanded(child: panes.last),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  static Map<String, dynamic> _mapOf(Object? value) {
+    if (value is Map) {
+      return value.map((key, item) => MapEntry(key.toString(), item));
+    }
+    return const {};
+  }
+
+  static String _text(Object? value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? 'N/A' : text;
+  }
+
+  static String _actionLabel(Map<String, dynamic> entry) {
+    final label = entry['actionLabel']?.toString().trim();
+    if (label != null && label.isNotEmpty) return label;
+    return _labelText(entry['actionType']);
+  }
+
+  static String _timestampText(Map<String, dynamic> entry) {
+    final display = entry['displayTimestamp']?.toString().trim();
+    if (display != null && display.isNotEmpty) return display;
+    final parsed = DateTime.tryParse(entry['timestamp']?.toString() ?? '');
+    if (parsed == null) return _text(entry['timestamp']);
+    final manila = parsed.toUtc().add(const Duration(hours: 8));
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    final hour = manila.hour % 12 == 0 ? 12 : manila.hour % 12;
+    final minute = manila.minute.toString().padLeft(2, '0');
+    final suffix = manila.hour >= 12 ? 'PM' : 'AM';
+    return '${months[manila.month - 1]} ${manila.day}, ${manila.year} $hour:$minute $suffix';
+  }
+
+  static String _actorName(Map<String, dynamic> entry) {
+    final name = _text(entry['actorName']);
+    return name == 'N/A' ? _preferredActor(entry) : name;
+  }
+
+  static String _actorEmail(Map<String, dynamic> entry) {
+    final email = entry['actorEmail']?.toString().trim() ?? '';
+    return email.isEmpty ? 'N/A' : email;
+  }
+
+  static String _actorRole(Map<String, dynamic> entry) {
+    final role = _text(entry['actorRole']);
+    return role == 'N/A' ? 'Role not recorded' : _labelText(role);
+  }
+
+  static String _entityTypeLabel(Map<String, dynamic> entry) {
+    final type = _text(entry['entityType']);
+    return type == 'N/A' ? 'Entity' : _labelText(type);
+  }
+
+  static String _entityId(Map<String, dynamic> entry) {
+    final id = _text(entry['entityId']);
+    return id == 'N/A' ? 'Not recorded' : id;
+  }
+
+  static int _changedFieldCount(
+    (Map<String, dynamic>, Map<String, dynamic>) diff,
+  ) {
+    return {...diff.$1.keys, ...diff.$2.keys}.length;
+  }
+
+  static String _sessionDuration(Map<String, dynamic> entry) {
+    final raw =
+        entry['sessionDuration'] ??
+        entry['sessionDurationLabel'] ??
+        entry['duration'];
+    final value = raw?.toString().trim() ?? '';
+    return value.isEmpty ? 'Not recorded' : value;
+  }
+
+  static (Map<String, dynamic>, Map<String, dynamic>) _changedDiff(
+    Map<String, dynamic> before,
+    Map<String, dynamic> after,
+    String actionType,
+  ) {
+    if (actionType == 'create') {
+      return (const {}, after);
+    }
+    final keys = {...before.keys, ...after.keys}.where((key) {
+      return before[key]?.toString() != after[key]?.toString();
+    });
+    return (
+      {
+        for (final key in keys)
+          if (before.containsKey(key)) key: before[key],
+      },
+      {
+        for (final key in keys)
+          if (after.containsKey(key)) key: after[key],
+      },
+    );
+  }
+
+  static String _labelText(Object? value) {
+    final text = value?.toString().trim() ?? '';
+    if (text.isEmpty) return 'Record';
+    return text
+        .split('_')
+        .map(
+          (part) => part.isEmpty
+              ? part
+              : '${part[0].toUpperCase()}${part.substring(1)}',
+        )
+        .join(' ');
+  }
+
+  static IconData _actionIcon(String actionType) {
+    return switch (actionType) {
+      'login' || 'login_failed' => Icons.login_rounded,
+      'create' => Icons.add_circle_outline_rounded,
+      'role_change' => Icons.admin_panel_settings_rounded,
+      'deactivate' => Icons.block_rounded,
+      'password_reset' => Icons.key_rounded,
+      _ => Icons.history_rounded,
+    };
+  }
+
+  static Color _actionColor(String actionType) {
+    return switch (actionType) {
+      'login' => AppTheme.successGreen,
+      'create' => AppTheme.infoBlue,
+      'update' || 'status_changed' => AppTheme.warningOrange,
+      'delete' || 'deleted' || 'login_failed' || 'failed' => AppTheme.errorRed,
+      'role_change' || 'password_reset' => AppTheme.purpleAccent,
+      'deactivate' || 'cancelled' => AppTheme.neutralGray,
+      _ => AppTheme.primaryBlue,
+    };
+  }
+
+  static String _preferredActor(Map<String, dynamic> entry) {
+    final email = entry['actorEmail']?.toString().trim() ?? '';
+    return email.isEmpty ? _text(entry['actorName']) : email;
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  const _ActionChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.space10,
+        vertical: AppTheme.space6,
+      ),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: AppTheme.space6),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _DiffTone { before, after }
+
+class _AuditDiffBox extends StatelessWidget {
+  const _AuditDiffBox({
+    required this.title,
+    required this.data,
+    required this.emptyMessage,
+    required this.tone,
+  });
+
+  final String title;
+  final Map<String, dynamic> data;
+  final String emptyMessage;
+  final _DiffTone tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final background = isDark
+        ? (tone == _DiffTone.before
+              ? AppTheme.errorRed.withValues(alpha: 0.08)
+              : AppTheme.successGreen.withValues(alpha: 0.08))
+        : (tone == _DiffTone.before
+              ? AppTheme.colorFFFFEAEA
+              : AppTheme.colorFFE8FFF2);
+    final border = tone == _DiffTone.before
+        ? AppTheme.errorRed.withValues(alpha: 0.18)
+        : AppTheme.successGreen.withValues(alpha: 0.18);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(color: border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: isDark ? AppTheme.white70 : AppTheme.colorFF475569,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (data.isEmpty)
+            Text(
+              emptyMessage,
+              style: TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
+              ),
+            )
+          else
+            ...data.entries
+                .take(12)
+                .map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: SelectableText(
+                      '${_fieldLabel(entry.key)}: ${entry.value}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: isDark
+                            ? AppTheme.white60
+                            : AppTheme.colorFF64748B,
+                      ),
+                    ),
+                  ),
+                ),
+        ],
+      ),
+    );
+  }
+
+  String _fieldLabel(String key) {
+    return key
+        .replaceAllMapped(RegExp(r'([a-z])([A-Z])'), (match) {
+          return '${match.group(1)} ${match.group(2)}';
+        })
+        .split('_')
+        .map(
+          (part) => part.isEmpty
+              ? part
+              : '${part[0].toUpperCase()}${part.substring(1)}',
+        )
+        .join(' ');
+  }
+}
+
+class _AuditEmptyState extends StatelessWidget {
+  const _AuditEmptyState({
+    required this.isDark,
+    required this.title,
+    required this.message,
+    this.actionLabel,
+    this.onTap,
+  });
+
+  final bool isDark;
+  final String title;
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF111723 : AppTheme.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.manage_search_rounded, size: 46),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
+            ),
+          ),
+          if (actionLabel != null && onTap != null) ...[
+            const SizedBox(height: 14),
+            FilledButton(onPressed: onTap, child: Text(actionLabel!)),
+          ],
+        ],
+      ),
+    );
+  }
+}

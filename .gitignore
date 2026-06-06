@@ -1,0 +1,62 @@
+# Secrets and local environment
+**/.env
+**/.env.*
+!**/.env.example
+**/auth.json
+
+# Dependency folders
+**/vendor/
+**/node_modules/
+**/.pub-cache/
+**/.pub/
+
+# Flutter/Dart build and cache
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/coverage/
+
+# Android/iOS/macOS/Windows local build cache
+**/.gradle/
+**/android/local.properties
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Flutter/ephemeral/
+**/macos/Flutter/Generated.xcconfig
+**/macos/Flutter/flutter_export_environment.sh
+**/macos/Flutter/ephemeral/
+**/windows/flutter/ephemeral/
+
+# Laravel local runtime/cache files
+**/bootstrap/cache/*.php
+!**/bootstrap/cache/.gitignore
+**/storage/framework/cache/data/
+**/storage/framework/sessions/*
+!**/storage/framework/sessions/.gitignore
+**/storage/framework/testing/*
+!**/storage/framework/testing/.gitignore
+**/storage/framework/views/*
+!**/storage/framework/views/.gitignore
+**/storage/logs/*
+!**/storage/logs/.gitignore
+**/storage/*.key
+**/database/*.sqlite
+**/.phpunit.cache/
+**/.phpunit.result.cache
+**/test-google-junit.xml
+
+# Editor and OS noise
+**/.idea/
+**/.vscode/
+**/.DS_Store
+**/Thumbs.db
+**/*.log
+**/*.pid
+
+# Avoid accidental nested project copy
+pioneer_software_integration/pioneer-backend/
