@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 import '../services/backend_api.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/google_map_marker_factory.dart';
+import '../services/live_tracking_freshness.dart';
 import '../services/live_tracking_motion_math.dart';
 import '../services/realtime_stream_service.dart';
 import '../services/trips_store.dart';
@@ -941,6 +942,9 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         )
         .length;
     final total = _vehicleMarkers.length;
+    final fleetFreshness = LiveTrackingFreshnessResolver.forFleet(
+      _vehicleMarkers,
+    );
 
     if (isLargeScreen) {
       return Row(
@@ -957,7 +961,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   top: 24,
                   left: 24,
                   right: 24,
-                  child: _buildTopStats(moving, idle, stopped, stale, total)
+                  child: _buildTopStats(
+                        moving,
+                        idle,
+                        stopped,
+                        stale,
+                        total,
+                        fleetFreshness,
+                      )
                       .animate()
                       .fadeIn(duration: 600.ms)
                       .slideY(begin: 0.2, end: 0, duration: 500.ms),
@@ -1001,7 +1012,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           top: 16,
           left: 12,
           right: 12,
-          child: _buildTopStats(moving, idle, stopped, stale, total)
+          child: _buildTopStats(
+                moving,
+                idle,
+                stopped,
+                stale,
+                total,
+                fleetFreshness,
+              )
               .animate()
               .fadeIn(duration: 600.ms)
               .slideY(begin: 0.2, end: 0, duration: 500.ms),
@@ -1081,6 +1099,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     int stopped,
     int stale,
     int total,
+    LiveTrackingFreshness fleetFreshness,
   ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final screenWidth = MediaQuery.of(context).size.width;
@@ -1144,11 +1163,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
             SizedBox(width: isMobile ? 8 : 12),
             _buildStatChip(
               label: _lastLiveSyncAt == null
-                  ? 'Connecting'
-                  : 'Live ${_secondsAgo(_lastLiveSyncAt!)}s',
-              color: AppTheme.colorFF00C2A8,
+                  ? fleetFreshness.label
+                  : '${fleetFreshness.label} ${_secondsAgo(_lastLiveSyncAt!)}s',
+              color: fleetFreshness.color,
               isDark: isDark,
               isMobile: isMobile,
+              icon: fleetFreshness.icon,
             ),
           ],
         ),
@@ -1161,6 +1181,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required Color color,
     required bool isDark,
     required bool isMobile,
+    IconData? icon,
   }) {
     return Container(
       padding: EdgeInsets.symmetric(
@@ -1175,6 +1196,10 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (icon != null) ...[
+            Icon(icon, size: isMobile ? 11 : 13, color: color),
+            SizedBox(width: isMobile ? 3 : 5),
+          ],
           Container(
             width: isMobile ? 5 : 6,
             height: isMobile ? 5 : 6,
@@ -1377,6 +1402,9 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 final isSelected = _plateOf(vehicle) == selectedPlate;
                 final markerState = _visualMarkerState(vehicle);
                 final markerColor = _sidebarStateAccent(vehicle);
+                final freshness = LiveTrackingFreshnessResolver.forVehicle(
+                  vehicle,
+                );
                 final baseCardColor = isDark
                     ? AppTheme.colorFF252930
                     : AppTheme.colorFFF8F9FA;
@@ -1481,6 +1509,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                                 ],
                               ),
                               const SizedBox(height: 12),
+                              _buildFreshnessPill(freshness),
+                              const SizedBox(height: 8),
                               Row(
                                 children: [
                                   Icon(
@@ -1617,6 +1647,48 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
       ),
       child: iconTile,
+    );
+  }
+
+  Widget _buildFreshnessPill(
+    LiveTrackingFreshness freshness, {
+    bool compact = false,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 7 : 9,
+        vertical: compact ? 3 : 4,
+      ),
+      decoration: BoxDecoration(
+        color: freshness.color.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: freshness.color.withValues(alpha: 0.32)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            freshness.icon,
+            size: compact ? 11 : 12,
+            color: freshness.color,
+          ),
+          SizedBox(width: compact ? 4 : 5),
+          Flexible(
+            child: Text(
+              compact
+                  ? freshness.label
+                  : '${freshness.label} - ${freshness.detail}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: compact ? 10 : 11,
+                fontWeight: FontWeight.w800,
+                color: freshness.color,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1964,6 +2036,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                         final isSelected = _plateOf(vehicle) == selectedPlate;
                         final markerState = _visualMarkerState(vehicle);
                         final markerColor = _sidebarStateAccent(vehicle);
+                        final freshness =
+                            LiveTrackingFreshnessResolver.forVehicle(vehicle);
                         final baseCardColor = isDark
                             ? AppTheme.colorFF252930
                             : AppTheme.colorFFF8F9FA;
@@ -2054,6 +2128,11 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                                                   ),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            _buildFreshnessPill(
+                                              freshness,
+                                              compact: true,
                                             ),
                                             const SizedBox(height: 4),
                                             SelectableText(
@@ -2636,7 +2715,11 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   PioneerMapMarkerStyle _visualMarkerState(Map<String, dynamic> vehicle) {
-    if (_isVehicleStale(vehicle) || _isVehicleDataStale(vehicle)) {
+    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
+    if (freshness.state == LiveTrackingFreshnessState.stale ||
+        freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
+        _isVehicleStale(vehicle) ||
+        _isVehicleDataStale(vehicle)) {
       return PioneerMapMarkerStyle.stale;
     }
 
@@ -3306,7 +3389,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   String _plateLabelOf(Map<String, dynamic>? vehicle) {
     final plate = _plateOf(vehicle);
-    return plate.isEmpty ? 'Unknown' : plate;
+    return plate.isEmpty ? 'Unknown plate' : plate;
   }
 
   String _driverLabelOf(Map<String, dynamic> vehicle) {
@@ -3316,10 +3399,18 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   String _lastKnownAddressLabel(Map<String, dynamic> vehicle) {
     final address = vehicle['currentLocationLabel']?.toString().trim() ?? '';
-    return address.isEmpty ? 'Location unavailable.' : address;
+    return address.isEmpty ? 'Location unavailable' : address;
   }
 
   String _motionStateShortLabel(Map<String, dynamic> vehicle) {
+    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
+    if (freshness.state == LiveTrackingFreshnessState.geotabUnavailable) {
+      return 'GeoTab unavailable';
+    }
+    if (freshness.state == LiveTrackingFreshnessState.stale) {
+      return 'Stale';
+    }
+
     switch (_visualMarkerState(vehicle)) {
       case PioneerMapMarkerStyle.moving:
         return 'Moving';
@@ -3372,6 +3463,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   String _statusLabel(Map<String, dynamic> vehicle) {
+    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
+    if (freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
+        freshness.state == LiveTrackingFreshnessState.stale) {
+      return freshness.detail;
+    }
+
     switch (_visualMarkerState(vehicle)) {
       case PioneerMapMarkerStyle.moving:
         return 'Moving at ${_speedOf(vehicle)} km/h';
@@ -3388,6 +3485,13 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     if (_hasMaintenanceBadge(vehicle)) {
       return 'Maintenance attention';
     }
+    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
+    if (freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
+        freshness.state == LiveTrackingFreshnessState.cached ||
+        freshness.state == LiveTrackingFreshnessState.stale) {
+      return freshness.detail;
+    }
+
     final syncState = vehicle['syncState']?.toString().trim().toLowerCase();
     if (syncState == 'offline_cached') {
       return 'Offline cached';

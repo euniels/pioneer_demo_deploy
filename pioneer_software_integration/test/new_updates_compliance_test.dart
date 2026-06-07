@@ -93,9 +93,14 @@ void main() {
       expect(source, contains('_compactMarkerZoomThreshold = 12.0'));
       expect(source, contains('compact: _usesCompactMapMarkers'));
       expect(source, contains('_sidebarStateAccent'));
+      expect(source, contains('LiveTrackingFreshnessResolver.forVehicle'));
+      expect(source, contains('fleetFreshness'));
+      expect(source, contains('_buildFreshnessPill'));
       expect(source, contains('AppTheme.successGreen'));
       expect(source, contains('AppTheme.errorRed'));
       expect(source, contains('_statusLabel(vehicle)'));
+      expect(source, contains('Unknown plate'));
+      expect(source, contains('Location unavailable'));
       expect(source, contains('if (mounted && _vehicleMarkers.isNotEmpty)'));
     },
   );
