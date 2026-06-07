@@ -29,6 +29,8 @@ class _FleetSidebarState extends State<FleetSidebar> {
   @override
   void initState() {
     super.initState();
+    _isLoggingOut = AuthService.isLoggingOut;
+    AuthService.logoutInProgress.addListener(_onLogoutStateChanged);
     // Auto-expand the section that contains the current route
     final role = AuthService.currentRole;
     if (role != null) {
@@ -42,6 +44,18 @@ class _FleetSidebarState extends State<FleetSidebar> {
       if (_expandedSections.isEmpty && sections.isNotEmpty) {
         _expandedSections.add(sections.first.key);
       }
+    }
+  }
+
+  @override
+  void dispose() {
+    AuthService.logoutInProgress.removeListener(_onLogoutStateChanged);
+    super.dispose();
+  }
+
+  void _onLogoutStateChanged() {
+    if (mounted) {
+      setState(() => _isLoggingOut = AuthService.isLoggingOut);
     }
   }
 

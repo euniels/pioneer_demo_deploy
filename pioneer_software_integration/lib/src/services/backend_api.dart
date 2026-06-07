@@ -60,6 +60,7 @@ class BackendApiService {
   static String? _accessToken;
   static Future<bool> Function()? _refreshAuthHandler;
   static VoidCallback? _sessionExpiredHandler;
+  static bool _sessionTerminating = false;
 
   static void setCurrentActorRole(String? role) {
     // Role headers are intentionally no longer sent. This no-op remains so
@@ -69,6 +70,13 @@ class BackendApiService {
   static void setAccessToken(String? token) {
     final trimmed = token?.trim();
     _accessToken = trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  static void setSessionTerminating(bool terminating) {
+    _sessionTerminating = terminating;
+    if (terminating) {
+      _inflightGets.clear();
+    }
   }
 
   static String? get accessTokenForRealtime => _accessToken;
@@ -1902,6 +1910,12 @@ class BackendApiService {
   }
 
   static Future<void> _postNoBody(String path) async {
+    if (_sessionTerminating && !_isAuthPath(path)) {
+      throw const BackendApiException(
+        'Session is signing out. Please sign in again before making changes.',
+      );
+    }
+
     final response = await _sendWithAuthRetry(
       () => http
           .post(Uri.parse('$baseUrl$path'), headers: _headersForJson())
@@ -1919,6 +1933,12 @@ class BackendApiService {
     Map<String, dynamic> payload, {
     bool allowAuthRetry = true,
   }) async {
+    if (_sessionTerminating && !_isAuthPath(path)) {
+      throw const BackendApiException(
+        'Session is signing out. Please sign in again before making changes.',
+      );
+    }
+
     final uri = Uri.parse('$baseUrl$path');
     Future<http.Response> send() {
       return switch (method.toUpperCase()) {
@@ -1975,6 +1995,12 @@ class BackendApiService {
   }
 
   static Future<void> _delete(String path) async {
+    if (_sessionTerminating && !_isAuthPath(path)) {
+      throw const BackendApiException(
+        'Session is signing out. Please sign in again before making changes.',
+      );
+    }
+
     final response = await _sendWithAuthRetry(
       () => http
           .delete(Uri.parse('$baseUrl$path'), headers: _headersForJson())
@@ -2184,6 +2210,12 @@ class BackendApiService {
     String path,
     Duration cacheTtl,
   ) async {
+    if (_sessionTerminating) {
+      throw const BackendApiException(
+        'Session is signing out. Please sign in again.',
+      );
+    }
+
     Object? lastError;
     final maxAttempts = _maxAttemptsForPath(path);
 
@@ -2343,6 +2375,12 @@ bool _isFastLanePath(String path) {
   return path == '/fleet/live' ||
       path == '/fleet/summary/live' ||
       path == '/vehicles/locations';
+}
+
+bool _isAuthPath(String path) {
+  final normalized = path.startsWith('/') ? path : '/$path';
+  return normalized.startsWith('/fleet/auth/') ||
+      normalized == '/fleet/users/login-check';
 }
 
 String _pathWithPagination(

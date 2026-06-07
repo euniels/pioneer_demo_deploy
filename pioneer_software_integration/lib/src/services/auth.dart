@@ -16,6 +16,7 @@ class AuthService {
   static String? _refreshToken;
   static String? _lastAuthError;
   static VoidCallback? _sessionExpiredRedirect;
+  static Future<void>? _logoutFuture;
 
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static final Map<String, String> _secureFallback = {};
@@ -28,6 +29,7 @@ class AuthService {
     ThemeMode.dark,
   );
   static final ValueNotifier<int> authStateVersion = ValueNotifier(0);
+  static final ValueNotifier<bool> logoutInProgress = ValueNotifier(false);
 
   static const Map<String, dynamic> _defaultPreferences = {
     'notifyTrips': true,
@@ -46,6 +48,7 @@ class AuthService {
   static String get currentUser => _currentUser?.username ?? '';
   static UserRole? get currentRole => _currentUser?.role;
   static bool get isLoggedIn => _currentUser != null;
+  static bool get isLoggingOut => logoutInProgress.value;
   static bool get mustChangePassword =>
       _currentUser?.mustChangePassword == true;
   static String? get lastAuthError => _lastAuthError;
@@ -104,6 +107,7 @@ class AuthService {
 
   static Future<bool> login(String username, String password) async {
     try {
+      BackendApiService.setSessionTerminating(false);
       final backendUser = await BackendApiService.loginManagedUser(
         username,
         password,
@@ -202,27 +206,51 @@ class AuthService {
   }
 
   static Future<void> logout() async {
-    final refreshToken = _refreshToken;
-    if ((_accessToken ?? '').isNotEmpty) {
-      try {
-        await BackendApiService.logoutManagedUser(refreshToken);
-      } catch (_) {}
+    final existing = _logoutFuture;
+    if (existing != null) {
+      return existing;
     }
 
-    _currentUser = null;
-    _accessToken = null;
-    _refreshToken = null;
-    BackendApiService.setAccessToken(null);
-    BackendApiService.setCurrentActorRole(null);
+    final future = _performLogout();
+    _logoutFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_logoutFuture, future)) {
+        _logoutFuture = null;
+      }
+    }
+  }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('current_user');
-    await prefs.remove('remembered_user');
-    await _deleteSecure(_accessTokenKey);
-    await _deleteSecure(_refreshTokenKey);
-    await _deleteSecure(_accessExpiresKey);
-    notifyWebLogout();
-    authStateVersion.value++;
+  static Future<void> _performLogout() async {
+    logoutInProgress.value = true;
+    BackendApiService.setSessionTerminating(true);
+    try {
+      final refreshToken = _refreshToken;
+      if ((_accessToken ?? '').isNotEmpty) {
+        try {
+          await BackendApiService.logoutManagedUser(refreshToken);
+        } catch (_) {}
+      }
+
+      _currentUser = null;
+      _accessToken = null;
+      _refreshToken = null;
+      BackendApiService.setAccessToken(null);
+      BackendApiService.setCurrentActorRole(null);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('current_user');
+      await prefs.remove('remembered_user');
+      await _deleteSecure(_accessTokenKey);
+      await _deleteSecure(_refreshTokenKey);
+      await _deleteSecure(_accessExpiresKey);
+      notifyWebLogout();
+      authStateVersion.value++;
+    } finally {
+      BackendApiService.setSessionTerminating(false);
+      logoutInProgress.value = false;
+    }
   }
 
   static Future<String?> getRememberedUser() async {
@@ -345,6 +373,7 @@ class AuthService {
   }
 
   static Future<void> _clearLocalSession(SharedPreferences prefs) async {
+    BackendApiService.setSessionTerminating(true);
     _currentUser = null;
     _accessToken = null;
     _refreshToken = null;
@@ -355,9 +384,12 @@ class AuthService {
     await _deleteSecure(_refreshTokenKey);
     await _deleteSecure(_accessExpiresKey);
     authStateVersion.value++;
+    BackendApiService.setSessionTerminating(false);
+    logoutInProgress.value = false;
   }
 
   static void _handleSessionExpired() {
+    BackendApiService.setSessionTerminating(true);
     _currentUser = null;
     _accessToken = null;
     _refreshToken = null;
@@ -370,6 +402,8 @@ class AuthService {
       prefs.remove('current_user');
     });
     authStateVersion.value++;
+    BackendApiService.setSessionTerminating(false);
+    logoutInProgress.value = false;
     _sessionExpiredRedirect?.call();
   }
 

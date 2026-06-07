@@ -59,6 +59,8 @@ class _DashboardLayoutState extends State<DashboardLayout> {
     _svc.notifications.addListener(_onNotificationsChanged);
     // Rebuild sidebar when trips change (for dispatch badge)
     tripsNotifier.addListener(_onTripsChanged);
+    _isLoggingOut = AuthService.isLoggingOut;
+    AuthService.logoutInProgress.addListener(_onLogoutStateChanged);
   }
 
   void _onNotificationsChanged() {
@@ -69,6 +71,12 @@ class _DashboardLayoutState extends State<DashboardLayout> {
 
   void _onTripsChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _onLogoutStateChanged() {
+    if (mounted) {
+      setState(() => _isLoggingOut = AuthService.isLoggingOut);
+    }
   }
 
   Future<void> _syncNotifications({bool forceRefresh = false}) async {
@@ -120,6 +128,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
   void dispose() {
     _svc.notifications.removeListener(_onNotificationsChanged);
     tripsNotifier.removeListener(_onTripsChanged);
+    AuthService.logoutInProgress.removeListener(_onLogoutStateChanged);
     _removeNotificationOverlay();
     _removeProfileOverlay();
     super.dispose();
