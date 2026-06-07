@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -52,8 +53,15 @@ class LocalFleetMirrorService {
   static const String _dbName = 'pioneer_fleet_mirror.db';
   static const int _dbVersion = 1;
   static Future<Database>? _dbFuture;
+  static final _MemoryMirrorStore _webStore = _MemoryMirrorStore();
+  static Future<void> _writeQueue = Future<void>.value();
+  static int _pendingWriteCount = 0;
+  static bool _writeActive = false;
 
   static Future<void> initialize() async {
+    if (kIsWeb) {
+      return;
+    }
     await _db();
   }
 
@@ -127,6 +135,10 @@ class LocalFleetMirrorService {
   static Future<List<Map<String, dynamic>>> loadCollection(
     String collection,
   ) async {
+    if (kIsWeb) {
+      return _webStore.loadCollection(collection);
+    }
+
     final database = await _db();
     final rows = await database.query(
       'fleet_mirror_records',
@@ -166,14 +178,22 @@ class LocalFleetMirrorService {
   static Future<void> replaceTrips(List<Map<String, dynamic>> trips) {
     final recentTrips = trips.where(_isRecentTrip).toList();
     final dispatchTrips = recentTrips.where(_isDispatchTrip).toList();
-    return _withDb((database) async {
-      await database.transaction((txn) async {
-        await _replaceCollectionInTxn(txn, tripsCollection, recentTrips);
-        await _replaceCollectionInTxn(
-          txn,
-          dispatchQueueCollection,
-          dispatchTrips,
-        );
+    return _enqueueWrite('trips', recentTrips.length, () async {
+      if (kIsWeb) {
+        _webStore.replaceCollection(tripsCollection, recentTrips);
+        _webStore.replaceCollection(dispatchQueueCollection, dispatchTrips);
+        return;
+      }
+
+      await _withDb((database) async {
+        await database.transaction((txn) async {
+          await _replaceCollectionInTxn(txn, tripsCollection, recentTrips);
+          await _replaceCollectionInTxn(
+            txn,
+            dispatchQueueCollection,
+            dispatchTrips,
+          );
+        });
       });
     });
   }
@@ -195,21 +215,38 @@ class LocalFleetMirrorService {
   }
 
   static Future<void> queueMutation(Map<String, dynamic> mutation) async {
-    final database = await _db();
     final id = mutation['id']?.toString().trim().isNotEmpty == true
         ? mutation['id'].toString()
         : 'mutation-${DateTime.now().microsecondsSinceEpoch}';
     final queuedAt =
         mutation['queuedAt']?.toString() ?? DateTime.now().toIso8601String();
 
-    await database.insert('fleet_write_queue', {
-      'id': id,
-      'payload': jsonEncode(_toJsonSafe({...mutation, 'id': id})),
-      'queued_at': queuedAt,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await _enqueueWrite('mutation_queue', 1, () async {
+      final queuedMutation = _stringMap({
+        ...mutation,
+        'id': id,
+        'queuedAt': queuedAt,
+      });
+
+      if (kIsWeb) {
+        _webStore.queueMutation(queuedMutation);
+        return;
+      }
+
+      final database = await _db();
+      await database.insert('fleet_write_queue', {
+        'id': id,
+        'payload': jsonEncode(_toJsonSafe(queuedMutation)),
+        'queued_at': queuedAt,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   static Future<List<Map<String, dynamic>>> loadMutationQueue() async {
+    if (kIsWeb) {
+      return _webStore.loadMutationQueue();
+    }
+
     final database = await _db();
     final rows = await database.query(
       'fleet_write_queue',
@@ -232,29 +269,43 @@ class LocalFleetMirrorService {
   static Future<void> replaceMutationQueue(
     List<Map<String, dynamic>> queue,
   ) async {
-    final database = await _db();
-    await database.transaction((txn) async {
-      await txn.delete('fleet_write_queue');
-      for (final mutation in queue) {
-        final id = mutation['id']?.toString().trim().isNotEmpty == true
-            ? mutation['id'].toString()
-            : 'mutation-${DateTime.now().microsecondsSinceEpoch}';
-        await txn.insert('fleet_write_queue', {
-          'id': id,
-          'payload': jsonEncode(_toJsonSafe({...mutation, 'id': id})),
-          'queued_at':
-              mutation['queuedAt']?.toString() ??
-              DateTime.now().toIso8601String(),
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await _enqueueWrite('mutation_queue_replace', queue.length, () async {
+      if (kIsWeb) {
+        _webStore.replaceMutationQueue(queue);
+        return;
       }
+
+      final database = await _db();
+      await database.transaction((txn) async {
+        await txn.delete('fleet_write_queue');
+        for (final mutation in queue) {
+          final id = mutation['id']?.toString().trim().isNotEmpty == true
+              ? mutation['id'].toString()
+              : 'mutation-${DateTime.now().microsecondsSinceEpoch}';
+          await txn.insert('fleet_write_queue', {
+            'id': id,
+            'payload': jsonEncode(_toJsonSafe({...mutation, 'id': id})),
+            'queued_at':
+                mutation['queuedAt']?.toString() ??
+                DateTime.now().toIso8601String(),
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      });
     });
   }
 
   static Future<void> resetForTesting() async {
-    final database = await _db();
-    await database.delete('fleet_mirror_records');
-    await database.delete('fleet_mirror_meta');
-    await database.delete('fleet_write_queue');
+    await _enqueueWrite('reset', 0, () async {
+      if (kIsWeb) {
+        _webStore.clear();
+        return;
+      }
+
+      final database = await _db();
+      await database.delete('fleet_mirror_records');
+      await database.delete('fleet_mirror_meta');
+      await database.delete('fleet_write_queue');
+    });
   }
 
   static Future<void> _mirrorFleetSummary(Map<String, dynamic> summary) async {
@@ -272,32 +323,61 @@ class LocalFleetMirrorService {
     final notifications = _mapList(summary['notifications']);
     final clients = _mapList(summary['clients']);
 
-    await _withDb((database) async {
-      await database.transaction((txn) async {
+    final itemCount =
+        vehicles.length +
+        drivers.length +
+        trips.length +
+        notifications.length +
+        clients.length;
+
+    await _enqueueWrite('fleet_summary', itemCount, () async {
+      if (kIsWeb) {
         if (hasVehicles) {
-          await _replaceCollectionInTxn(txn, vehiclesCollection, vehicles);
+          _webStore.replaceCollection(vehiclesCollection, vehicles);
         }
         if (hasDrivers) {
-          await _replaceCollectionInTxn(txn, driversCollection, drivers);
+          _webStore.replaceCollection(driversCollection, drivers);
         }
         if (hasTrips) {
-          await _replaceCollectionInTxn(txn, tripsCollection, trips);
-          await _replaceCollectionInTxn(
-            txn,
-            dispatchQueueCollection,
-            dispatchTrips,
-          );
+          _webStore.replaceCollection(tripsCollection, trips);
+          _webStore.replaceCollection(dispatchQueueCollection, dispatchTrips);
         }
         if (hasNotifications) {
-          await _replaceCollectionInTxn(
-            txn,
-            notificationsCollection,
-            notifications,
-          );
+          _webStore.replaceCollection(notificationsCollection, notifications);
         }
         if (hasClients) {
-          await _replaceCollectionInTxn(txn, clientsCollection, clients);
+          _webStore.replaceCollection(clientsCollection, clients);
         }
+        return;
+      }
+
+      await _withDb((database) async {
+        await database.transaction((txn) async {
+          if (hasVehicles) {
+            await _replaceCollectionInTxn(txn, vehiclesCollection, vehicles);
+          }
+          if (hasDrivers) {
+            await _replaceCollectionInTxn(txn, driversCollection, drivers);
+          }
+          if (hasTrips) {
+            await _replaceCollectionInTxn(txn, tripsCollection, trips);
+            await _replaceCollectionInTxn(
+              txn,
+              dispatchQueueCollection,
+              dispatchTrips,
+            );
+          }
+          if (hasNotifications) {
+            await _replaceCollectionInTxn(
+              txn,
+              notificationsCollection,
+              notifications,
+            );
+          }
+          if (hasClients) {
+            await _replaceCollectionInTxn(txn, clientsCollection, clients);
+          }
+        });
       });
     });
   }
@@ -306,11 +386,53 @@ class LocalFleetMirrorService {
     String collection,
     List<Map<String, dynamic>> items,
   ) async {
-    await _withDb((database) async {
-      await database.transaction((txn) async {
-        await _replaceCollectionInTxn(txn, collection, items);
+    await _enqueueWrite(collection, items.length, () async {
+      if (kIsWeb) {
+        _webStore.replaceCollection(collection, items);
+        return;
+      }
+
+      await _withDb((database) async {
+        await database.transaction((txn) async {
+          await _replaceCollectionInTxn(txn, collection, items);
+        });
       });
     });
+  }
+
+  static Future<void> _enqueueWrite(
+    String collection,
+    int itemCount,
+    Future<void> Function() work,
+  ) {
+    final queued = _writeActive || _pendingWriteCount > 0;
+    _pendingWriteCount++;
+
+    final task = _writeQueue.catchError((_) {}).then((_) async {
+      final stopwatch = Stopwatch()..start();
+      _writeActive = true;
+      if (_pendingWriteCount > 0) {
+        _pendingWriteCount--;
+      }
+
+      try {
+        await work();
+      } finally {
+        stopwatch.stop();
+        _writeActive = false;
+        if (!kReleaseMode) {
+          debugPrint(
+            '[pioneerpath][mirror] write completed '
+            '{collection: $collection, itemCount: $itemCount, '
+            'durationMs: ${stopwatch.elapsedMilliseconds}, queued: $queued, '
+            'store: ${kIsWeb ? 'memory' : 'sqlite'}}',
+          );
+        }
+      }
+    });
+
+    _writeQueue = task.catchError((_) {});
+    return task;
   }
 
   static Future<void> _replaceCollectionInTxn(
@@ -534,5 +656,64 @@ class LocalFleetMirrorService {
       return value.map(_toJsonSafe).toList();
     }
     return value.toString();
+  }
+}
+
+class _MemoryMirrorStore {
+  final Map<String, List<Map<String, dynamic>>> _collections = {};
+  final List<Map<String, dynamic>> _mutationQueue = [];
+
+  List<Map<String, dynamic>> loadCollection(String collection) {
+    final rows = List<Map<String, dynamic>>.from(
+      _collections[collection] ?? const [],
+    );
+    rows.sort((a, b) {
+      final bSort = LocalFleetMirrorService._sortAt(b) ?? '';
+      final aSort = LocalFleetMirrorService._sortAt(a) ?? '';
+      return bSort.compareTo(aSort);
+    });
+    return rows.map(_copyMap).toList(growable: false);
+  }
+
+  void replaceCollection(
+    String collection,
+    List<Map<String, dynamic>> items,
+  ) {
+    _collections[collection] = items.map(_copyMap).toList(growable: false);
+  }
+
+  void queueMutation(Map<String, dynamic> mutation) {
+    final id = mutation['id']?.toString();
+    if (id != null && id.isNotEmpty) {
+      _mutationQueue.removeWhere((item) => item['id']?.toString() == id);
+    }
+    _mutationQueue.add(_copyMap(mutation));
+  }
+
+  List<Map<String, dynamic>> loadMutationQueue() {
+    final rows = List<Map<String, dynamic>>.from(_mutationQueue);
+    rows.sort((a, b) {
+      final aQueued = a['queuedAt']?.toString() ?? '';
+      final bQueued = b['queuedAt']?.toString() ?? '';
+      return aQueued.compareTo(bQueued);
+    });
+    return rows.map(_copyMap).toList(growable: false);
+  }
+
+  void replaceMutationQueue(List<Map<String, dynamic>> queue) {
+    _mutationQueue
+      ..clear()
+      ..addAll(queue.map(_copyMap));
+  }
+
+  void clear() {
+    _collections.clear();
+    _mutationQueue.clear();
+  }
+
+  static Map<String, dynamic> _copyMap(Map<String, dynamic> source) {
+    return Map<String, dynamic>.from(
+      LocalFleetMirrorService._toJsonSafe(source) as Map,
+    );
   }
 }

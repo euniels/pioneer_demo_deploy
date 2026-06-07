@@ -112,4 +112,29 @@ void main() {
     expect(queue, hasLength(1));
     expect(queue.single['type'], 'trip.update');
   });
+
+  test('serializes concurrent mirror writes deterministically', () async {
+    final firstWrite = LocalFleetMirrorService.mirrorResponse('/vehicles', {
+      'success': true,
+      'data': [
+        {'plate': 'FIRST', 'truckType': 'Wing Van'},
+      ],
+    });
+    final secondWrite = LocalFleetMirrorService.mirrorResponse('/vehicles', {
+      'success': true,
+      'data': [
+        {'plate': 'SECOND', 'truckType': 'Closed Van'},
+      ],
+    });
+
+    await Future.wait([firstWrite, secondWrite]);
+
+    final vehicles = await LocalFleetMirrorService.loadCollection(
+      LocalFleetMirrorService.vehiclesCollection,
+    );
+
+    expect(vehicles, hasLength(1));
+    expect(vehicles.single['plate'], 'SECOND');
+    expect(vehicles.single['truckType'], 'Closed Van');
+  });
 }

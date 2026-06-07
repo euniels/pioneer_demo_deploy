@@ -2257,7 +2257,15 @@ class BackendApiService {
         _storeValidator(path, response);
         NetworkStatusService.reportOnline();
         unawaited(_persistDecodedResponse(path, decoded));
-        unawaited(LocalFleetMirrorService.mirrorResponse(path, decoded));
+        unawaited(
+          LocalFleetMirrorService.mirrorResponse(path, decoded).catchError((
+            error,
+          ) {
+            if (!kReleaseMode) {
+              debugPrint('[pioneerpath][mirror] write failed: $error');
+            }
+          }),
+        );
         _replayQueuedMutationsSilently();
 
         return decoded;
