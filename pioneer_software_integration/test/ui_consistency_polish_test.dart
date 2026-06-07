@@ -389,6 +389,10 @@ void main() {
     expect(source, contains('Base delivery charge / km'));
     expect(source, contains('Fuel surcharge rate (%)'));
     expect(source, contains('GeoTab settings'));
+    expect(source, contains('Backend readiness'));
+    expect(source, contains('Refresh readiness'));
+    expect(source, contains('Production scheduler command'));
+    expect(source, contains('getApiHealth'));
     expect(source, contains('Feed seed window (days)'));
     expect(source, contains('GPS trail max points'));
     expect(source, contains('Notification settings'));

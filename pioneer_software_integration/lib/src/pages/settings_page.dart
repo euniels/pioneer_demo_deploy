@@ -74,7 +74,11 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
   List<Map<String, dynamic>> _writeBackJobs = const [];
   bool _writeBackExpanded = true;
   bool _geotabCompanyGroupConfigured = false;
+  bool _backendHealthLoading = false;
+  Map<String, dynamic>? _backendHealth;
   Map<String, dynamic>? _geotabDiagnosis;
+  DateTime? _backendHealthLoadedAt;
+  String? _backendHealthError;
   final Map<String, String> _writeBackInlineErrors = {};
 
   bool get _canEditSystemSettings =>
@@ -127,6 +131,17 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     }
     Map<String, dynamic> fuelSettings = {};
     Map<String, dynamic> geotabHealth = {};
+    Map<String, dynamic>? backendHealth;
+    String? backendHealthError;
+    if (_canEditSystemSettings || _canReviewWriteBack) {
+      try {
+        backendHealth = await BackendApiService.getApiHealth(
+          forceRefresh: true,
+        );
+      } catch (_) {
+        backendHealthError = 'Backend readiness could not be checked.';
+      }
+    }
     if (_canEditSystemSettings) {
       try {
         fuelSettings = await BackendApiService.getFuelPriceSettings();
@@ -231,8 +246,42 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     _geotabDiagnosis = geotabHealth['emptyDataDiagnosis'] is Map
         ? Map<String, dynamic>.from(geotabHealth['emptyDataDiagnosis'] as Map)
         : null;
+    _backendHealth = backendHealth;
+    _backendHealthError = backendHealthError;
+    _backendHealthLoadedAt = backendHealth == null ? null : DateTime.now();
 
     setState(() {});
+  }
+
+  Future<void> _refreshBackendHealth() async {
+    if (!(_canEditSystemSettings || _canReviewWriteBack)) {
+      return;
+    }
+    setState(() {
+      _backendHealthLoading = true;
+      _backendHealthError = null;
+    });
+    try {
+      final health = await BackendApiService.getApiHealth(forceRefresh: true);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _backendHealth = health;
+        _backendHealthLoadedAt = DateTime.now();
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _backendHealthError = 'Backend readiness could not be checked.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _backendHealthLoading = false);
+      }
+    }
   }
 
   Future<void> _toggleTheme(bool dark) async {
@@ -806,6 +855,13 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
                   .fadeIn(duration: 700.ms)
                   .slideY(begin: 0.08, end: 0, duration: 550.ms),
               const SizedBox(height: 16),
+              if (_canEditSystemSettings || _canReviewWriteBack) ...[
+                _buildBackendReadinessCard(isDark, roleColor)
+                    .animate()
+                    .fadeIn(duration: 760.ms)
+                    .slideY(begin: 0.08, end: 0, duration: 580.ms),
+                const SizedBox(height: 16),
+              ],
               if (_canEditSystemSettings || _canReviewWriteBack)
                 _buildAdminCard(isDark, roleColor)
                     .animate()
@@ -1159,6 +1215,217 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
         ],
       ),
     );
+  }
+
+  Widget _buildBackendReadinessCard(bool isDark, Color accent) {
+    final health = _backendHealth;
+    final checks = health?['checks'] is Map
+        ? Map<String, dynamic>.from(health!['checks'] as Map)
+        : const <String, dynamic>{};
+    final status = health?['status']?.toString() ?? 'unknown';
+    final healthy = health?['healthy'] == true || status == 'ok';
+    final statusColor = _backendStatusColor(status, healthy);
+    final loadedLabel = _backendHealthLoadedAt == null
+        ? 'Not checked yet'
+        : _shortDateTime(_backendHealthLoadedAt!);
+
+    return _settingsCard(
+      isDark,
+      title: 'Backend readiness',
+      icon: Icons.verified_user_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: isDark ? 0.18 : 0.1),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: statusColor.withValues(alpha: 0.4),
+                  ),
+                ),
+                child: Text(
+                  healthy ? 'READY' : status.toUpperCase(),
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _backendHealthError ??
+                      (healthy
+                          ? 'API, database, cache, queue, scheduler, disk, and PHP checks are reporting healthy.'
+                          : 'One or more backend runtime checks need attention before production deployment.'),
+                  style: TextStyle(
+                    color: isDark ? AppTheme.gray200 : AppTheme.colorFF334155,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: _backendHealthLoading ? null : _refreshBackendHealth,
+                icon: _backendHealthLoading
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Refresh readiness'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _backendCheckChip(
+                isDark,
+                'API',
+                healthy,
+                status == 'unknown' ? 'Unknown' : status,
+              ),
+              ...[
+                'database',
+                'cache',
+                'queue',
+                'scheduler',
+                'disk',
+                'php',
+              ].map((name) => _backendCheckChip(
+                    isDark,
+                    _backendCheckLabel(name),
+                    _checkOk(checks[name]),
+                    _checkDetail(checks[name]),
+                  )),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Last readiness refresh: $loadedLabel',
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+            ),
+          ),
+          if (checks['scheduler'] is Map) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Production scheduler command: ${_schedulerCommand(checks['scheduler'])}',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _backendCheckChip(
+    bool isDark,
+    String label,
+    bool ok,
+    String detail,
+  ) {
+    final color = ok ? AppTheme.colorFF27AE60 : AppTheme.colorFFE74C3C;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            ok ? Icons.check_circle_rounded : Icons.error_rounded,
+            size: 15,
+            color: color,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '$label: ${ok ? 'OK' : 'Check'}',
+            style: TextStyle(
+              color: isDark ? AppTheme.gray200 : AppTheme.colorFF1A1D23,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          if (detail.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Text(
+              detail,
+              style: TextStyle(
+                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Color _backendStatusColor(String status, bool healthy) {
+    if (healthy) {
+      return AppTheme.colorFF27AE60;
+    }
+    return switch (status) {
+      'degraded' => AppTheme.colorFFFFD166,
+      'failed' => AppTheme.colorFFE74C3C,
+      _ => AppTheme.colorFF3498DB,
+    };
+  }
+
+  String _backendCheckLabel(String name) {
+    return switch (name) {
+      'php' => 'PHP',
+      _ => name[0].toUpperCase() + name.substring(1),
+    };
+  }
+
+  bool _checkOk(dynamic raw) {
+    return raw is Map && raw['ok'] == true;
+  }
+
+  String _checkDetail(dynamic raw) {
+    if (raw is! Map) {
+      return 'missing';
+    }
+    final detail = raw['connection'] ?? raw['store'] ?? raw['version'];
+    if (detail == null || detail.toString().trim().isEmpty) {
+      return '';
+    }
+    return detail.toString();
+  }
+
+  String _schedulerCommand(dynamic raw) {
+    if (raw is Map) {
+      return raw['productionCron']?.toString() ??
+          '* * * * * php /path/to/artisan schedule:run >> /dev/null 2>&1';
+    }
+    return '* * * * * php /path/to/artisan schedule:run >> /dev/null 2>&1';
+  }
+
+  String _shortDateTime(DateTime value) {
+    final local = value.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
   Widget _buildAdminCard(bool isDark, Color accent) {
