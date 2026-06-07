@@ -4,9 +4,9 @@ import 'package:flutter/material.dart';
 import '../widgets/dashboard_layout.dart';
 import '../services/drivers_store.dart';
 import '../services/crud_permissions.dart';
+import '../services/fleet_crud_policy.dart';
 import '../services/page_cache_service.dart';
 import '../services/vehicles_store.dart';
-import '../services/geotab_sync_status_service.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
@@ -175,6 +175,12 @@ class _DriversPageState extends State<DriversPage>
   }
 
   void _showEditDriverModal(Map<String, dynamic> driver) {
+    final policy = FleetCrudPolicy.driver(driver);
+    if (!policy.canEdit) {
+      _showDriverActionMessage(policy.editDisabledReason);
+      return;
+    }
+
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -190,6 +196,12 @@ class _DriversPageState extends State<DriversPage>
   }
 
   Future<void> _pushDriverToGeotab(Map<String, dynamic> driver) async {
+    final policy = FleetCrudPolicy.driver(driver);
+    if (!policy.canPushToGeotab) {
+      _showDriverActionMessage(policy.pushDisabledReason);
+      return;
+    }
+
     final preview = await pushDriverToGeotab(driver, previewOnly: true);
     if (!mounted) return;
     if (!await guardGeotabPushPreview(context: context, preview: preview)) {
@@ -219,6 +231,13 @@ class _DriversPageState extends State<DriversPage>
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  void _showDriverActionMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(behavior: SnackBarBehavior.floating, content: Text(message)),
+    );
   }
 
   @override
@@ -752,6 +771,7 @@ class _DriversPageState extends State<DriversPage>
     return LayoutBuilder(
       builder: (context, constraints) {
         final scale = (constraints.maxWidth / 350).clamp(0.85, 1.2);
+        final crudPolicy = FleetCrudPolicy.driver(driver);
 
         return Container(
           padding: EdgeInsets.fromLTRB(
@@ -839,6 +859,12 @@ class _DriversPageState extends State<DriversPage>
                       if (value == 'view') {
                         await _showDriverDetails(driver, isDark);
                       } else if (value == 'deactivate') {
+                        if (!crudPolicy.canDeactivate) {
+                          _showDriverActionMessage(
+                            crudPolicy.deactivateDisabledReason,
+                          );
+                          return;
+                        }
                         final confirmed = await _confirmDeactivateDriver(
                           driver,
                           isDark,
@@ -870,6 +896,12 @@ class _DriversPageState extends State<DriversPage>
                           );
                         }
                       } else if (value == 'reactivate') {
+                        if (!crudPolicy.canReactivate) {
+                          _showDriverActionMessage(
+                            crudPolicy.deactivateDisabledReason,
+                          );
+                          return;
+                        }
                         try {
                           await reactivateDriverInBackend(driver);
                           if (!context.mounted) return;
@@ -896,6 +928,12 @@ class _DriversPageState extends State<DriversPage>
                       } else if (value == 'edit') {
                         _showEditDriverModal(driver);
                       } else if (value == 'delete') {
+                        if (!crudPolicy.canDelete) {
+                          _showDriverActionMessage(
+                            crudPolicy.deleteDisabledReason,
+                          );
+                          return;
+                        }
                         final confirmed = await _confirmDeleteDriver(
                           driver,
                           isDark,
@@ -966,17 +1004,21 @@ class _DriversPageState extends State<DriversPage>
                         ),
                       ),
                       if (CrudPermissions.canEdit(CrudEntity.drivers))
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'edit',
+                          enabled: crudPolicy.canEdit,
                           child: _DriverActionMenuItem(
                             icon: Icons.edit_rounded,
-                            label: 'Edit',
+                            label: crudPolicy.canEdit
+                                ? 'Edit'
+                                : 'Edit - GeoTab read-only',
                           ),
                         ),
                       if (CrudPermissions.canEdit(CrudEntity.drivers) &&
                           _isDriverInactive(driver))
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'reactivate',
+                          enabled: crudPolicy.canReactivate,
                           child: _DriverActionMenuItem(
                             icon: Icons.person_add_alt_1_rounded,
                             label: 'Reactivate',
@@ -984,20 +1026,25 @@ class _DriversPageState extends State<DriversPage>
                         ),
                       if (CrudPermissions.canDelete(CrudEntity.drivers) &&
                           !_isDriverInactive(driver))
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'deactivate',
+                          enabled: crudPolicy.canDeactivate,
                           child: _DriverActionMenuItem(
                             icon: Icons.person_off_rounded,
-                            label: 'Deactivate',
+                            label: crudPolicy.canDeactivate
+                                ? 'Deactivate'
+                                : 'Deactivate - unavailable',
                           ),
                         ),
-                      if (CrudPermissions.canDelete(CrudEntity.drivers) &&
-                          driver['source'] == 'manual')
-                        const PopupMenuItem(
+                      if (CrudPermissions.canDelete(CrudEntity.drivers))
+                        PopupMenuItem(
                           value: 'delete',
+                          enabled: crudPolicy.canDelete,
                           child: _DriverActionMenuItem(
                             icon: Icons.delete_outline_rounded,
-                            label: 'Delete',
+                            label: crudPolicy.canDelete
+                                ? 'Delete'
+                                : 'Delete - managed only',
                             destructive: true,
                           ),
                         ),
@@ -1139,8 +1186,10 @@ class _DriversPageState extends State<DriversPage>
                               compact: true,
                               scale: scale,
                             ),
+                            _fleetCrudScopeChip(crudPolicy, isDark, scale),
                             _pushToGeotabButton(
-                              enabled: canPushToGeotab(driver),
+                              enabled: crudPolicy.canPushToGeotab,
+                              disabledReason: crudPolicy.pushDisabledReason,
                               onPressed: () => _pushDriverToGeotab(driver),
                               scale: scale,
                             ),
@@ -1160,13 +1209,14 @@ class _DriversPageState extends State<DriversPage>
 
   Widget _pushToGeotabButton({
     required bool enabled,
+    required String disabledReason,
     required VoidCallback onPressed,
     required double scale,
   }) {
     return Tooltip(
       message: enabled
           ? 'Review and stage this saved local record for GeoTab approval.'
-          : 'GeoTab is already up to date.',
+          : disabledReason,
       child: OutlinedButton.icon(
         onPressed: enabled ? onPressed : null,
         icon: Icon(Icons.cloud_upload_outlined, size: 14 * scale),
@@ -1177,6 +1227,49 @@ class _DriversPageState extends State<DriversPage>
         style: OutlinedButton.styleFrom(
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.symmetric(horizontal: 9 * scale),
+        ),
+      ),
+    );
+  }
+
+  Widget _fleetCrudScopeChip(
+    FleetCrudPolicy policy,
+    bool isDark,
+    double scale,
+  ) {
+    return Tooltip(
+      message: policy.scopeDetail,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: 190 * scale),
+        padding: EdgeInsets.symmetric(
+          horizontal: 9 * scale,
+          vertical: 5 * scale,
+        ),
+        decoration: BoxDecoration(
+          color: policy.scopeColor.withValues(alpha: isDark ? 0.18 : 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: policy.scopeColor.withValues(alpha: isDark ? 0.34 : 0.24),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(policy.scopeIcon, size: 12 * scale, color: policy.scopeColor),
+            SizedBox(width: 5 * scale),
+            Flexible(
+              child: Text(
+                policy.scopeLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11 * scale,
+                  fontWeight: FontWeight.w800,
+                  color: policy.scopeColor,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -99,6 +99,24 @@ void main() {
     }
   });
 
+  test('vehicles and drivers expose local versus GeoTab record scope', () {
+    final vehicles = File('lib/src/pages/vehicles_page.dart').readAsStringSync();
+    final drivers = File('lib/src/pages/drivers_page.dart').readAsStringSync();
+    final policy = File(
+      'lib/src/services/fleet_crud_policy.dart',
+    ).readAsStringSync();
+
+    expect(vehicles, contains('FleetCrudPolicy.vehicle'));
+    expect(vehicles, contains('_fleetCrudScopeChip'));
+    expect(vehicles, contains('Edit vehicle - GeoTab read-only'));
+    expect(drivers, contains('FleetCrudPolicy.driver'));
+    expect(drivers, contains('_fleetCrudScopeChip'));
+    expect(drivers, contains('Edit - GeoTab read-only'));
+    expect(policy, contains('PioneerPath managed'));
+    expect(policy, contains('GeoTab synced'));
+    expect(policy, contains('Managed + GeoTab linked'));
+  });
+
   testWidgets('geotab sync status badge renders understandable label', (
     tester,
   ) async {

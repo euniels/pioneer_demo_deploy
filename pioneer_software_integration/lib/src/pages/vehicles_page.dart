@@ -5,8 +5,8 @@ import '../config/pioneer_runtime_config.dart';
 import '../widgets/dashboard_layout.dart';
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
+import '../services/fleet_crud_policy.dart';
 import '../services/fleet_sync_service.dart';
-import '../services/geotab_sync_status_service.dart';
 import '../services/page_cache_service.dart';
 import '../services/vehicles_store.dart';
 import '../utils/display_format.dart';
@@ -658,6 +658,12 @@ class _VehiclesPageState extends State<VehiclesPage> {
   }
 
   void _showEditVehicleModal(Map<String, dynamic> vehicle) {
+    final policy = FleetCrudPolicy.vehicle(vehicle);
+    if (!policy.canEdit) {
+      _showVehicleActionMessage(policy.editDisabledReason);
+      return;
+    }
+
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -690,6 +696,12 @@ class _VehiclesPageState extends State<VehiclesPage> {
   }
 
   Future<void> _confirmDeactivateVehicle(Map<String, dynamic> vehicle) async {
+    final policy = FleetCrudPolicy.vehicle(vehicle);
+    if (!policy.canDeactivate) {
+      _showVehicleActionMessage(policy.deactivateDisabledReason);
+      return;
+    }
+
     final id =
         vehicle['localId']?.toString() ??
         vehicle['id']?.toString().replaceFirst('manual-vehicle-', '') ??
@@ -764,12 +776,9 @@ class _VehiclesPageState extends State<VehiclesPage> {
   }
 
   Future<void> _confirmDeleteVehicle(Map<String, dynamic> vehicle) async {
-    if (vehicle['managedLocally'] != true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only managed PioneerPath vehicles can be deleted.'),
-        ),
-      );
+    final policy = FleetCrudPolicy.vehicle(vehicle);
+    if (!policy.canDelete) {
+      _showVehicleActionMessage(policy.deleteDisabledReason);
       return;
     }
 
@@ -813,6 +822,12 @@ class _VehiclesPageState extends State<VehiclesPage> {
   }
 
   Future<void> _pushVehicleToGeotab(Map<String, dynamic> vehicle) async {
+    final policy = FleetCrudPolicy.vehicle(vehicle);
+    if (!policy.canPushToGeotab) {
+      _showVehicleActionMessage(policy.pushDisabledReason);
+      return;
+    }
+
     final preview = await pushVehicleToGeotab(vehicle, previewOnly: true);
     if (!mounted) return;
     if (!await guardGeotabPushPreview(context: context, preview: preview)) {
@@ -842,6 +857,13 @@ class _VehiclesPageState extends State<VehiclesPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
     }
+  }
+
+  void _showVehicleActionMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(behavior: SnackBarBehavior.floating, content: Text(message)),
+    );
   }
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ VEHICLE CARD Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -879,6 +901,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
         final locationLabel =
             vehicle['currentLocationLabel']?.toString().trim() ?? '';
         final importedOnly = _isGeotabOnlyVehicle(vehicle);
+        final crudPolicy = FleetCrudPolicy.vehicle(vehicle);
         final samples = _sampleVehicleSpecifications(vehicle);
         final makeModelSample =
             PioneerRuntimeConfig.showMockData &&
@@ -1099,25 +1122,40 @@ class _VehiclesPageState extends State<VehiclesPage> {
                         },
                         itemBuilder: (context) => [
                           if (CrudPermissions.canEdit(CrudEntity.vehicles))
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'edit',
-                              child: Text('Edit vehicle'),
+                              enabled: crudPolicy.canEdit,
+                              child: Text(
+                                crudPolicy.canEdit
+                                    ? 'Edit vehicle'
+                                    : 'Edit vehicle - GeoTab read-only',
+                              ),
                             ),
                           PopupMenuItem(
                             value: 'push_geotab',
-                            enabled: canPushToGeotab(vehicle),
-                            child: const Text('Push to GeoTab'),
+                            enabled: crudPolicy.canPushToGeotab,
+                            child: Text(
+                              crudPolicy.canPushToGeotab
+                                  ? 'Push to GeoTab'
+                                  : 'Push to GeoTab - no local changes',
+                            ),
                           ),
                           if (CrudPermissions.canDelete(CrudEntity.vehicles))
-                            const PopupMenuItem(
+                            PopupMenuItem(
                               value: 'deactivate',
-                              child: Text('Deactivate'),
+                              enabled: crudPolicy.canDeactivate,
+                              child: Text(
+                                crudPolicy.canDeactivate
+                                    ? 'Deactivate'
+                                    : 'Deactivate - unavailable',
+                              ),
                             ),
                           if (CrudPermissions.canDelete(CrudEntity.vehicles) &&
-                              vehicle['managedLocally'] == true)
-                            const PopupMenuItem(
+                              crudPolicy.isManagedLocally)
+                            PopupMenuItem(
                               value: 'delete',
-                              child: Text('Delete'),
+                              enabled: crudPolicy.canDelete,
+                              child: const Text('Delete'),
                             ),
                         ],
                       ),
@@ -1182,6 +1220,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
                         color: _healthColorForVehicle(vehicle),
                         isDark: isDark,
                       ),
+                      _fleetCrudScopeChip(crudPolicy, isDark, scale),
                       if (_routeSummary(vehicle).isNotEmpty)
                         _vehicleMetaChip(
                           label: _routeSummary(vehicle),
@@ -1267,6 +1306,49 @@ class _VehiclesPageState extends State<VehiclesPage> {
               .toList(),
         );
       },
+    );
+  }
+
+  Widget _fleetCrudScopeChip(
+    FleetCrudPolicy policy,
+    bool isDark,
+    double scale,
+  ) {
+    return Tooltip(
+      message: policy.scopeDetail,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: 190 * scale),
+        padding: EdgeInsets.symmetric(
+          horizontal: 10 * scale,
+          vertical: 6 * scale,
+        ),
+        decoration: BoxDecoration(
+          color: policy.scopeColor.withValues(alpha: isDark ? 0.18 : 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: policy.scopeColor.withValues(alpha: isDark ? 0.34 : 0.24),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(policy.scopeIcon, size: 13 * scale, color: policy.scopeColor),
+            SizedBox(width: 5 * scale),
+            Flexible(
+              child: Text(
+                policy.scopeLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11 * scale,
+                  fontWeight: FontWeight.w800,
+                  color: policy.scopeColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
