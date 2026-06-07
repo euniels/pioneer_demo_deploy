@@ -14,12 +14,12 @@ void main() {
     expect(eta, 'Arrived');
   });
 
-  test('client tracking status colors use completed and active states', () {
+  test('client tracking status colors use canonical workflow states', () {
     expect(clientTrackingStatusColor('completed'), AppTheme.successGreen);
-    expect(clientTrackingStatusColor('IN TRANSIT'), AppTheme.primaryBlue);
+    expect(clientTrackingStatusColor('IN TRANSIT'), AppTheme.colorFF14B8A6);
     expect(
       clientTrackingStatusColor('ARRIVED AT DESTINATION'),
-      AppTheme.successGreen,
+      AppTheme.colorFFF59E0B,
     );
   });
 

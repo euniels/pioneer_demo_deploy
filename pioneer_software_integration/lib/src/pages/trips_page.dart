@@ -22,6 +22,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
+import '../utils/workflow_status_helper.dart';
 
 const String tripMapInsufficientPointsMessage =
     'Route data unavailable - insufficient GPS points';
@@ -1802,9 +1803,8 @@ class _TripsPageState extends State<TripsPage> {
   Widget _buildTableRow(Map<String, dynamic> trip, bool isDark, int index) {
     final tripId = trip['tripId']?.toString() ?? '';
     final selected = _selectedTripIds.contains(tripId);
-    final statusColor = trip['statusColor'] is Color
-        ? trip['statusColor'] as Color
-        : AppTheme.statusColor('${trip['status']}');
+    final statusPresentation = WorkflowStatusHelper.trip(trip['status']);
+    final statusColor = statusPresentation.color;
     final canChange =
         CrudPermissions.canEdit(CrudEntity.trips) && _tripCanChange(trip);
     return InkWell(
@@ -1903,13 +1903,16 @@ class _TripsPageState extends State<TripsPage> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      _getStatusText('${trip['status'] ?? ''}'),
+                      statusPresentation.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                         color: statusColor,
+                        decoration: statusPresentation.strikethrough
+                            ? TextDecoration.lineThrough
+                            : null,
                       ),
                     ),
                   ),
@@ -2082,23 +2085,7 @@ class _TripsPageState extends State<TripsPage> {
   }
 
   String _getStatusText(String status) {
-    switch (status.toLowerCase()) {
-      case 'completed':
-        return 'Completed';
-      case 'in progress':
-        return 'In Progress';
-      case 'inprogress':
-        return 'In Progress';
-      case 'dispatched':
-        return 'Dispatched';
-      case 'pending_approval':
-        return 'Awaiting Approval';
-      case 'cancelled':
-      case 'canceled':
-        return 'Cancelled';
-      default:
-        return status;
-    }
+    return WorkflowStatusHelper.trip(status).label;
   }
 }
 
@@ -3724,23 +3711,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
   }
 
   String _getStatusText(String status) {
-    switch (status.toLowerCase()) {
-      case 'completed':
-        return 'Completed';
-      case 'in progress':
-        return 'In Progress';
-      case 'inprogress':
-        return 'In Progress';
-      case 'dispatched':
-        return 'Dispatched';
-      case 'pending_approval':
-        return 'Awaiting Approval';
-      case 'cancelled':
-      case 'canceled':
-        return 'Cancelled';
-      default:
-        return status;
-    }
+    return WorkflowStatusHelper.trip(status).label;
   }
 }
 

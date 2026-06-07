@@ -5,6 +5,7 @@ import '../services/crud_permissions.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/soa_exporter.dart';
 import '../utils/form_validation.dart';
+import '../utils/workflow_status_helper.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../theme/app_theme.dart';
@@ -2853,27 +2854,8 @@ class _InvoiceStatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final normalized = status.trim().toLowerCase();
-    final display = switch (normalized) {
-      'paid' => 'Paid',
-      'approved' => 'Approved',
-      'rejected' => 'Rejected',
-      'issued' || 'sent' => 'Unpaid',
-      'overdue' => 'Overdue',
-      'draft' => 'Draft',
-      'voided' => 'Voided',
-      _ => status,
-    };
-    final color = switch (normalized) {
-      'paid' => AppTheme.colorFF10B981,
-      'approved' => AppTheme.colorFF4B7BE5,
-      'rejected' => AppTheme.colorFFEF4444,
-      'issued' || 'sent' => AppTheme.pioneerRed,
-      'overdue' => AppTheme.colorFF7F1D1D,
-      'draft' => AppTheme.colorFF64748B,
-      'voided' => AppTheme.colorFF94A3B8,
-      _ => AppTheme.colorFF64748B,
-    };
+    final presentation = WorkflowStatusHelper.invoice(status);
+    final color = presentation.color;
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppTheme.space10,
@@ -2884,12 +2866,12 @@ class _InvoiceStatusBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppTheme.radiusSm),
       ),
       child: Text(
-        display,
+        presentation.label,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w700,
           color: color,
-          decoration: normalized == 'voided'
+          decoration: presentation.strikethrough
               ? TextDecoration.lineThrough
               : TextDecoration.none,
           decorationColor: color,

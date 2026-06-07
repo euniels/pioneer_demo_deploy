@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/backend_api.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/soa_exporter.dart';
+import '../utils/workflow_status_helper.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../theme/app_theme.dart';
@@ -1040,13 +1041,8 @@ class _PaymentStatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = _statementStatus(invoice);
-    final color = switch (status) {
-      'paid' => AppTheme.successGreen,
-      'partial' => AppTheme.warningOrange,
-      'overdue' => AppTheme.colorFF7F1D1D,
-      'voided' => AppTheme.neutralGray,
-      _ => AppTheme.errorRed,
-    };
+    final presentation = WorkflowStatusHelper.invoice(status);
+    final color = presentation.color;
     final label = _statementStatusLabel(invoice);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
@@ -1061,7 +1057,9 @@ class _PaymentStatusBadge extends StatelessWidget {
           color: color,
           fontSize: 13,
           fontWeight: FontWeight.w800,
-          decoration: status == 'voided' ? TextDecoration.lineThrough : null,
+          decoration: presentation.strikethrough
+              ? TextDecoration.lineThrough
+              : null,
         ),
       ),
     );
@@ -1360,12 +1358,13 @@ String _statementStatus(Map<String, dynamic> invoice) {
 }
 
 String _statementStatusLabel(Map<String, dynamic> invoice) {
-  return switch (_statementStatus(invoice)) {
-    'paid' => 'Paid',
+  final status = _statementStatus(invoice);
+  final presentation = WorkflowStatusHelper.invoice(status);
+  return switch (status) {
     'partial' => 'Partial',
     'overdue' => 'Overdue ${_daysOverdue(invoice)} days',
-    'voided' => 'Voided',
-    _ => 'Unpaid',
+    'unpaid' => 'Issued',
+    _ => presentation.label,
   };
 }
 

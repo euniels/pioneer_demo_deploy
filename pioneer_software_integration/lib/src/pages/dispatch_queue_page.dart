@@ -11,6 +11,7 @@ import '../services/realtime_stream_service.dart';
 import '../services/drivers_store.dart';
 import '../services/trips_store.dart' show tripsNotifier;
 import '../services/vehicles_store.dart';
+import '../utils/workflow_status_helper.dart';
 import '../widgets/workflow_timeline.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/app_theme.dart';
@@ -1081,12 +1082,21 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     final origin = _dispatchValue(trip['origin'], 'No origin');
     final phaseNumber = _workflowPhaseNumber(trip);
     final status = _dispatchValue(trip['status'], 'pending');
-    final statusColor = trip['statusColor'] is Color
-        ? trip['statusColor'] as Color
-        : _workflowGroupColor(_workflowGroupForTrip(trip));
     final phone = _driverPhoneForTrip(trip);
+    final hasDriver = driverName.toLowerCase() != 'unassigned driver';
+    final hasVehicle = assignedVehicle.toLowerCase() != 'unassigned vehicle';
     final canDispatch =
         !isRoutePlan && phaseNumber <= 9 && status.toLowerCase() == 'pending';
+    final statusPresentation = WorkflowStatusHelper.trip(
+      canDispatch ? 'ready' : status,
+    );
+    final statusColor = statusPresentation.color;
+    final dispatchDisabledReason = WorkflowStatusHelper.disabledActionReason(
+      action: 'dispatch',
+      status: status,
+      hasDriver: hasDriver,
+      hasVehicle: hasVehicle,
+    );
     final value = _orderValue(trip);
     final qualifiesForFreeDelivery =
         trip['freeDeliveryCandidate'] == true || value >= 100000;
@@ -1155,7 +1165,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
-                            status.toUpperCase(),
+                            statusPresentation.label.toUpperCase(),
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w800,
@@ -1340,14 +1350,21 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                       label: const Text('Contact Driver'),
                     ),
                   ),
-                  if (canDispatch)
-                    FilledButton.icon(
-                      onPressed: () => _showDispatchModal(trip),
-                      icon: const Icon(Icons.send_rounded),
-                      label: const Text('Dispatch'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppTheme.colorFF4B7BE5,
-                        foregroundColor: AppTheme.white,
+                  if (!isRoutePlan)
+                    Tooltip(
+                      message: canDispatch
+                          ? 'Dispatch this trip'
+                          : dispatchDisabledReason,
+                      child: FilledButton.icon(
+                        onPressed: canDispatch
+                            ? () => _showDispatchModal(trip)
+                            : null,
+                        icon: const Icon(Icons.send_rounded),
+                        label: const Text('Dispatch'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppTheme.colorFF4B7BE5,
+                          foregroundColor: AppTheme.white,
+                        ),
                       ),
                     ),
                   if (!isRoutePlan && phaseNumber < 12)

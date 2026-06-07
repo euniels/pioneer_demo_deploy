@@ -10,6 +10,7 @@ import '../services/google_map_marker_factory.dart';
 import '../services/role_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/display_format.dart';
+import '../utils/workflow_status_helper.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
@@ -591,7 +592,8 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
   }
 
   Widget _statusBadge(String status) {
-    final color = clientTrackingStatusColor(status);
+    final presentation = WorkflowStatusHelper.clientTracking(status);
+    final color = presentation.color;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -601,13 +603,16 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
         border: Border.all(color: color.withValues(alpha: 0.28)),
       ),
       child: Text(
-        status,
+        presentation.label,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: color,
           fontSize: 12,
           fontWeight: FontWeight.w800,
+          decoration: presentation.strikethrough
+              ? TextDecoration.lineThrough
+              : null,
         ),
       ),
     );
@@ -1593,21 +1598,5 @@ String clientTrackingWorkflowMilestone(Map<String, dynamic> data) {
 }
 
 Color clientTrackingStatusColor(String status) {
-  final normalized = status.trim().toLowerCase();
-  if (_isCompletedTrackingStatus(normalized) ||
-      normalized.contains('arrived') ||
-      normalized.contains('deliver')) {
-    return AppTheme.successGreen;
-  }
-  if (normalized.contains('cancel') || normalized.contains('failed')) {
-    return AppTheme.errorRed;
-  }
-  if (normalized.contains('transit') ||
-      normalized.contains('active') ||
-      normalized.contains('live') ||
-      normalized.contains('moving')) {
-    return AppTheme.primaryBlue;
-  }
-
-  return AppTheme.warningOrange;
+  return WorkflowStatusHelper.clientTracking(status).color;
 }
