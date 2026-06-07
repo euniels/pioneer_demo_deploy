@@ -4,6 +4,7 @@ import '../services/auth.dart';
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
 import '../services/role_service.dart';
+import '../services/user_account_policy.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
 import '../widgets/dashboard_layout.dart';
@@ -63,6 +64,14 @@ class _UsersPageState extends State<UsersPage> {
   }
 
   Future<void> _openUserForm([Map<String, dynamic>? user]) async {
+    if (user != null) {
+      final policy = _accountPolicy(user);
+      if (!policy.canEdit) {
+        _showSnack(policy.editDisabledReason);
+        return;
+      }
+    }
+
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -94,12 +103,18 @@ class _UsersPageState extends State<UsersPage> {
   }
 
   Future<void> _resetPassword(Map<String, dynamic> user) async {
+    final policy = _accountPolicy(user);
+    if (!policy.canResetPassword) {
+      _showSnack(policy.resetPasswordDisabledReason);
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Reset Temporary Password'),
         content: Text(
-          'Generate a new temporary password for ${user['fullName']}? It will be shown once.',
+          'Generate a one-time temporary password for ${user['fullName']}? The value is shown once and must be changed at the next sign-in.',
         ),
         actions: [
           TextButton(
@@ -135,6 +150,12 @@ class _UsersPageState extends State<UsersPage> {
   }
 
   Future<void> _deactivateUser(Map<String, dynamic> user) async {
+    final policy = _accountPolicy(user);
+    if (!policy.canDeactivate) {
+      _showSnack(policy.deactivateDisabledReason);
+      return;
+    }
+
     final controller = TextEditingController();
     final reason = await showDialog<String>(
       context: context,
@@ -146,7 +167,7 @@ class _UsersPageState extends State<UsersPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Deactivate ${user['fullName']}? Their history will be preserved.',
+              'Deactivate ${user['fullName']}? Their login access will stop, but audit history and operational records stay preserved.',
             ),
             const SizedBox(height: 12),
             TextField(
@@ -202,12 +223,20 @@ class _UsersPageState extends State<UsersPage> {
   }
 
   Future<void> _deleteUser(Map<String, dynamic> user) async {
+    final policy = _accountPolicy(user);
+    if (!policy.canHardDelete) {
+      _showSnack(policy.deleteDisabledReason);
+      return;
+    }
+
     final name = user['fullName']?.toString() ?? 'this user';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete User'),
-        content: Text('Delete $name? This cannot be undone.'),
+        content: Text(
+          'Permanently delete $name? This is only for unused accounts. Deactivate instead when history must remain visible.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -255,9 +284,19 @@ class _UsersPageState extends State<UsersPage> {
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text('Temporary Password'),
-        content: SelectableText(
-          password,
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Shown once. Record it securely and require the user to change it at first sign-in.',
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              password,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            ),
+          ],
         ),
         actions: [
           FilledButton(
@@ -283,6 +322,15 @@ class _UsersPageState extends State<UsersPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  UserAccountPolicy _accountPolicy(Map<String, dynamic> user) {
+    return UserAccountPolicy.forUser(
+      user,
+      currentUser: AuthService.currentUserData,
+      canEditUsers: CrudPermissions.canEdit(CrudEntity.users),
+      canDeleteUsers: CrudPermissions.canDelete(CrudEntity.users),
+    );
   }
 
   List<Map<String, dynamic>> get _visibleUsers {
@@ -543,7 +591,7 @@ class _UsersPageState extends State<UsersPage> {
     final roleLabel = _roleDisplayName(user);
     final canEdit = CrudPermissions.canEdit(CrudEntity.users);
     final canDelete = CrudPermissions.canDelete(CrudEntity.users);
-    final canHardDelete = canDelete && roleLabel != 'Super Administrator';
+    final policy = _accountPolicy(user);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -606,11 +654,18 @@ class _UsersPageState extends State<UsersPage> {
                 children: [
                   _badge(roleLabel, AppTheme.pioneerDeepBlue),
                   _badge(
-                    active ? 'Active' : 'Inactive',
-                    active ? AppTheme.successGreen : AppTheme.neutralGray,
+                    policy.isLocked
+                        ? 'Locked'
+                        : active
+                        ? 'Active'
+                        : 'Inactive',
+                    policy.isLocked
+                        ? AppTheme.errorRed
+                        : active
+                        ? AppTheme.successGreen
+                        : AppTheme.neutralGray,
                   ),
-                  if (user['mustChangePassword'] == true)
-                    _badge('Must change password', AppTheme.warningOrange),
+                  ...policy.chips.map(_policyChip),
                   _badge(
                     'Last login: ${_dateLabel(user['lastLoginAt'])}',
                     AppTheme.infoBlue,
@@ -623,7 +678,7 @@ class _UsersPageState extends State<UsersPage> {
             user: user,
             canEdit: canEdit,
             canDelete: canDelete,
-            canHardDelete: canHardDelete,
+            policy: policy,
             active: active,
           );
 
@@ -650,7 +705,7 @@ class _UsersPageState extends State<UsersPage> {
     required Map<String, dynamic> user,
     required bool canEdit,
     required bool canDelete,
-    required bool canHardDelete,
+    required UserAccountPolicy policy,
     required bool active,
   }) {
     return Tooltip(
@@ -689,35 +744,39 @@ class _UsersPageState extends State<UsersPage> {
           ),
           PopupMenuItem(
             value: 'edit',
-            enabled: canEdit,
-            child: const _UserActionMenuItem(
+            enabled: canEdit && policy.canEdit,
+            child: _UserActionMenuItem(
               icon: Icons.edit_rounded,
-              label: 'Edit',
+              label: canEdit && policy.canEdit ? 'Edit' : 'Edit - unavailable',
             ),
           ),
           PopupMenuItem(
             value: 'reset',
-            enabled: canEdit,
-            child: const _UserActionMenuItem(
+            enabled: canEdit && policy.canResetPassword,
+            child: _UserActionMenuItem(
               icon: Icons.key_rounded,
-              label: 'Reset Password',
+              label: policy.canResetPassword
+                  ? 'Reset Password'
+                  : 'Reset Password - unavailable',
             ),
           ),
           PopupMenuItem(
             value: 'deactivate',
-            enabled: canDelete && active && !_saving,
-            child: const _UserActionMenuItem(
+            enabled: canDelete && policy.canDeactivate && !_saving,
+            child: _UserActionMenuItem(
               icon: Icons.block_rounded,
-              label: 'Deactivate',
+              label: policy.canDeactivate
+                  ? 'Deactivate'
+                  : 'Deactivate - protected',
             ),
           ),
           PopupMenuItem(
             value: 'delete',
-            enabled: canHardDelete && !_saving,
+            enabled: policy.canHardDelete && !_saving,
             child: Tooltip(
-              message: canHardDelete
+              message: policy.canHardDelete
                   ? 'Permanently delete an unused account'
-                  : 'Super Administrator accounts can only be deactivated.',
+                  : policy.deleteDisabledReason,
               child: const _UserActionMenuItem(
                 icon: Icons.delete_outline_rounded,
                 label: 'Delete',
@@ -741,6 +800,31 @@ class _UsersPageState extends State<UsersPage> {
       child: Text(
         label,
         style: TextStyle(color: color, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _policyChip(UserAccountStatusChip chip) {
+    return Tooltip(
+      message: chip.label,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: chip.color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: chip.color.withValues(alpha: 0.34)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(chip.icon, size: 14, color: chip.color),
+            const SizedBox(width: 5),
+            Text(
+              chip.label,
+              style: TextStyle(color: chip.color, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1018,9 +1102,22 @@ class _UserFormDialogState extends State<_UserFormDialog> {
           barrierDismissible: false,
           builder: (context) => AlertDialog(
             title: const Text('Temporary Password'),
-            content: SelectableText(
-              temporaryPassword,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Shown once. Record it securely and require the user to change it at first sign-in.',
+                ),
+                const SizedBox(height: 12),
+                SelectableText(
+                  temporaryPassword,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
             ),
             actions: [
               FilledButton(

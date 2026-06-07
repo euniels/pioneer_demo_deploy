@@ -22,6 +22,7 @@ class _AuditLogPageState extends State<AuditLogPage> {
   String _actionType = 'all';
   String _sortMode = 'Date Newest';
   bool _filtersExpanded = false;
+  DateTime? _lastLoadedAt;
 
   static const _entityTypes = [
     'all',
@@ -62,8 +63,8 @@ class _AuditLogPageState extends State<AuditLogPage> {
     super.dispose();
   }
 
-  Future<PaginatedBackendList> _load({bool forceRefresh = false}) {
-    return BackendApiService.getAuditLogsPage(
+  Future<PaginatedBackendList> _load({bool forceRefresh = false}) async {
+    final page = await BackendApiService.getAuditLogsPage(
       page: _page,
       perPage: 25,
       forceRefresh: forceRefresh,
@@ -73,6 +74,8 @@ class _AuditLogPageState extends State<AuditLogPage> {
       entityType: _entityType,
       actionType: _actionType,
     );
+    _lastLoadedAt = DateTime.now();
+    return page;
   }
 
   void _reload({bool resetPage = false}) {
@@ -138,6 +141,10 @@ class _AuditLogPageState extends State<AuditLogPage> {
               children: [
                 _buildFilterPanel(isDark),
                 const SizedBox(height: 16),
+                if (page != null) ...[
+                  _buildAuditSummary(page, entries, isDark),
+                  const SizedBox(height: 16),
+                ],
                 if (entries.isEmpty)
                   _AuditEmptyState(
                     isDark: isDark,
@@ -238,6 +245,111 @@ class _AuditLogPageState extends State<AuditLogPage> {
         ],
       ),
     );
+  }
+
+  Widget _buildAuditSummary(
+    PaginatedBackendList page,
+    List<Map<String, dynamic>> entries,
+    bool isDark,
+  ) {
+    final securityEvents = entries.where(_isSecurityEvent).length;
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg,
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(
+          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
+        ),
+      ),
+      child: Wrap(
+        spacing: AppTheme.space8,
+        runSpacing: AppTheme.space8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _summaryPill(
+            icon: Icons.receipt_long_rounded,
+            label: '${page.total} audit results',
+            color: AppTheme.primaryBlue,
+            isDark: isDark,
+          ),
+          _summaryPill(
+            icon: Icons.filter_alt_rounded,
+            label: '$_activeFilterCount active filters',
+            color: _activeFilterCount == 0
+                ? AppTheme.neutralGray
+                : AppTheme.infoBlue,
+            isDark: isDark,
+          ),
+          _summaryPill(
+            icon: Icons.security_rounded,
+            label: '$securityEvents security events on this page',
+            color: securityEvents == 0
+                ? AppTheme.neutralGray
+                : AppTheme.warningOrange,
+            isDark: isDark,
+          ),
+          _summaryPill(
+            icon: Icons.description_rounded,
+            label: 'Page ${page.currentPage} of ${page.lastPage}',
+            color: AppTheme.pioneerDeepBlue,
+            isDark: isDark,
+          ),
+          _summaryPill(
+            icon: Icons.update_rounded,
+            label: 'Last refresh: ${_lastRefreshLabel()}',
+            color: AppTheme.successGreen,
+            isDark: isDark,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryPill({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required bool isDark,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.1),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.white : color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _lastRefreshLabel() {
+    final value = _lastLoadedAt;
+    if (value == null) {
+      return 'Not loaded';
+    }
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    final second = value.second.toString().padLeft(2, '0');
+    return '$hour:$minute:$second';
+  }
+
+  bool _isSecurityEvent(Map<String, dynamic> entry) {
+    return _AuditLogCard.securityEventLabel(entry) != null;
   }
 
   Widget _buildFilters(bool isDark) {
@@ -575,6 +687,7 @@ class _AuditLogCard extends StatelessWidget {
     final allAfter = _mapOf(entry['after']);
     final actionType = _text(entry['actionType']).toLowerCase();
     final actionLabel = _actionLabel(entry);
+    final securityLabel = securityEventLabel(entry);
     final isSession =
         entry['isSessionEvent'] == true ||
         actionType == 'login' ||
@@ -606,6 +719,10 @@ class _AuditLogCard extends StatelessWidget {
                   color: _actionColor(actionType),
                 ),
               ),
+              if (securityLabel != null) ...[
+                const SizedBox(width: AppTheme.space8),
+                _SecurityEventChip(label: securityLabel),
+              ],
               const SizedBox(width: AppTheme.space12),
               Expanded(
                 child: Text(
@@ -939,6 +1056,22 @@ class _AuditLogCard extends StatelessWidget {
     return role == 'N/A' ? 'Role not recorded' : _labelText(role);
   }
 
+  static String? securityEventLabel(Map<String, dynamic> entry) {
+    final actionType = _text(entry['actionType']).toLowerCase();
+    final entityType = _text(entry['entityType']).toLowerCase();
+    return switch (actionType) {
+      'login' => 'Security: login',
+      'login_failed' => 'Security: failed login',
+      'role_change' => 'Security: role change',
+      'password_reset' => 'Security: password reset',
+      'deactivate' => 'Security: account disabled',
+      'delete' || 'deleted' => 'Security: deletion',
+      _ => entityType == 'system_setting'
+          ? 'Security: settings change'
+          : null,
+    };
+  }
+
   static String _entityTypeLabel(Map<String, dynamic> entry) {
     final type = _text(entry['entityType']);
     return type == 'N/A' ? 'Entity' : _labelText(type);
@@ -1026,6 +1159,48 @@ class _AuditLogCard extends StatelessWidget {
   static String _preferredActor(Map<String, dynamic> entry) {
     final email = entry['actorEmail']?.toString().trim() ?? '';
     return email.isEmpty ? _text(entry['actorName']) : email;
+  }
+}
+
+class _SecurityEventChip extends StatelessWidget {
+  const _SecurityEventChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.space8,
+        vertical: AppTheme.space6,
+      ),
+      decoration: BoxDecoration(
+        color: AppTheme.warningOrange.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(
+          color: AppTheme.warningOrange.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.security_rounded,
+            size: 15,
+            color: AppTheme.warningOrange,
+          ),
+          const SizedBox(width: AppTheme.space6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.warningOrange,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -309,6 +309,10 @@ void main() {
       'lib/src/services/sidebar_service.dart',
     ).readAsStringSync();
     final api = File('lib/src/services/backend_api.dart').readAsStringSync();
+    final accountPolicy = File(
+      'lib/src/services/user_account_policy.dart',
+    ).readAsStringSync();
+    final usersPolicySurface = '$source\n$accountPolicy';
 
     expect(main, contains("case '/users'"));
     expect(roleService, contains("'/users'"));
@@ -320,7 +324,13 @@ void main() {
     expect(source, contains('Reset Temporary Password'));
     expect(source, contains('Deactivate User'));
     expect(source, contains('Delete User'));
-    expect(source, contains('Delete \$name? This cannot be undone.'));
+    expect(source, contains('UserAccountPolicy.forUser'));
+    expect(usersPolicySurface, contains('Current user'));
+    expect(usersPolicySurface, contains('Privileged'));
+    expect(usersPolicySurface, contains('Locked'));
+    expect(source, contains('Reset Password - unavailable'));
+    expect(source, contains('Deactivate - protected'));
+    expect(source, contains('Shown once. Record it securely'));
     expect(source, contains('Activity Log'));
     expect(source, contains('Add your first user'));
     expect(source, contains('_normalizeRoleDisplayName'));
@@ -329,7 +339,7 @@ void main() {
     expect(source, contains('_UserActionMenuItem'));
     expect(source, contains('PopupMenuPosition.under'));
     expect(
-      source,
+      usersPolicySurface,
       contains('Super Administrator accounts can only be deactivated.'),
     );
     expect(api, contains('/fleet/users/login-check'));
@@ -349,6 +359,13 @@ void main() {
       ).readAsStringSync();
 
       expect(source, contains('_buildFilterPanel'));
+      expect(source, contains('_buildAuditSummary'));
+      expect(source, contains('audit results'));
+      expect(source, contains('security events on this page'));
+      expect(source, contains('Last refresh:'));
+      expect(source, contains('_SecurityEventChip'));
+      expect(source, contains('Security: failed login'));
+      expect(source, contains('Security: settings change'));
       expect(source, contains('AnimatedSize'));
       expect(source, contains('_activeFilterCount'));
       expect(source, contains('Clear All'));
@@ -380,6 +397,8 @@ void main() {
     expect(source, contains('Map settings'));
     expect(source, contains('Google Maps server key is configured'));
     expect(source, contains('Settings Change Log'));
+    expect(source, contains('View full administrative audit trail'));
+    expect(source, contains("Navigator.pushNamed(context, '/audit-logs')"));
     expect(api, contains('/fleet/settings/system'));
     expect(api, contains('saveSystemSettings'));
   });

@@ -1724,6 +1724,11 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
               color: isDark ? AppTheme.white : AppTheme.colorFF111827,
             ),
           ),
+          TextButton.icon(
+            onPressed: () => Navigator.pushNamed(context, '/audit-logs'),
+            icon: const Icon(Icons.history_rounded, size: 16),
+            label: const Text('View full administrative audit trail'),
+          ),
           const SizedBox(height: 8),
           if (entries.isEmpty)
             Text(
