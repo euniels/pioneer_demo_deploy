@@ -979,6 +979,18 @@ class _StatementInvoiceRow extends StatelessWidget {
                     value: (invoice['tripId'] ?? 'N/A').toString(),
                   ),
                   _InvoiceDatum(
+                    label: 'SO / ERP ref',
+                    value: _referenceValue(invoice['erpReference'] ?? invoice['soNumber']),
+                  ),
+                  _InvoiceDatum(
+                    label: 'PO',
+                    value: _referenceValue(invoice['poNumber']),
+                  ),
+                  _InvoiceDatum(
+                    label: 'DR',
+                    value: _referenceValue(invoice['drNumber']),
+                  ),
+                  _InvoiceDatum(
                     label: 'Subtotal',
                     value: _money(
                       _numericMoney(
@@ -1317,6 +1329,9 @@ String buildStatementCsv(List<Map<String, dynamic>> clients) {
       'Date',
       'Client',
       'Trip Reference',
+      'SO / ERP Reference',
+      'PO Number',
+      'DR Number',
       'Subtotal',
       'VAT',
       'Total',
@@ -1330,6 +1345,9 @@ String buildStatementCsv(List<Map<String, dynamic>> clients) {
         _csvDate(invoice['issueDate']),
         (invoice['client'] ?? '').toString(),
         (invoice['tripId'] ?? '').toString(),
+        (invoice['erpReference'] ?? invoice['soNumber'] ?? '').toString(),
+        (invoice['poNumber'] ?? '').toString(),
+        (invoice['drNumber'] ?? '').toString(),
         _csvAmount(invoice['subtotalBeforeVat'] ?? invoice['subtotal'] ?? 0),
         _csvAmount(invoice['vatAmount'] ?? invoice['vat'] ?? 0),
         _csvAmount(invoice['totalWithVat'] ?? invoice['amount'] ?? 0),
@@ -1393,6 +1411,11 @@ String _displayDate(DateTime value) {
 String _displayDateValue(dynamic value) {
   final parsed = _parseStatementDate(value);
   return parsed == null ? 'N/A' : _displayDate(parsed);
+}
+
+String _referenceValue(dynamic value) {
+  final text = value?.toString().trim() ?? '';
+  return text.isEmpty ? 'N/A' : text;
 }
 
 String _csvDate(dynamic value) {

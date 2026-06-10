@@ -13,6 +13,7 @@ use App\Services\GeotabWriteBackService;
 use App\Services\PioneerBackupHealthService;
 use App\Services\PioneerIntegrityCheckService;
 use App\Services\PushSenderService;
+use Database\Seeders\PioneerDemoFlowSeeder;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -25,6 +26,28 @@ use Illuminate\Support\Str;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
+
+Artisan::command('pioneer:demo-seed {--force : Allow seeding demo data in production}', function () {
+    if (app()->environment('production') && ! (bool) $this->option('force')) {
+        $this->error('Refusing to seed demo data in production without --force.');
+
+        return 1;
+    }
+
+    $this->call('db:seed', [
+        '--class' => PioneerDemoFlowSeeder::class,
+        '--force' => (bool) $this->option('force'),
+    ]);
+
+    Cache::forget('geotab_fleet_snapshot_v4_fresh');
+    Cache::forget('geotab_fleet_snapshot_v4_stale');
+    Cache::forget('geotab_live_snapshot_v2_fresh');
+    Cache::forget('geotab_live_snapshot_v2_stale');
+
+    $this->info('Demo data seeded. Login with admin@pioneerpath.local or demo role accounts using Pioneer@12345.');
+
+    return 0;
+})->purpose('Seed realistic demo data for client walkthroughs.');
 
 Artisan::command('geotab:warm-session', function () {
     /** @var GeotabService $geotab */

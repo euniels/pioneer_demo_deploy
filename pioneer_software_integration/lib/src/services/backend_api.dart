@@ -10,8 +10,15 @@ import 'offline_sync_service.dart';
 
 class BackendApiException implements Exception {
   final String message;
+  final int? statusCode;
+  final Duration? retryAfter;
+  final String? category;
 
-  const BackendApiException(this.message);
+  const BackendApiException(this.message, {
+    this.statusCode,
+    this.retryAfter,
+    this.category,
+  });
 
   @override
   String toString() => message;
@@ -55,6 +62,7 @@ class BackendApiService {
   static final Map<String, _CachedBackendResponse> _cache = {};
   static final Map<String, Future<Map<String, dynamic>>> _inflightGets = {};
   static final Map<String, _HttpCacheValidator> _validators = {};
+  static final Map<String, DateTime> _pausedUntil = {};
   static Future<void>? _bootstrapFuture;
   static Future<void>? _queueReplayFuture;
   static String? _accessToken;
@@ -1923,7 +1931,15 @@ class BackendApiService {
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw BackendApiException(_responseErrorMessage(response));
+      if (response.statusCode == 429) {
+        _pausePathFromResponse(path, response);
+        throw _rateLimitException(response);
+      }
+
+      throw BackendApiException(
+        _responseErrorMessage(response),
+        statusCode: response.statusCode,
+      );
     }
   }
 
@@ -1970,7 +1986,15 @@ class BackendApiService {
         : await send();
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw BackendApiException(_responseErrorMessage(response));
+      if (response.statusCode == 429) {
+        _pausePathFromResponse(path, response);
+        throw _rateLimitException(response);
+      }
+
+      throw BackendApiException(
+        _responseErrorMessage(response),
+        statusCode: response.statusCode,
+      );
     }
 
     final decoded = jsonDecode(response.body);
@@ -2008,7 +2032,15 @@ class BackendApiService {
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw BackendApiException(_responseErrorMessage(response));
+      if (response.statusCode == 429) {
+        _pausePathFromResponse(path, response);
+        throw _rateLimitException(response);
+      }
+
+      throw BackendApiException(
+        _responseErrorMessage(response),
+        statusCode: response.statusCode,
+      );
     }
   }
 
@@ -2132,12 +2164,38 @@ class BackendApiService {
     final ttl = cacheTtl ?? _defaultCacheTtl;
     final cached = _cache[normalizedPath];
     final now = DateTime.now();
+    final pausedUntil = _pauseUntilForPath(normalizedPath);
 
     if (!forceRefresh && cached != null && cached.payload.isNotEmpty) {
-      if (!cached.expiresAt.isAfter(now)) {
+      if (!cached.expiresAt.isAfter(now) && pausedUntil == null) {
         _refreshDecodedResponseInBackground(normalizedPath, ttl);
       }
       return cached.payload;
+    }
+
+    if (pausedUntil != null) {
+      final persisted = await _loadPersistedResponse(normalizedPath);
+      if (!forceRefresh && persisted != null && persisted.payload.isNotEmpty) {
+        final decorated = _decorateRecoveredPayload(
+          persisted.payload,
+          normalizedPath,
+          'Backend asked this endpoint to retry after ${pausedUntil.difference(now).inSeconds}s.',
+          persistedAt: persisted.persistedAt,
+          expiredByTtl: persisted.isExpired,
+        );
+        _cache[normalizedPath] = _CachedBackendResponse(
+          payload: decorated,
+          expiresAt: pausedUntil,
+          storedAt: persisted.persistedAt ?? DateTime.now(),
+        );
+        return decorated;
+      }
+
+      throw BackendApiException(
+        'This endpoint is cooling down after too many requests.',
+        statusCode: 429,
+        retryAfter: pausedUntil.difference(now),
+      );
     }
 
     final existing = _inflightGets[normalizedPath];
@@ -2253,7 +2311,15 @@ class BackendApiService {
             }
           }
 
-          throw BackendApiException(_responseErrorMessage(response));
+          if (response.statusCode == 429) {
+            _pausePathFromResponse(path, response);
+            throw _rateLimitException(response);
+          }
+
+          throw BackendApiException(
+            _responseErrorMessage(response),
+            statusCode: response.statusCode,
+          );
         }
 
         final decoded = jsonDecode(response.body);
@@ -2303,6 +2369,9 @@ class BackendApiService {
         return decoded;
       } catch (error) {
         lastError = error;
+        if (error is BackendApiException && error.statusCode == 429) {
+          break;
+        }
         if (attempt < maxAttempts - 1) {
           await Future<void>.delayed(_retryDelayForPath(path, attempt));
         }
@@ -2476,6 +2545,68 @@ String _responseErrorMessage(http.Response response) {
   } catch (_) {}
 
   return 'Request failed with status ${response.statusCode}.';
+}
+
+BackendApiException _rateLimitException(http.Response response) {
+  final retryAfter = _retryAfterForResponse(response);
+  var category = '';
+  var message = _responseErrorMessage(response);
+
+  try {
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map) {
+      category = decoded['category']?.toString() ?? '';
+      message = decoded['message']?.toString() ?? message;
+    }
+  } catch (_) {}
+
+  return BackendApiException(
+    message,
+    statusCode: 429,
+    retryAfter: retryAfter,
+    category: category.isEmpty ? null : category,
+  );
+}
+
+Duration _retryAfterForResponse(http.Response response) {
+  final header = response.headers['retry-after'];
+  final seconds = int.tryParse((header ?? '').trim());
+  if (seconds != null && seconds > 0) {
+    return Duration(seconds: seconds.clamp(1, 300));
+  }
+
+  try {
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map) {
+      final bodySeconds = int.tryParse((decoded['retryAfter'] ?? '').toString());
+      if (bodySeconds != null && bodySeconds > 0) {
+        return Duration(seconds: bodySeconds.clamp(1, 300));
+      }
+    }
+  } catch (_) {}
+
+  return const Duration(seconds: 10);
+}
+
+DateTime? _pauseUntilForPath(String path) {
+  final pauseUntil = BackendApiService._pausedUntil[path];
+  if (pauseUntil == null) {
+    return null;
+  }
+
+  if (!pauseUntil.isAfter(DateTime.now())) {
+    BackendApiService._pausedUntil.remove(path);
+    return null;
+  }
+
+  return pauseUntil;
+}
+
+void _pausePathFromResponse(String path, http.Response response) {
+  final normalized = path.startsWith('/') ? path : '/$path';
+  BackendApiService._pausedUntil[normalized] = DateTime.now().add(
+    _retryAfterForResponse(response),
+  );
 }
 
 void _storeValidator(String path, http.Response response) {

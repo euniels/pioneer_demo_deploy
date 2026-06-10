@@ -65,6 +65,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   final Map<String, gmaps.BitmapDescriptor> _zoneLabelIconCache = {};
 
   bool _isLoading = true;
+  bool _isLoadingVehicles = false;
   String? _errorMessage;
   String selectedPlate = '';
   String? _pendingPlateArg;
@@ -663,6 +664,11 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required bool fullRefresh,
     required bool refreshTrail,
   }) async {
+    if (_isLoadingVehicles) {
+      return;
+    }
+
+    _isLoadingVehicles = true;
     try {
       if (fullRefresh) {
         await refreshVehiclesFromBackend();
@@ -755,6 +761,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         _isLoading = false;
         _errorMessage = 'Live tracking is temporarily unavailable.';
       });
+    } finally {
+      _isLoadingVehicles = false;
     }
   }
 

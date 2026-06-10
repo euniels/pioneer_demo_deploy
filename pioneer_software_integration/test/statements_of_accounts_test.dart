@@ -15,6 +15,9 @@ void main() {
               'issueDate': '2026-05-03T10:00:00+08:00',
               'client': 'Empire Oil, Inc.',
               'tripId': 'TRP-100',
+              'erpReference': 'SO-42',
+              'poNumber': 'PO-88',
+              'drNumber': 'DR-77',
               'subtotalBeforeVat': 'PHP 1,000.00',
               'vatAmount': 'PHP 120.00',
               'totalWithVat': 'PHP 1,120.00',
@@ -31,10 +34,11 @@ void main() {
       expect(
         csv,
         contains(
-          '"Invoice Number","Date","Client","Trip Reference","Subtotal","VAT","Total","Status","Days Overdue","Payment Date"',
+          '"Invoice Number","Date","Client","Trip Reference","SO / ERP Reference","PO Number","DR Number","Subtotal","VAT","Total","Status","Days Overdue","Payment Date"',
         ),
       );
       expect(csv, contains('"Empire Oil, Inc."'));
+      expect(csv, contains('"SO-42","PO-88","DR-77"'));
       expect(csv, contains('"1000.00","120.00","1120.00"'));
       expect(csv, contains('"Overdue 15 days","15"'));
       expect(csv, isNot(contains('PHP 1,120.00')));
@@ -56,5 +60,6 @@ void main() {
     );
     expect(source, contains('All invoice dates'));
     expect(source, contains('Clear filters'));
+    expect(source, contains('SO / ERP ref'));
   });
 }

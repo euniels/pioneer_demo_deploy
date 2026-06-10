@@ -27,15 +27,15 @@ void main() {
     'client tracking headline and public timeline use customer milestones',
     () {
       expect(
-        clientTrackingHeadlineStatus({'workflowPhaseNumber': 8}),
-        'ORDER DISPATCHED',
+        clientTrackingHeadlineStatus({'workflowPhaseNumber': 2}),
+        'DELIVERY REQUESTED',
       );
       expect(
-        clientTrackingHeadlineStatus({'workflowPhaseNumber': 10}),
+        clientTrackingHeadlineStatus({'workflowPhaseNumber': 7}),
         'IN TRANSIT',
       );
       expect(
-        clientTrackingHeadlineStatus({'workflowPhaseNumber': 11}),
+        clientTrackingHeadlineStatus({'workflowPhaseNumber': 8}),
         'ARRIVED AT DESTINATION',
       );
       expect(
@@ -46,7 +46,7 @@ void main() {
         clientTrackingHeadlineStatus({'status': 'dispatched'}),
         'IN TRANSIT',
       );
-      expect(clientTrackingPublicTimelineIndex({'workflowPhaseNumber': 10}), 2);
+      expect(clientTrackingPublicTimelineIndex({'workflowPhaseNumber': 7}), 2);
       expect(clientTrackingPublicTimelineIndex({'status': 'dispatched'}), 2);
     },
   );
@@ -55,7 +55,7 @@ void main() {
     expect(
       clientTrackingArrivalLabel({
         'status': 'dispatched',
-        'workflowPhaseNumber': 10,
+        'workflowPhaseNumber': 7,
         'eta': '2 hours 15 min',
         'etaSource': 'google_distance_matrix',
         'etaDurationSeconds': 8100,
@@ -68,19 +68,19 @@ void main() {
     'client tracking workflow text maps internal phases to client language',
     () {
       expect(
+        clientTrackingWorkflowStatus({'workflowPhaseNumber': 2}),
+        'Your delivery request is being prepared',
+      );
+      expect(
         clientTrackingWorkflowStatus({'workflowPhaseNumber': 5}),
-        'Your order is being prepared',
+        'Your delivery is being assigned',
       );
       expect(
-        clientTrackingWorkflowStatus({'workflowPhaseNumber': 8}),
-        'Your delivery is being arranged',
-      );
-      expect(
-        clientTrackingWorkflowStatus({'workflowPhaseNumber': 10}),
+        clientTrackingWorkflowStatus({'workflowPhaseNumber': 7}),
         'Your delivery is on its way',
       );
       expect(
-        clientTrackingWorkflowStatus({'workflowPhaseNumber': 11}),
+        clientTrackingWorkflowStatus({'workflowPhaseNumber': 8}),
         'Your delivery has arrived',
       );
       expect(
@@ -101,7 +101,7 @@ void main() {
     expect(source, contains('Proof of delivery'));
     expect(source, contains('Awaiting delivery'));
     expect(source, contains('Delivery journey'));
-    expect(source, contains('Order Received'));
+    expect(source, contains('Trip Requested'));
     expect(source, contains('In Transit'));
     expect(source, contains('Delivered'));
     expect(source, isNot(contains("data['orderValue']")));

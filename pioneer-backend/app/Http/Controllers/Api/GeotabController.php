@@ -607,6 +607,8 @@ class GeotabController extends Controller
         ];
         $health['sse']['active'] = ($health['sse']['enabled'] ?? false) && ($health['sse']['mode'] ?? '') === 'stream';
         $health['sse']['active_clients'] = $health['sse']['activeClients'] ?? 0;
+        $health['apiPressure'] = $this->apiPressureDiagnostic();
+        $health['rateLimits'] = $this->rateLimitDiagnostic();
 
         return $this->respondData($health);
     }
@@ -720,6 +722,63 @@ class GeotabController extends Controller
             'status' => $healthy ? 'ok' : 'degraded',
             'generatedAt' => now()->toIso8601String(),
             'checks' => $checks,
+            'apiPressure' => $this->apiPressureDiagnostic(),
+            'rateLimits' => $this->rateLimitDiagnostic(),
+        ];
+    }
+
+    private function apiPressureDiagnostic(): array
+    {
+        $today = now()->toDateString();
+        $categories = ['login', 'client_errors', 'writeback', 'mutations', 'reads', 'live'];
+        $byCategory = [];
+
+        foreach ($categories as $category) {
+            $key = 'pioneer_rate_limit_429:'.$today.':'.$category;
+            $count = (int) Cache::get($key, 0);
+            if ($count <= 0) {
+                continue;
+            }
+            $byCategory[$category] = [
+                'count' => $count,
+                'lastAt' => Cache::get($key.':last_at'),
+            ];
+        }
+
+        return [
+            'status' => $byCategory === [] ? 'ok' : 'throttling_detected',
+            'date' => $today,
+            'cacheDriver' => config('cache.default'),
+            'recent429Count' => (int) Cache::get('pioneer_rate_limit_429:'.$today.':total', 0),
+            'last429At' => Cache::get('pioneer_rate_limit_429:last_at'),
+            'last429Category' => Cache::get('pioneer_rate_limit_429:last_category'),
+            'byCategory' => $byCategory,
+        ];
+    }
+
+    private function rateLimitDiagnostic(): array
+    {
+        $limits = (array) config('pioneer.rate_limits', []);
+
+        return [
+            'cacheDriver' => config('cache.default'),
+            'login' => $this->rateLimitBucketDiagnostic($limits['login'] ?? []),
+            'clientErrors' => $this->rateLimitBucketDiagnostic($limits['client_errors'] ?? []),
+            'writeback' => $this->rateLimitBucketDiagnostic($limits['writeback'] ?? []),
+            'mutations' => $this->rateLimitBucketDiagnostic($limits['mutations'] ?? []),
+            'reads' => $this->rateLimitBucketDiagnostic($limits['reads'] ?? []),
+            'live' => $this->rateLimitBucketDiagnostic($limits['live'] ?? []),
+            'sseClientsPerUser' => (int) ($limits['sse_clients_per_user'] ?? 5),
+        ];
+    }
+
+    private function rateLimitBucketDiagnostic(mixed $bucket): array
+    {
+        $bucket = is_array($bucket) ? $bucket : [];
+
+        return [
+            'maxAttempts' => (int) ($bucket['max_attempts'] ?? 0),
+            'windowSeconds' => (int) ($bucket['window_seconds'] ?? 60),
         ];
     }
 
@@ -8581,7 +8640,7 @@ class GeotabController extends Controller
         $distanceKm = round((float) ($trip['distanceKm'] ?? 0), 2);
         $status = $this->normalizeWorkflowStatus($trip['status'] ?? 'pending');
         $fulfillmentMethod = $this->fulfillmentMethodForTrip($trip, $orderValue, $distanceKm);
-        $workflow = $this->salesDeliveryWorkflowForTrip($trip, $status, $fulfillmentMethod, $orderValue);
+        $workflow = $this->deliveryWorkflowForTrip($trip, $status, $fulfillmentMethod, $orderValue);
         $routeFallback = $this->tripCoordinateFallback($trip);
         $origin = $this->sanitizeText($trip['origin'] ?? '', '');
         $destination = $this->sanitizeText($trip['destination'] ?? '', '');
@@ -8801,119 +8860,146 @@ class GeotabController extends Controller
         };
     }
 
-    private function salesDeliveryWorkflowForTrip(
+    private function deliveryWorkflowForTrip(
         array $trip,
         string $status,
         string $fulfillmentMethod,
         float $orderValue,
     ): array {
-        $poReceived = ($trip['poReceived'] ?? true) !== false;
-        $hasAssignment = trim((string) ($trip['vehicle'] ?? '')) !== '' || trim((string) ($trip['driver'] ?? '')) !== '';
+        $tripId = trim((string) ($trip['tripId'] ?? ''));
+        $hasTripDetails = trim((string) ($trip['customer'] ?? '')) !== ''
+            && trim((string) ($trip['origin'] ?? '')) !== ''
+            && trim((string) ($trip['destination'] ?? '')) !== '';
+        $hasVehicle = trim((string) ($trip['vehicle'] ?? '')) !== '';
+        $hasDriver = trim((string) ($trip['driver'] ?? '')) !== '';
+        $hasAssignment = $hasVehicle && $hasDriver;
         $isCompleted = $status === 'completed';
-        $isDispatched = $status === 'dispatched';
+        $isArrived = in_array($status, ['arrived', 'completed'], true);
+        $isDispatched = in_array($status, ['dispatched', 'active', 'in_progress', 'in progress', 'on trip', 'arrived', 'completed'], true);
         $isDelivery = in_array($fulfillmentMethod, ['free_delivery', 'paid_delivery'], true);
+        $pod = $tripId !== '' ? $this->loadPod($tripId) : null;
+        $podSubmitted = is_array($pod);
+        $podVerified = $podSubmitted
+            && in_array(strtolower((string) ($pod['status'] ?? '')), ['delivered', 'completed', 'verified'], true)
+            && ((bool) ($pod['hasSignature'] ?? false) || count((array) ($pod['attachments'] ?? [])) > 0);
+        $invoiceStatus = $this->billingReferenceStatusForTrip($tripId);
+        $invoiceDrafted = $invoiceStatus !== null || ($isCompleted && $podVerified);
+        $accountingReviewed = in_array($invoiceStatus, ['approved', 'issued', 'sent', 'paid', 'overdue', 'voided'], true);
         $explicitPhaseNumber = ($trip['workflowPhaseLocked'] ?? false) === true && isset($trip['workflowPhaseNumber'])
             ? max(1, min(12, (int) $trip['workflowPhaseNumber']))
             : null;
 
         $steps = [
             [
-                'key' => 'inquiry',
-                'label' => 'Inquiry received',
-                'phase' => 'sales',
+                'key' => 'trip_request',
+                'label' => 'Trip request created',
+                'phase' => 'request',
                 'status' => 'done',
-                'owner' => 'Sales',
-                'detail' => 'Client inquiry captured from Viber or sales channel.',
+                'owner' => 'Dispatch',
+                'detail' => 'Delivery request is recorded with trip reference '.$this->sanitizeText($tripId, 'TBA').'.',
             ],
             [
-                'key' => 'stock_check',
-                'label' => 'Stock availability checked',
-                'phase' => 'sales',
-                'status' => 'done',
-                'owner' => 'Sales',
-                'detail' => 'Availability confirmed before quotation.',
+                'key' => 'trip_details',
+                'label' => 'Required trip details completed',
+                'phase' => 'request',
+                'status' => $hasTripDetails ? 'done' : 'active',
+                'owner' => 'Dispatch',
+                'detail' => $hasTripDetails
+                    ? 'Client, origin, destination, and delivery amount are ready for dispatch review.'
+                    : 'Complete client, origin, and destination details before assignment.',
             ],
             [
-                'key' => 'quotation',
-                'label' => 'Quotation sent',
-                'phase' => 'sales',
-                'status' => $poReceived ? 'done' : 'active',
-                'owner' => 'Sales',
-                'detail' => 'Quotation is sent through Viber and waits for PO confirmation.',
+                'key' => 'vehicle_availability',
+                'label' => 'Vehicle availability checked',
+                'phase' => 'dispatch',
+                'status' => $hasVehicle ? 'done' : ($hasTripDetails ? 'active' : 'pending'),
+                'owner' => 'Fleet Manager',
+                'detail' => $hasVehicle ? 'Assigned vehicle is available for this delivery.' : 'Select an available vehicle with suitable capacity.',
             ],
             [
-                'key' => 'po_confirmation',
-                'label' => 'PO received',
-                'phase' => 'sales',
-                'status' => $poReceived ? 'done' : 'blocked',
-                'owner' => 'Sales',
-                'detail' => $poReceived ? 'Order confirmed for fulfillment.' : 'Follow up or revise quote.',
-            ],
-            [
-                'key' => 'fulfillment_strategy',
-                'label' => 'Fulfillment method selected',
-                'phase' => 'logistics',
-                'status' => $poReceived ? 'done' : 'pending',
-                'owner' => 'Logistics',
-                'detail' => $this->fulfillmentLabel($fulfillmentMethod).' based on order value '.$this->money($orderValue).'.',
-            ],
-            [
-                'key' => 'service_advisor_request',
-                'label' => 'Delivery request to Service Advisor',
-                'phase' => 'logistics',
-                'status' => $isDelivery ? ($hasAssignment || $isDispatched || $isCompleted ? 'done' : 'active') : 'not_required',
-                'owner' => 'Service Advisor',
-                'detail' => 'Client, address, date, amount, weight, vehicle, and driver should be confirmed.',
+                'key' => 'driver_availability',
+                'label' => 'Driver availability checked',
+                'phase' => 'dispatch',
+                'status' => $hasDriver ? 'done' : ($hasVehicle ? 'active' : 'pending'),
+                'owner' => 'Dispatcher',
+                'detail' => $hasDriver ? 'Assigned driver is available for this delivery.' : 'Select an available driver before dispatch.',
             ],
             [
                 'key' => 'assignment',
                 'label' => 'Vehicle and driver assigned',
-                'phase' => 'logistics',
-                'status' => $hasAssignment ? 'done' : ($isDelivery ? 'active' : 'not_required'),
-                'owner' => 'Dispatch',
-                'detail' => $hasAssignment ? 'Assigned resources are ready.' : 'Vehicle and driver are still TBA.',
+                'phase' => 'dispatch',
+                'status' => $hasAssignment ? 'done' : (($hasVehicle || $hasDriver) ? 'active' : 'pending'),
+                'owner' => 'Dispatcher',
+                'detail' => $hasAssignment ? 'Vehicle and driver are assigned.' : 'Both vehicle and driver must be assigned.',
             ],
             [
-                'key' => 'client_eta',
-                'label' => 'ETA and receiving schedule confirmed',
-                'phase' => 'execution',
-                'status' => $isDispatched || $isCompleted ? 'done' : ($hasAssignment ? 'active' : 'pending'),
-                'owner' => 'Coordinator',
-                'detail' => 'Coordinate departure time and confirm preferred receiving schedule.',
+                'key' => 'driver_notification',
+                'label' => 'Driver notified',
+                'phase' => 'dispatch',
+                'status' => $hasAssignment ? 'done' : ($isDelivery ? 'pending' : 'not_required'),
+                'owner' => 'Dispatcher',
+                'detail' => $hasAssignment ? 'Driver can view the assigned trip.' : 'Notify the driver after assignment.',
             ],
             [
-                'key' => 'driver_briefing',
-                'label' => 'Driver briefing and invoice handoff',
-                'phase' => 'execution',
-                'status' => $isDispatched || $isCompleted ? 'done' : ($hasAssignment ? 'active' : 'pending'),
-                'owner' => 'Dispatch',
-                'detail' => 'Provide invoice, signing requirements, and document copy instructions.',
-            ],
-            [
-                'key' => 'dispatch',
-                'label' => 'Delivery dispatched',
-                'phase' => 'execution',
-                'status' => $isDispatched || $isCompleted ? 'done' : ($isDelivery ? 'pending' : 'not_required'),
+                'key' => 'in_transit',
+                'label' => 'Delivery in transit',
+                'phase' => 'transit',
+                'status' => $isArrived ? 'done' : ($hasAssignment ? 'active' : 'pending'),
                 'owner' => 'Driver',
-                'detail' => 'Driver departs and live tracking begins.',
+                'detail' => $isDispatched ? 'Live tracking is active for this trip.' : 'Dispatch the truck and begin live tracking.',
             ],
             [
                 'key' => 'arrival',
-                'label' => 'Arrival at client location',
-                'phase' => 'execution',
-                'status' => $isCompleted ? 'done' : ($isDispatched ? 'active' : 'pending'),
+                'label' => 'Arrived at destination',
+                'phase' => 'transit',
+                'status' => $isArrived ? 'done' : 'pending',
                 'owner' => 'Driver',
-                'detail' => 'Sales notifies client through Viber on arrival.',
+                'detail' => $isArrived ? 'Driver has reached the delivery destination.' : 'Confirm arrival at the destination.',
             ],
             [
-                'key' => 'pod',
-                'label' => 'Delivery complete and POD confirmed',
-                'phase' => 'completion',
-                'status' => $isCompleted ? 'done' : 'pending',
-                'owner' => 'Client / Driver',
-                'detail' => 'Client receives and signs documents, driver confirms completion to Sales, and POD is recorded.',
+                'key' => 'pod_submitted',
+                'label' => 'POD submitted',
+                'phase' => 'pod',
+                'status' => $podSubmitted ? 'done' : (($isArrived || $isCompleted) ? 'active' : 'pending'),
+                'owner' => 'Driver',
+                'detail' => $podSubmitted ? 'Proof-of-delivery evidence has been submitted.' : 'Upload photo, recipient, signature, or delivery confirmation.',
+            ],
+            [
+                'key' => 'pod_verified',
+                'label' => 'POD verified',
+                'phase' => 'pod',
+                'status' => $podVerified ? 'done' : ($podSubmitted ? 'active' : 'pending'),
+                'owner' => 'Accounting',
+                'detail' => $podVerified ? 'POD is complete enough for billing review.' : 'Verify POD evidence before issuing an invoice.',
+            ],
+            [
+                'key' => 'invoice_draft',
+                'label' => 'Invoice draft generated',
+                'phase' => 'billing',
+                'status' => $invoiceDrafted ? 'done' : ($podVerified ? 'active' : 'pending'),
+                'owner' => 'Accounting',
+                'detail' => $invoiceDrafted ? 'Trip-linked invoice draft is available.' : 'Generate the invoice draft from completed trip and POD evidence.',
+            ],
+            [
+                'key' => 'accounting_review',
+                'label' => 'Accounting reviewed',
+                'phase' => 'billing',
+                'status' => $accountingReviewed ? 'done' : ($invoiceDrafted ? 'active' : 'pending'),
+                'owner' => 'Accounting',
+                'detail' => $accountingReviewed ? 'Invoice has passed accounting review.' : 'Approve, issue, or reject the invoice after review.',
             ],
         ];
+
+        if ($isCompleted && ! $podSubmitted) {
+            $steps[8]['status'] = 'active';
+            $steps[9]['status'] = 'pending';
+            $steps[10]['status'] = 'pending';
+            $steps[11]['status'] = 'pending';
+        }
+
+        if ($isCompleted && $podVerified && ! $invoiceDrafted) {
+            $steps[10]['status'] = 'active';
+        }
 
         if ($explicitPhaseNumber !== null) {
             foreach ($steps as $index => &$step) {
@@ -8929,7 +9015,7 @@ class GeotabController extends Controller
 
         $active = collect($steps)->first(fn (array $step): bool => in_array($step['status'], ['blocked', 'active'], true));
         $phaseNumber = $explicitPhaseNumber ?? $this->workflowPhaseNumberFromSteps($steps, $isCompleted);
-        $phase = $this->workflowPhaseSlug($phaseNumber, (string) ($active['phase'] ?? ($isCompleted ? 'completion' : 'logistics')));
+        $phase = $this->workflowPhaseSlug($phaseNumber, (string) ($active['phase'] ?? ($isCompleted ? 'billing' : 'dispatch')));
         $nextAction = (string) ($active['detail'] ?? $this->workflowPhaseMilestone($phaseNumber));
 
         return [
@@ -8937,10 +9023,11 @@ class GeotabController extends Controller
             'phaseNumber' => $phaseNumber,
             'group' => $this->workflowGroupForPhase($phaseNumber),
             'phaseLabel' => match ($phase) {
-                'sales' => 'Inquiry & quotation',
-                'execution' => 'Delivery execution',
-                'completion' => 'Completion & POD',
-                default => 'Fulfillment strategy',
+                'request' => 'Trip request',
+                'dispatch' => 'Dispatch assignment',
+                'transit' => 'Delivery execution',
+                'pod' => 'POD verification',
+                default => 'Billing review',
             },
             'nextAction' => $nextAction,
             'clientStatus' => $this->clientWorkflowStatus($phaseNumber),
@@ -8949,28 +9036,38 @@ class GeotabController extends Controller
         ];
     }
 
-    private function workflowPhaseNumberFromSteps(array $steps, bool $isCompleted): int
+    private function billingReferenceStatusForTrip(string $tripId): ?string
     {
-        if ($isCompleted) {
-            return 12;
+        if ($tripId === '' || ! $this->billingInvoiceReferencesTableAvailable()) {
+            return null;
         }
 
+        $status = BillingInvoiceReference::query()
+            ->where('trip_id', $tripId)
+            ->value('status');
+
+        return is_string($status) && trim($status) !== '' ? strtolower(trim($status)) : null;
+    }
+
+    private function workflowPhaseNumberFromSteps(array $steps, bool $isCompleted): int
+    {
         foreach ($steps as $index => $step) {
             if (in_array((string) ($step['status'] ?? ''), ['blocked', 'active'], true)) {
                 return min($index + 1, 12);
             }
         }
 
-        return 7;
+        return $isCompleted ? 12 : 5;
     }
 
     private function workflowPhaseSlug(int $phaseNumber, string $fallback): string
     {
         return match (true) {
-            $phaseNumber <= 6 => 'sales',
-            $phaseNumber <= 9 => 'logistics',
-            $phaseNumber <= 11 => 'execution',
-            $phaseNumber >= 12 => 'completion',
+            $phaseNumber <= 2 => 'request',
+            $phaseNumber <= 6 => 'dispatch',
+            $phaseNumber <= 8 => 'transit',
+            $phaseNumber <= 10 => 'pod',
+            $phaseNumber >= 11 => 'billing',
             default => $fallback,
         };
     }
@@ -8978,31 +9075,36 @@ class GeotabController extends Controller
     private function workflowGroupForPhase(int $phaseNumber): string
     {
         return match (true) {
+            $phaseNumber <= 2 => 'Pending Details',
             $phaseNumber <= 6 => 'Pending Assignment',
-            $phaseNumber <= 9 => 'Ready to Dispatch',
-            $phaseNumber <= 11 => 'In Transit',
-            default => 'Completed',
+            $phaseNumber === 7 => 'In Transit',
+            $phaseNumber === 8 => 'Arrived',
+            $phaseNumber <= 10 => 'Pending POD',
+            default => 'Billing Review',
         };
     }
 
     private function workflowPhaseMilestone(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 6 => 'Order details and quotation are being confirmed.',
-            $phaseNumber <= 9 => 'Delivery resources and receiving schedule are being arranged.',
-            $phaseNumber === 10 => 'Delivery is ready to leave the warehouse.',
-            $phaseNumber === 11 => 'Driver is arriving at the client location.',
-            default => 'Delivery is complete.',
+            $phaseNumber <= 2 => 'Complete the delivery trip details.',
+            $phaseNumber <= 6 => 'Assign the vehicle, driver, and dispatch notification.',
+            $phaseNumber === 7 => 'Dispatch the truck and start live tracking.',
+            $phaseNumber === 8 => 'Confirm arrival at the delivery destination.',
+            $phaseNumber <= 10 => 'Submit and verify proof of delivery.',
+            default => 'Review, issue, or settle the trip-linked invoice.',
         };
     }
 
     private function clientWorkflowStatus(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 6 => 'Your order is being prepared',
-            $phaseNumber <= 9 => 'Your delivery is being arranged',
-            $phaseNumber === 10 => 'Your delivery is on its way',
-            $phaseNumber === 11 => 'Your delivery has arrived',
+            $phaseNumber <= 2 => 'Your delivery request is being prepared',
+            $phaseNumber <= 6 => 'Your delivery is being assigned',
+            $phaseNumber === 7 => 'Your delivery is on its way',
+            $phaseNumber === 8 => 'Your delivery has arrived',
+            $phaseNumber <= 10 => 'Proof of delivery is being confirmed',
+            $phaseNumber === 11 => 'Your invoice is being prepared',
             default => 'Delivery complete',
         };
     }
@@ -9010,11 +9112,13 @@ class GeotabController extends Controller
     private function clientWorkflowMilestone(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 6 => 'Next: Pioneer confirms items, quotation, and order details.',
-            $phaseNumber <= 9 => 'Next: Pioneer assigns the vehicle, driver, and delivery schedule.',
-            $phaseNumber === 10 => 'Next: Track the truck as it travels to your location.',
-            $phaseNumber === 11 => 'Next: Receive, sign, and confirm delivery documents.',
-            default => 'Thank you. Proof of delivery has been recorded.',
+            $phaseNumber <= 2 => 'Next: Pioneer completes the trip reference and delivery details.',
+            $phaseNumber <= 6 => 'Next: Pioneer assigns the vehicle, driver, and dispatch schedule.',
+            $phaseNumber === 7 => 'Next: Track the truck as it travels to your destination.',
+            $phaseNumber === 8 => 'Next: Receive the delivery and confirm arrival.',
+            $phaseNumber <= 10 => 'Next: Driver submits and Pioneer verifies proof of delivery.',
+            $phaseNumber === 11 => 'Next: Accounting prepares the delivery invoice.',
+            default => 'Thank you. Delivery and billing review are complete.',
         };
     }
 

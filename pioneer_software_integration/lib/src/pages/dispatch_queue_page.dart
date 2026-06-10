@@ -142,11 +142,12 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
   Map<String, List<Map<String, dynamic>>> get _workflowGroupedTrips {
     final groups = <String, List<Map<String, dynamic>>>{
+      'Pending Details': [],
       'Pending Assignment': [],
-      'Ready to Dispatch': [],
       'In Transit': [],
       'Arrived': [],
-      'Completed': [],
+      'Pending POD': [],
+      'Billing Review': [],
     };
 
     for (final trip in _workflowTrips) {
@@ -1642,7 +1643,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     final phase =
         trip['workflowPhaseLabel']?.toString().trim().isNotEmpty == true
         ? trip['workflowPhaseLabel'].toString()
-        : 'Fulfillment strategy';
+        : 'Dispatch assignment';
     final next =
         trip['workflowNextAction']?.toString().trim().isNotEmpty == true
         ? trip['workflowNextAction'].toString()
@@ -1762,16 +1763,16 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
       case 'completed':
         return 12;
       case 'arrived':
-        return 11;
+        return 8;
       case 'dispatched':
       case 'active':
       case 'in transit':
       case 'on trip':
-        return 10;
+        return 7;
       case 'pending':
         return 1;
       default:
-        return 7;
+        return 5;
     }
   }
 
@@ -1780,38 +1781,45 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   }
 
   String _workflowGroupForPhase(int phase) {
+    if (phase <= 2) return 'Pending Details';
     if (phase <= 6) return 'Pending Assignment';
-    if (phase <= 9) return 'Ready to Dispatch';
-    if (phase == 10) return 'In Transit';
-    if (phase == 11) return 'Arrived';
-    return 'Completed';
+    if (phase == 7) return 'In Transit';
+    if (phase == 8) return 'Arrived';
+    if (phase <= 10) return 'Pending POD';
+    return 'Billing Review';
   }
 
   String _workflowPhaseLabel(int phase) {
-    if (phase <= 6) return 'Inquiry & quotation';
-    if (phase <= 9) return 'Fulfillment strategy';
-    if (phase <= 11) return 'Delivery execution';
-    return 'Completion & POD';
+    if (phase <= 2) return 'Trip request';
+    if (phase <= 6) return 'Dispatch assignment';
+    if (phase <= 8) return 'Delivery execution';
+    if (phase <= 10) return 'POD verification';
+    return 'Billing review';
   }
 
   String _workflowNextAction(int phase) {
-    if (phase <= 6) return 'Confirm order details and quotation.';
-    if (phase <= 9) return 'Arrange vehicle, driver, and receiving schedule.';
-    if (phase == 10) return 'Dispatch the truck and share tracking.';
-    if (phase == 11) return 'Confirm arrival and document signing.';
-    return 'Delivery complete.';
+    if (phase <= 2) return 'Complete the delivery trip details.';
+    if (phase <= 6) return 'Assign vehicle, driver, and dispatch notification.';
+    if (phase == 7) return 'Dispatch the truck and share live tracking.';
+    if (phase == 8) return 'Confirm arrival at the destination.';
+    if (phase <= 10) return 'Submit and verify proof of delivery.';
+    return 'Review, issue, or settle the trip-linked invoice.';
   }
 
   Color _workflowGroupColor(String title) {
     switch (title) {
+      case 'Pending Details':
+        return AppTheme.colorFFF59E0B;
       case 'Pending Assignment':
         return AppTheme.colorFFF59E0B;
-      case 'Ready to Dispatch':
-        return AppTheme.colorFF1A3A6B;
       case 'In Transit':
         return AppTheme.colorFF4B7BE5;
       case 'Arrived':
         return AppTheme.colorFF14B8A6;
+      case 'Pending POD':
+        return AppTheme.colorFFF59E0B;
+      case 'Billing Review':
+        return AppTheme.colorFF16A34A;
       default:
         return AppTheme.colorFF16A34A;
     }
@@ -1819,16 +1827,20 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
   String _workflowGroupDescription(String title) {
     switch (title) {
+      case 'Pending Details':
+        return 'Delivery requests needing complete trip details';
       case 'Pending Assignment':
-        return 'Orders requiring assignment and commercial confirmation';
-      case 'Ready to Dispatch':
-        return 'Vehicle and receiving schedule prepared for release';
+        return 'Trips requiring vehicle and driver assignment';
       case 'In Transit':
         return 'Active delivery movement with live vehicle condition';
       case 'Arrived':
         return 'At destination, awaiting delivery receipt confirmation';
+      case 'Pending POD':
+        return 'Completed or arrived trips waiting for proof-of-delivery review';
+      case 'Billing Review':
+        return 'POD-backed trips ready for invoice and payment follow-up';
       default:
-        return 'Proof of delivery recorded and order closed';
+        return 'Delivery workflow status';
     }
   }
 

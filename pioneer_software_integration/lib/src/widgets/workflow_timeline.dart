@@ -61,18 +61,18 @@ class _WorkflowTimelineState extends State<WorkflowTimeline>
     List<Map<String, dynamic>> source,
   ) {
     final defaults = <String>[
-      'Inquiry received',
-      'Stock availability checked',
-      'Availability confirmed',
-      'Quotation sent',
-      'Quotation reviewed',
-      'PO confirmed',
-      'Fulfillment method selected',
-      'Pickup or delivery rules checked',
-      'Delivery request submitted',
+      'Trip request created',
+      'Required trip details completed',
+      'Vehicle availability checked',
+      'Driver availability checked',
       'Vehicle and driver assigned',
-      'Delivery dispatched and arrival monitored',
-      'Delivery complete',
+      'Driver notified',
+      'Delivery in transit',
+      'Arrived at destination',
+      'POD submitted',
+      'POD verified',
+      'Invoice draft generated',
+      'Accounting reviewed',
     ];
 
     return List.generate(12, (index) {
@@ -110,11 +110,14 @@ class _TimelineRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final completed =
-        phaseNumber < currentPhaseNumber ||
-        (phaseNumber == 12 && currentPhaseNumber >= 12);
-    final current = phaseNumber == currentPhaseNumber && !completed;
-    final future = phaseNumber > currentPhaseNumber;
+    final status = step['status']?.toString().trim().toLowerCase() ?? '';
+    final completed = status == 'done' || status == 'completed';
+    final current =
+        !completed &&
+        (status == 'active' ||
+            status == 'blocked' ||
+            phaseNumber == currentPhaseNumber);
+    final future = !completed && !current;
     final circleSize = compact ? 22.0 : 28.0;
     final lineColor = completed
         ? AppTheme.successGreen.withValues(alpha: 0.55)

@@ -304,7 +304,7 @@ class _BillingPageState extends State<BillingPage> {
                                 _referenceField(
                                   isDark,
                                   controller: erpController,
-                                  label: 'ERP SO / Quotation No.',
+                                  label: 'SO / ERP Reference No.',
                                 ),
                                 _referenceField(
                                   isDark,
@@ -819,7 +819,7 @@ class _BillingPageState extends State<BillingPage> {
       <h3>Delivery Charge Basis</h3>
       <p>${_escapeHtml((invoice['finalChargeBasis'] ?? invoice['billingDecision'] ?? 'Delivery trip charges from GPS/POD evidence.').toString())}</p>
       <h3>ERP Reference Details</h3>
-      <p>SO / Quotation: ${_escapeHtml((invoice['erpReference'] ?? '').toString())}<br>
+      <p>SO / ERP Reference: ${_escapeHtml((invoice['erpReference'] ?? '').toString())}<br>
       PO: ${_escapeHtml((invoice['poNumber'] ?? '').toString())}<br>
       DR: ${_escapeHtml((invoice['drNumber'] ?? '').toString())}</p>
       <h3>Status History Summary</h3>

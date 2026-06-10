@@ -769,7 +769,7 @@ test('vehicle subscription coverage report groups active plates by client for er
         ->and((int) $response->json('data.totalVehicles'))->toBeGreaterThanOrEqual(2);
 });
 
-test('custom trips expose sales to delivery workflow state', function () {
+test('custom trips expose delivery workflow state', function () {
     Cache::flush();
 
     $this->postJson('/api/fleet/trips', [
@@ -786,13 +786,14 @@ test('custom trips expose sales to delivery workflow state', function () {
     ])->assertOk()
         ->assertJsonPath('data.fulfillmentMethod', 'free_delivery')
         ->assertJsonPath('data.fulfillmentLabel', 'Free delivery')
-        ->assertJsonPath('data.workflowPhase', 'sales')
-        ->assertJsonPath('data.workflowPhaseLabel', 'Inquiry & quotation')
+        ->assertJsonPath('data.workflowPhase', 'request')
+        ->assertJsonPath('data.workflowPhaseLabel', 'Trip request')
         ->assertJsonPath('data.workflowPhaseNumber', 1)
-        ->assertJsonPath('data.workflowGroup', 'Pending Assignment')
-        ->assertJsonPath('data.clientWorkflowStatus', 'Your order is being prepared')
-        ->assertJsonPath('data.workflowSteps.0.label', 'Inquiry received')
-        ->assertJsonPath('data.workflowSteps.5.owner', 'Service Advisor')
+        ->assertJsonPath('data.workflowGroup', 'Pending Details')
+        ->assertJsonPath('data.clientWorkflowStatus', 'Your delivery request is being prepared')
+        ->assertJsonPath('data.workflowSteps.0.label', 'Trip request created')
+        ->assertJsonPath('data.workflowSteps.1.label', 'Required trip details completed')
+        ->assertJsonPath('data.workflowSteps.5.owner', 'Dispatcher')
         ->assertJsonCount(12, 'data.workflowSteps');
 
     $this->patchJson('/api/fleet/trips/TRP-WORKFLOW', [
@@ -800,12 +801,19 @@ test('custom trips expose sales to delivery workflow state', function () {
         'vehicle' => 'TRK-001',
         'driver' => 'Driver One',
     ])->assertOk()
-        ->assertJsonPath('data.workflowPhase', 'execution')
+        ->assertJsonPath('data.workflowPhase', 'transit')
         ->assertJsonPath('data.workflowPhaseLabel', 'Delivery execution')
-        ->assertJsonPath('data.workflowPhaseNumber', 11)
+        ->assertJsonPath('data.workflowPhaseNumber', 7)
         ->assertJsonPath('data.workflowGroup', 'In Transit')
-        ->assertJsonPath('data.clientWorkflowStatus', 'Your delivery has arrived')
+        ->assertJsonPath('data.clientWorkflowStatus', 'Your delivery is on its way')
         ->assertJsonCount(12, 'data.workflowSteps');
+
+    $labels = collect($this->getJson('/api/fleet/trips/TRP-WORKFLOW')->json('data.workflowSteps'))
+        ->pluck('label')
+        ->implode(' ');
+    expect($labels)->not->toContain('Stock')
+        ->and($labels)->not->toContain('Quotation')
+        ->and($labels)->not->toContain('Inquiry');
 });
 
 test('trip lifecycle crud supports full dispatch form fields and soft cancellation', function () {
@@ -889,12 +897,12 @@ test('dispatch workflow phase can advance and stage relevant geotab writeback', 
     ])->assertOk();
 
     $this->patchJson('/api/fleet/trips/TRP-PHASE', [
-        'workflowPhaseNumber' => 10,
+        'workflowPhaseNumber' => 7,
         'status' => 'dispatched',
         'routeGeotabId' => 'route-phase',
         'deviceGeotabId' => 'device-phase',
     ])->assertOk()
-        ->assertJsonPath('data.workflowPhaseNumber', 10)
+        ->assertJsonPath('data.workflowPhaseNumber', 7)
         ->assertJsonPath('data.workflowGroup', 'In Transit')
         ->assertJsonPath('data.clientWorkflowStatus', 'Your delivery is on its way')
         ->assertJsonCount(12, 'data.workflowSteps');

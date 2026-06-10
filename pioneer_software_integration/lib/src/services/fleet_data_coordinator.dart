@@ -94,62 +94,7 @@ class FleetDataCoordinator {
           ),
         );
       },
-      () async {
-        await coalesce(
-          'GET /fleet/notifications force=$forceRefresh',
-          () => refreshNotificationsFromBackend(forceRefresh: forceRefresh),
-        );
-      },
-      () async {
-        await coalesce(
-          'GET /fleet/routes force=$forceRefresh',
-          () => BackendApiService.getFleetRoutes(forceRefresh: forceRefresh),
-        );
-      },
     ];
-
-    if (_canWarmFullOperations(role)) {
-      laterTiers.insertAll(1, [
-        () async {
-          await coalesce(
-            'GET /fleet/fuel force=$forceRefresh',
-            () => BackendApiService.getFleetFuel(forceRefresh: forceRefresh),
-          );
-        },
-        () async {
-          await coalesce(
-            'GET /fleet/maintenance force=$forceRefresh',
-            () => BackendApiService.getFleetMaintenance(
-              forceRefresh: forceRefresh,
-            ),
-          );
-        },
-        () async {
-          await coalesce(
-            'GET /billing/invoices force=$forceRefresh',
-            () => BackendApiService.getBillingInvoices(
-              forceRefresh: forceRefresh,
-            ),
-          );
-        },
-        () async {
-          await coalesce(
-            'GET /billing/soa force=$forceRefresh',
-            () => BackendApiService.getStatementOfAccounts(
-              forceRefresh: forceRefresh,
-            ),
-          );
-        },
-        () async {
-          await coalesce(
-            'GET /fleet/geotab/writeback/jobs force=$forceRefresh',
-            () => BackendApiService.getGeotabWriteBackJobs(
-              forceRefresh: forceRefresh,
-            ),
-          );
-        },
-      ]);
-    }
 
     for (final tier in laterTiers) {
       await _tierDelay();
@@ -173,14 +118,6 @@ class FleetDataCoordinator {
       'system_administrator',
       'fleet_manager',
       'dispatcher',
-    }.contains(role);
-  }
-
-  static bool _canWarmFullOperations(String role) {
-    return const {
-      'super_administrator',
-      'system_administrator',
-      'fleet_manager',
     }.contains(role);
   }
 

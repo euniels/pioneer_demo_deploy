@@ -3439,13 +3439,13 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     final phase =
         trip['workflowPhaseLabel']?.toString().trim().isNotEmpty == true
         ? trip['workflowPhaseLabel'].toString()
-        : 'Sales to delivery workflow';
+        : 'Delivery trip workflow';
     final next =
         trip['workflowNextAction']?.toString().trim().isNotEmpty == true
         ? trip['workflowNextAction'].toString()
         : 'Confirm the next handoff before dispatch.';
 
-    return _buildSection(isDark, 'Sales to Delivery Workflow', [
+    return _buildSection(isDark, 'Delivery Trip Workflow', [
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
@@ -3467,13 +3467,13 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
               children: [
                 _workflowChip('Phase', phase, AppTheme.colorFF4B7BE5, isDark),
                 _workflowChip(
-                  'Fulfillment',
+                  'Delivery method',
                   trip['fulfillmentLabel']?.toString() ?? 'TBA',
                   AppTheme.colorFF10B981,
                   isDark,
                 ),
                 _workflowChip(
-                  'Order value',
+                  'Delivery value',
                   trip['orderValueLabel']?.toString() ?? 'PHP 0.00',
                   AppTheme.colorFFF59E0B,
                   isDark,
