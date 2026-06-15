@@ -14,7 +14,6 @@ import '../services/trips_store.dart' show tripsNotifier;
 import '../services/vehicles_store.dart';
 import '../utils/workflow_status_helper.dart';
 import '../widgets/workflow_timeline.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/app_theme.dart';
 
 class DispatchQueuePage extends StatefulWidget {
@@ -30,6 +29,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
   late TabController _tabController;
   Timer? _dispatchLiveTimer;
+  Timer? _dataRebuildDebounce;
   List<Map<String, dynamic>> _geotabRoutes = const [];
   bool _routesLoading = false;
   String? _routesError;
@@ -37,9 +37,14 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   bool _routePlansExpanded = false;
   bool _optimizingOrder = false;
   bool _topSectionCollapsed = false;
+  int _availableVehiclesVisibleLimit = 24;
+  int _activeDispatchVisibleLimit = 40;
   String? _optimizeOrderMessage;
   List<Map<String, dynamic>> _optimizedStops = const [];
   final Set<String> _collapsedWorkflowGroups = {};
+  final Map<String, int> _workflowVisibleLimits = {};
+  static const int _initialWorkflowVisibleLimit = 8;
+  static const int _workflowPageSize = 8;
 
   @override
   void initState() {
@@ -54,7 +59,12 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   }
 
   void _onDataChanged() {
-    if (mounted) setState(() {});
+    _dataRebuildDebounce?.cancel();
+    _dataRebuildDebounce = Timer(const Duration(milliseconds: 120), () {
+      if (mounted) {
+        setState(() {});
+      }
+    });
     _ensureDispatchLiveTimer();
   }
 
@@ -63,6 +73,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     tripsNotifier.removeListener(_onDataChanged);
     driversNotifier.removeListener(_onDataChanged);
     vehiclesNotifier.removeListener(_onDataChanged);
+    _dataRebuildDebounce?.cancel();
     _dispatchLiveTimer?.cancel();
     _tabController.dispose();
     super.dispose();
@@ -411,11 +422,11 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     return Column(
       children: [
         AnimatedSize(
-          duration: const Duration(milliseconds: 260),
+          duration: _dispatchChromeAnimationDuration,
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 240),
+            duration: _dispatchChromeAnimationDuration,
             curve: Curves.easeOutCubic,
             padding: EdgeInsets.all(
               _topSectionCollapsed
@@ -424,7 +435,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
             ),
             color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
             child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 240),
+              duration: _dispatchChromeAnimationDuration,
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
               transitionBuilder: (child, animation) {
@@ -482,33 +493,18 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                     child: TabBarView(
                       controller: _tabController,
                       children: [
-                        _buildDispatchQueue(isDark, isMobile)
-                            .animate()
-                            .fadeIn(duration: 550.ms)
-                            .slideY(
-                              begin: 0.2,
-                              end: 0,
-                              duration: 500.ms,
-                              curve: Curves.easeOut,
-                            ),
-                        _buildAvailableVehicles(isDark, isMobile)
-                            .animate()
-                            .fadeIn(duration: 600.ms)
-                            .slideY(
-                              begin: 0.2,
-                              end: 0,
-                              duration: 500.ms,
-                              curve: Curves.easeOut,
-                            ),
-                        _buildActiveDispatches(isDark, isMobile)
-                            .animate()
-                            .fadeIn(duration: 700.ms)
-                            .slideY(
-                              begin: 0.2,
-                              end: 0,
-                              duration: 500.ms,
-                              curve: Curves.easeOut,
-                            ),
+                        Builder(
+                          builder: (_) =>
+                              _buildDispatchQueue(isDark, isMobile),
+                        ),
+                        Builder(
+                          builder: (_) =>
+                              _buildAvailableVehicles(isDark, isMobile),
+                        ),
+                        Builder(
+                          builder: (_) =>
+                              _buildActiveDispatches(isDark, isMobile),
+                        ),
                       ],
                     ),
                   ),
@@ -540,6 +536,50 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     }
 
     return false;
+  }
+
+  int _visibleWorkflowLimit(String title) {
+    return _workflowVisibleLimits[title] ?? _initialWorkflowVisibleLimit;
+  }
+
+  bool get _largeDispatchDataset {
+    return tripsNotifier.value.length + vehiclesNotifier.value.length > 60;
+  }
+
+  Duration get _dispatchChromeAnimationDuration {
+    return _largeDispatchDataset
+        ? const Duration(milliseconds: 90)
+        : const Duration(milliseconds: 220);
+  }
+
+  void _showMoreWorkflowTrips(String title) {
+    setState(() {
+      _workflowVisibleLimits[title] =
+          _visibleWorkflowLimit(title) + _workflowPageSize;
+    });
+  }
+
+  Widget _buildListDisclosureButton({
+    required bool isDark,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: onPressed,
+        icon: const Icon(Icons.expand_more_rounded, size: 18),
+        label: Text(label),
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          foregroundColor: AppTheme.colorFF00A8E8,
+          textStyle: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildStatsCards(
@@ -721,6 +761,11 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   }
 
   Widget _buildAvailableVehicles(bool isDark, bool isMobile) {
+    final visibleVehicles = _availableVehicles
+        .take(_availableVehiclesVisibleLimit)
+        .toList();
+    final hiddenCount = _availableVehicles.length - visibleVehicles.length;
+
     return Container(
       color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
       child: _availableVehicles.isEmpty
@@ -770,7 +815,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                     ),
                   ),
                   const SizedBox(height: 20),
-                  ..._availableVehicles.map((vehicle) {
+                  ...visibleVehicles.map((vehicle) {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 16),
                       child: _buildAvailableVehicleCard(
@@ -780,6 +825,14 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                       ),
                     );
                   }),
+                  if (hiddenCount > 0)
+                    _buildListDisclosureButton(
+                      isDark: isDark,
+                      label: 'Show $hiddenCount more vehicles',
+                      onPressed: () {
+                        setState(() => _availableVehiclesVisibleLimit += 24);
+                      },
+                    ),
                 ],
               ),
             ),
@@ -892,6 +945,9 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   ) {
     final collapsed = _collapsedWorkflowGroups.contains(title);
     final color = _workflowGroupColor(title);
+    final visibleLimit = _visibleWorkflowLimit(title);
+    final visibleTrips = trips.take(visibleLimit).toList();
+    final hiddenCount = trips.length - visibleTrips.length;
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
@@ -974,12 +1030,22 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               child: Column(
-                children: trips.map((trip) {
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: _buildPendingTripCard(trip, isDark, isMobile),
-                  );
-                }).toList(),
+                children: [
+                  ...visibleTrips.map((trip) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: _buildPendingTripCard(trip, isDark, isMobile),
+                    );
+                  }),
+                  if (hiddenCount > 0) ...[
+                    const SizedBox(height: 10),
+                    _buildListDisclosureButton(
+                      isDark: isDark,
+                      label: 'Show $hiddenCount more in $title',
+                      onPressed: () => _showMoreWorkflowTrips(title),
+                    ),
+                  ],
+                ],
               ),
             ),
           if (!collapsed && trips.isEmpty)
@@ -2585,6 +2651,11 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   }
 
   Widget _buildActiveDispatchesTable(bool isDark, bool isMobile) {
+    final visibleDispatches = _activeDispatches
+        .take(_activeDispatchVisibleLimit)
+        .toList();
+    final hiddenCount = _activeDispatches.length - visibleDispatches.length;
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -2596,122 +2667,143 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
               : AppTheme.black.withValues(alpha: 0.08),
         ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: MediaQuery.of(context).size.width - (isMobile ? 32 : 48),
-          ),
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(
-              isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFD,
-            ),
-            columnSpacing: isMobile ? 16 : 32,
-            horizontalMargin: isMobile ? 16 : 24,
-            dataRowMinHeight: 60,
-            dataRowMaxHeight: 70,
-            columns: [
-              _buildDataColumn('TRIP', isDark, isMobile),
-              _buildDataColumn('CLIENT', isDark, isMobile),
-              _buildDataColumn('ROUTE', isDark, isMobile),
-              _buildDataColumn('VEHICLE', isDark, isMobile),
-              _buildDataColumn('LOCATION', isDark, isMobile),
-              _buildDataColumn('DRIVER', isDark, isMobile),
-              _buildDataColumn('AMOUNT', isDark, isMobile),
-            ],
-            rows: _activeDispatches.map((trip) {
-              final vehicle = _vehicleForTrip(trip);
-              final location =
-                  vehicle?['currentLocationLabel']?.toString().trim() ?? '';
-              return DataRow(
-                cells: [
-                  DataCell(
-                    Text(
-                      trip['tripId'],
-                      style: TextStyle(
-                        fontSize: isMobile ? 12 : 13,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.colorFF4B7BE5,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    SizedBox(
-                      width: isMobile ? 120 : 150,
-                      child: Text(
-                        trip['customer'],
-                        style: TextStyle(
-                          fontSize: isMobile ? 12 : 13,
-                          color: isDark
-                              ? AppTheme.white
-                              : AppTheme.colorFF2C3E50,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    SizedBox(
-                      width: isMobile ? 200 : 280,
-                      child: Text(
-                        '${trip['origin']} -> ${trip['destination']}',
-                        style: TextStyle(
-                          fontSize: isMobile ? 11 : 12,
-                          color: isDark ? AppTheme.gray400 : AppTheme.gray700,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      trip['vehicle'],
-                      style: TextStyle(
-                        fontSize: isMobile ? 12 : 13,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    SizedBox(
-                      width: isMobile ? 150 : 220,
-                      child: Text(
-                        location.isEmpty ? 'Fetching location...' : location,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: isMobile ? 12 : 13,
-                          color: isDark
-                              ? AppTheme.white70
-                              : AppTheme.colorFF5A6070,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      trip['driver'],
-                      style: TextStyle(
-                        fontSize: isMobile ? 12 : 13,
-                        color: isDark ? AppTheme.gray300 : AppTheme.gray800,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      trip['amount'],
-                      style: TextStyle(
-                        fontSize: isMobile ? 12 : 13,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.colorFF27AE60,
-                      ),
-                    ),
-                  ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth:
+                    MediaQuery.of(context).size.width - (isMobile ? 32 : 48),
+              ),
+              child: DataTable(
+                headingRowColor: WidgetStateProperty.all(
+                  isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFD,
+                ),
+                columnSpacing: isMobile ? 16 : 32,
+                horizontalMargin: isMobile ? 16 : 24,
+                dataRowMinHeight: 60,
+                dataRowMaxHeight: 70,
+                columns: [
+                  _buildDataColumn('TRIP', isDark, isMobile),
+                  _buildDataColumn('CLIENT', isDark, isMobile),
+                  _buildDataColumn('ROUTE', isDark, isMobile),
+                  _buildDataColumn('VEHICLE', isDark, isMobile),
+                  _buildDataColumn('LOCATION', isDark, isMobile),
+                  _buildDataColumn('DRIVER', isDark, isMobile),
+                  _buildDataColumn('AMOUNT', isDark, isMobile),
                 ],
-              );
-            }).toList(),
+                rows: visibleDispatches.map((trip) {
+                  final vehicle = _vehicleForTrip(trip);
+                  final location =
+                      vehicle?['currentLocationLabel']?.toString().trim() ?? '';
+                  return DataRow(
+                    cells: [
+                      DataCell(
+                        Text(
+                          trip['tripId'],
+                          style: TextStyle(
+                            fontSize: isMobile ? 12 : 13,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.colorFF4B7BE5,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        SizedBox(
+                          width: isMobile ? 120 : 150,
+                          child: Text(
+                            trip['customer'],
+                            style: TextStyle(
+                              fontSize: isMobile ? 12 : 13,
+                              color: isDark
+                                  ? AppTheme.white
+                                  : AppTheme.colorFF2C3E50,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        SizedBox(
+                          width: isMobile ? 200 : 280,
+                          child: Text(
+                            '${trip['origin']} -> ${trip['destination']}',
+                            style: TextStyle(
+                              fontSize: isMobile ? 11 : 12,
+                              color: isDark
+                                  ? AppTheme.gray400
+                                  : AppTheme.gray700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          trip['vehicle'],
+                          style: TextStyle(
+                            fontSize: isMobile ? 12 : 13,
+                            fontWeight: FontWeight.w600,
+                            color: isDark
+                                ? AppTheme.white
+                                : AppTheme.colorFF2C3E50,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        SizedBox(
+                          width: isMobile ? 150 : 220,
+                          child: Text(
+                            location.isEmpty ? 'Fetching location...' : location,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: isMobile ? 12 : 13,
+                              color: isDark
+                                  ? AppTheme.white70
+                                  : AppTheme.colorFF5A6070,
+                            ),
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          trip['driver'],
+                          style: TextStyle(
+                            fontSize: isMobile ? 12 : 13,
+                            color: isDark ? AppTheme.gray300 : AppTheme.gray800,
+                          ),
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          trip['amount'],
+                          style: TextStyle(
+                            fontSize: isMobile ? 12 : 13,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.colorFF27AE60,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
           ),
-        ),
+          if (hiddenCount > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: _buildListDisclosureButton(
+                isDark: isDark,
+                label: 'Show $hiddenCount more active dispatches',
+                onPressed: () {
+                  setState(() => _activeDispatchVisibleLimit += 40);
+                },
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -3251,13 +3343,6 @@ class _DispatchModalState extends State<_DispatchModal> {
               ],
             ),
           ),
-        )
-        .animate()
-        .fadeIn(duration: 200.ms)
-        .scale(
-          begin: const Offset(0.95, 0.95),
-          end: const Offset(1, 1),
-          duration: 200.ms,
         );
   }
 }

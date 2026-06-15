@@ -37,4 +37,16 @@ void main() {
       contains('pending route trips after the fleet snapshot refreshes'),
     );
   });
+
+  test('dispatch queue keeps real-data navigation light', () {
+    expect(source, contains('_dataRebuildDebounce'));
+    expect(source, contains('Timer(const Duration(milliseconds: 120)'));
+    expect(source, contains('_initialWorkflowVisibleLimit = 8'));
+    expect(source, contains('_workflowVisibleLimits'));
+    expect(source, contains('_availableVehiclesVisibleLimit = 24'));
+    expect(source, contains('_activeDispatchVisibleLimit = 40'));
+    expect(source, contains('_dispatchChromeAnimationDuration'));
+    expect(source, contains('Builder('));
+    expect(source, isNot(contains('.animate()')));
+  });
 }

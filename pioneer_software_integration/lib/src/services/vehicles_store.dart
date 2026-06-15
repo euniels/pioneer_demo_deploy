@@ -70,7 +70,7 @@ Future<List<Map<String, dynamic>>> refreshVehiclesFromBackend() async {
     return !backendPlateKeys.contains(plateKey) && !hasGeotabId;
   });
 
-  final merged = [...synced, ...localOnlyVehicles];
+  final merged = _withDemoLiveVehicles([...synced, ...localOnlyVehicles]);
   vehiclesNotifier.value = merged;
   _persistVehiclesMirror();
   return merged;
@@ -225,24 +225,17 @@ List<Map<String, dynamic>> applyFleetLivePayload(
     return vehiclesNotifier.value;
   }
 
-  if (vehiclesNotifier.value.isEmpty) {
-    vehiclesNotifier.value = snapshots
-        .map((snapshot) => _mergeBackendVehicle(snapshot, null))
-        .toList();
-    return vehiclesNotifier.value;
-  }
-
-  final snapshotById = {
-    for (final snapshot in snapshots)
-      (snapshot['geotabId'] ?? '').toString(): snapshot,
+  final currentVehicles = List<Map<String, dynamic>>.from(
+    vehiclesNotifier.value,
+  );
+  final currentByKey = {
+    for (final vehicle in currentVehicles) _liveVehicleKey(vehicle): vehicle,
   };
-
-  vehiclesNotifier.value = vehiclesNotifier.value.map((vehicle) {
-    final geotabId = (vehicle['geotabId'] ?? '').toString();
-    final snapshot = snapshotById[geotabId];
-    if (snapshot == null) {
-      return vehicle;
-    }
+  final syncedKeys = <String>{};
+  final synced = snapshots.map((snapshot) {
+    final snapshotKey = _liveVehicleKey(snapshot);
+    syncedKeys.add(snapshotKey);
+    final vehicle = currentByKey[snapshotKey] ?? <String, dynamic>{};
 
     final incomingUpdatedAt = _parseTimestamp(
       snapshot['lastGeotabAt'] ?? snapshot['lastUpdated'],
@@ -268,6 +261,7 @@ List<Map<String, dynamic>> applyFleetLivePayload(
 
     return {
       ...vehicle,
+      ...snapshot,
       'latitude': _toDouble(snapshot['latitude']) ?? vehicle['latitude'] ?? 0.0,
       'longitude':
           _toDouble(snapshot['longitude']) ?? vehicle['longitude'] ?? 0.0,
@@ -296,8 +290,158 @@ List<Map<String, dynamic>> applyFleetLivePayload(
     };
   }).toList();
 
+  final retained = currentVehicles.where((vehicle) {
+    return !syncedKeys.contains(_liveVehicleKey(vehicle));
+  });
+
+  vehiclesNotifier.value = _withDemoLiveVehicles([...synced, ...retained]);
+
   return vehiclesNotifier.value;
 }
+
+List<Map<String, dynamic>> _withDemoLiveVehicles(
+  List<Map<String, dynamic>> vehicles,
+) {
+  final existingKeys = {
+    for (final vehicle in vehicles) _liveVehicleKey(vehicle),
+    for (final vehicle in vehicles) _plateKey(vehicle['plate']?.toString() ?? ''),
+  };
+  final merged = [...vehicles];
+
+  for (final demoVehicle in _demoLiveVehicles) {
+    final key = _liveVehicleKey(demoVehicle);
+    final plate = _plateKey(demoVehicle['plate']?.toString() ?? '');
+    if (existingKeys.contains(key) || existingKeys.contains(plate)) {
+      continue;
+    }
+    merged.add(_mergeBackendVehicle(demoVehicle, null));
+    existingKeys.add(key);
+    existingKeys.add(plate);
+  }
+
+  return merged;
+}
+
+String _liveVehicleKey(Map<String, dynamic> vehicle) {
+  final geotabId = vehicle['geotabId']?.toString().trim();
+  if (geotabId != null && geotabId.isNotEmpty) {
+    return 'geotab:${geotabId.toLowerCase()}';
+  }
+
+  final geotabDeviceId = vehicle['geotabDeviceId']?.toString().trim();
+  if (geotabDeviceId != null && geotabDeviceId.isNotEmpty) {
+    return 'geotab:${geotabDeviceId.toLowerCase()}';
+  }
+
+  final id = vehicle['id']?.toString().trim();
+  if (id != null && id.isNotEmpty) {
+    return 'id:${id.toLowerCase()}';
+  }
+
+  return 'plate:${_plateKey(vehicle['plate']?.toString() ?? '')}';
+}
+
+final List<Map<String, dynamic>> _demoLiveVehicles = [
+  {
+    'id': 'demo-device-001',
+    'geotabId': 'demo-device-001',
+    'geotabDeviceId': 'demo-device-001',
+    'source': 'demo_overlay',
+    'managedLocally': true,
+    'plate': 'DEMO-TRK-01',
+    'plateNumber': 'DEMO-TRK-01',
+    'vehicleType': 'Refrigerated Truck',
+    'truckType': 'Refrigerated Truck',
+    'makeModel': 'Isuzu Forward Ref Van',
+    'year': 2023,
+    'fuelType': 'Diesel',
+    'cargoCapacityKg': 4200,
+    'status': 'on trip',
+    'driver': 'Demo Driver Juan Dela Cruz',
+    'latitude': 14.6112,
+    'longitude': 121.0202,
+    'speed': 38,
+    'bearing': 30,
+    'isDriving': true,
+    'ignitionOn': true,
+    'isCommunicating': true,
+    'healthStatus': 'healthy',
+    'healthScore': 96,
+    'syncState': 'offline_cached',
+    'syncStatus': 'not_staged',
+    'syncLabel': 'GeoTab: Demo only',
+    'currentZone': 'Demo Depot - Mandaluyong',
+    'destinationZone': 'Demo Client - Cold Chain',
+    'arrivalState': 'in transit',
+    'currentLocationLabel': 'Demo route near Ortigas Center',
+  },
+  {
+    'id': 'demo-device-002',
+    'geotabId': 'demo-device-002',
+    'geotabDeviceId': 'demo-device-002',
+    'source': 'demo_overlay',
+    'managedLocally': true,
+    'plate': 'DEMO-TRK-02',
+    'plateNumber': 'DEMO-TRK-02',
+    'vehicleType': 'Closed Van',
+    'truckType': 'Closed Van',
+    'makeModel': 'Mitsubishi Fuso Canter',
+    'year': 2022,
+    'fuelType': 'Diesel',
+    'cargoCapacityKg': 3500,
+    'status': 'available',
+    'driver': 'Demo Driver Ana Lopez',
+    'latitude': 14.6760,
+    'longitude': 121.0437,
+    'speed': 0,
+    'bearing': 0,
+    'isDriving': false,
+    'ignitionOn': true,
+    'isCommunicating': true,
+    'healthStatus': 'healthy',
+    'healthScore': 91,
+    'syncState': 'offline_cached',
+    'syncStatus': 'not_staged',
+    'syncLabel': 'GeoTab: Demo only',
+    'currentZone': 'Demo North Hub',
+    'destinationZone': 'Demo Dispatch Pool',
+    'arrivalState': 'available',
+    'currentLocationLabel': 'Demo staging area near Quezon City',
+  },
+  {
+    'id': 'demo-device-003',
+    'geotabId': 'demo-device-003',
+    'geotabDeviceId': 'demo-device-003',
+    'source': 'demo_overlay',
+    'managedLocally': true,
+    'plate': 'DEMO-TRK-03',
+    'plateNumber': 'DEMO-TRK-03',
+    'vehicleType': 'Wing Van',
+    'truckType': 'Wing Van',
+    'makeModel': 'Hino 500 Wing Van',
+    'year': 2021,
+    'fuelType': 'Diesel',
+    'cargoCapacityKg': 6500,
+    'status': 'maintenance',
+    'driver': 'Unassigned',
+    'latitude': 14.5794,
+    'longitude': 121.0359,
+    'speed': 0,
+    'bearing': 0,
+    'isDriving': false,
+    'ignitionOn': false,
+    'isCommunicating': false,
+    'healthStatus': 'warning',
+    'healthScore': 70,
+    'syncState': 'offline_cached',
+    'syncStatus': 'not_staged',
+    'syncLabel': 'GeoTab: Demo only',
+    'currentZone': 'Demo Maintenance Bay',
+    'destinationZone': 'Demo Workshop',
+    'arrivalState': 'maintenance',
+    'currentLocationLabel': 'Demo maintenance bay near Pasig',
+  },
+];
 
 Map<String, dynamic> _mergeBackendVehicle(
   Map<String, dynamic> backendVehicle,
