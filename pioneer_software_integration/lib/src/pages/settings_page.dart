@@ -2,7 +2,6 @@
 // This is a short-term suppression; migrate MaterialState usages later.
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/auth.dart';
@@ -828,68 +827,427 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     return DashboardLayout(
       currentRoute: '/settings',
       title: 'Settings',
-      subtitle: 'Profile, preferences, alerts, and PioneerPath controls',
+      subtitle: 'Account preferences, runtime health, and controlled system setup',
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(28, 24, 28, 32),
         child: Form(
           key: _profileFormKey,
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildAccountCard(isDark, user, role, roleColor)
-                  .animate()
-                  .fadeIn(duration: 400.ms)
-                  .slideY(begin: 0.08, end: 0, duration: 400.ms),
-              const SizedBox(height: 16),
-              _buildNotificationCard(isDark, roleColor)
-                  .animate()
-                  .fadeIn(duration: 500.ms)
-                  .slideY(begin: 0.08, end: 0, duration: 450.ms),
-              const SizedBox(height: 16),
-              _buildDisplayCard(isDark)
-                  .animate()
-                  .fadeIn(duration: 600.ms)
-                  .slideY(begin: 0.08, end: 0, duration: 500.ms),
-              const SizedBox(height: 16),
-              _buildAppearanceCard(isDark)
-                  .animate()
-                  .fadeIn(duration: 700.ms)
-                  .slideY(begin: 0.08, end: 0, duration: 550.ms),
-              const SizedBox(height: 16),
-              if (_canEditSystemSettings || _canReviewWriteBack) ...[
-                _buildBackendReadinessCard(isDark, roleColor)
-                    .animate()
-                    .fadeIn(duration: 760.ms)
-                    .slideY(begin: 0.08, end: 0, duration: 580.ms),
-                const SizedBox(height: 16),
-              ],
-              if (_canEditSystemSettings || _canReviewWriteBack)
-                _buildAdminCard(isDark, roleColor)
-                    .animate()
-                    .fadeIn(duration: 800.ms)
-                    .slideY(begin: 0.08, end: 0, duration: 600.ms),
-              const SizedBox(height: 16),
-              _buildAboutCard(isDark)
-                  .animate()
-                  .fadeIn(duration: 900.ms)
-                  .slideY(begin: 0.08, end: 0, duration: 650.ms),
-              const SizedBox(height: 20),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.icon(
-                  onPressed: _isSaving ? null : _saveSettings,
-                  icon: _isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save_rounded),
-                  label: Text(_isSaving ? 'Saving...' : 'Save Settings'),
+              _buildSettingsOverview(isDark, role, roleColor),
+              const SizedBox(height: 18),
+              _responsiveSettingsLayout(
+                left: Column(
+                  children: [
+                    _buildAccountCard(isDark, user, role, roleColor),
+                    const SizedBox(height: 16),
+                    _buildNotificationCard(isDark, roleColor),
+                  ],
+                ),
+                right: Column(
+                  children: [
+                    _buildDisplayCard(isDark),
+                    const SizedBox(height: 16),
+                    _buildAppearanceCard(isDark),
+                    const SizedBox(height: 16),
+                    _buildAboutCard(isDark),
+                  ],
                 ),
               ),
+              const SizedBox(height: 18),
+              if (_canEditSystemSettings || _canReviewWriteBack) ...[
+                _buildBackendReadinessCard(isDark, roleColor),
+                const SizedBox(height: 16),
+              ],
+              if (_canEditSystemSettings || _canReviewWriteBack) ...[
+                _buildAdminCard(isDark, roleColor),
+                const SizedBox(height: 18),
+              ],
+              _buildSaveBar(isDark, roleColor),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _responsiveSettingsLayout({
+    required Widget left,
+    required Widget right,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 980) {
+          return Column(
+            children: [
+              left,
+              const SizedBox(height: 16),
+              right,
+            ],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 6, child: left),
+            const SizedBox(width: 16),
+            Expanded(flex: 5, child: right),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSettingsOverview(
+    bool isDark,
+    UserRole? role,
+    Color accent,
+  ) {
+    final status = _backendHealth?['status']?.toString() ?? 'unknown';
+    final healthy = _backendHealth?['healthy'] == true || status == 'ok';
+    final geotabStatus = _geotabDiagnosis?['status']?.toString() ?? 'unknown';
+    final geotabReason =
+        _geotabDiagnosis?['primaryReason']?.toString() ?? 'not checked';
+    final pendingWriteBack = _writeBackJobs
+        .where((job) => job['status']?.toString() == 'pending_approval')
+        .length;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isDark
+              ? [
+                  AppTheme.colorFF111827,
+                  AppTheme.colorFF1A3A6B.withValues(alpha: 0.62),
+                ]
+              : [
+                  AppTheme.colorFFF8FAFC,
+                  const Color(0xFFEFF6FF),
+                ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: AppTheme.colorFF4B7BE5.withValues(alpha: isDark ? 0.28 : 0.18),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 860;
+          final summary = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: accent.withValues(alpha: 0.3)),
+                    ),
+                    child: Icon(Icons.tune_rounded, color: accent),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Operations Settings',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: isDark
+                                ? AppTheme.white
+                                : AppTheme.colorFF111827,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Manage only what affects account access, alerts, billing rules, fleet data, and GeoTab operations.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.45,
+                            color: isDark
+                                ? AppTheme.gray300
+                                : AppTheme.colorFF475569,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _statusPill(
+                    isDark,
+                    icon: _roleIcon(role),
+                    label: role != null
+                        ? RolePermissions.getRoleDisplayName(role)
+                        : 'Unknown role',
+                    color: accent,
+                  ),
+                  _statusPill(
+                    isDark,
+                    icon: healthy
+                        ? Icons.verified_rounded
+                        : Icons.warning_amber_rounded,
+                    label: healthy ? 'Backend ready' : 'Backend needs review',
+                    color: healthy
+                        ? AppTheme.colorFF27AE60
+                        : AppTheme.warningOrange,
+                  ),
+                  _statusPill(
+                    isDark,
+                    icon: geotabStatus == 'ok'
+                        ? Icons.cloud_done_rounded
+                        : Icons.cloud_sync_rounded,
+                    label: 'GeoTab: $geotabReason',
+                    color: _backendStatusColor(geotabStatus, geotabStatus == 'ok'),
+                  ),
+                  _statusPill(
+                    isDark,
+                    icon: _googleMapsServerKeyConfigured
+                        ? Icons.map_rounded
+                        : Icons.key_off_rounded,
+                    label: _googleMapsServerKeyConfigured
+                        ? 'Maps key configured'
+                        : 'Maps key missing',
+                    color: _googleMapsServerKeyConfigured
+                        ? AppTheme.colorFF27AE60
+                        : AppTheme.warningOrange,
+                  ),
+                ],
+              ),
+            ],
+          );
+
+          final actions = Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _overviewMetric(
+                isDark,
+                label: 'Write-back approvals',
+                value: '$pendingWriteBack',
+                detail: pendingWriteBack == 1 ? 'pending job' : 'pending jobs',
+                color: pendingWriteBack > 0
+                    ? AppTheme.warningOrange
+                    : AppTheme.colorFF27AE60,
+                icon: Icons.cloud_sync_rounded,
+              ),
+              const SizedBox(height: 10),
+              _overviewMetric(
+                isDark,
+                label: 'Readiness refreshed',
+                value: _backendHealthLoadedAt == null
+                    ? 'Never'
+                    : _shortDateTime(_backendHealthLoadedAt!),
+                detail: 'runtime health snapshot',
+                color: AppTheme.colorFF3498DB,
+                icon: Icons.health_and_safety_rounded,
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: compact ? WrapAlignment.start : WrapAlignment.end,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed:
+                        _backendHealthLoading ? null : _refreshBackendHealth,
+                    icon: const Icon(Icons.refresh_rounded, size: 16),
+                    label: const Text('Check Health'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _isSaving ? null : _saveSettings,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_rounded, size: 16),
+                    label: Text(_isSaving ? 'Saving...' : 'Save'),
+                  ),
+                ],
+              ),
+            ],
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                summary,
+                const SizedBox(height: 16),
+                actions,
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 6, child: summary),
+              const SizedBox(width: 18),
+              Expanded(flex: 4, child: actions),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _statusPill(
+    bool isDark, {
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.09),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.32)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: isDark ? AppTheme.gray200 : AppTheme.colorFF1F2937,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _overviewMetric(
+    bool isDark, {
+    required String label,
+    required String value,
+    required String detail,
+    required Color color,
+    required IconData icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDark
+            ? AppTheme.black.withValues(alpha: 0.18)
+            : AppTheme.white.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? AppTheme.gray400 : AppTheme.colorFF64748B,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: value.length > 10 ? 14 : 20,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                  ),
+                ),
+                Text(
+                  detail,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isDark ? AppTheme.gray500 : AppTheme.colorFF64748B,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSaveBar(bool isDark, Color accent) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF111827 : AppTheme.colorFFF8FAFC,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: accent.withValues(alpha: isDark ? 0.26 : 0.16),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline_rounded, color: accent, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Changes affect your account immediately. System configuration changes are audited.',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: isDark ? AppTheme.gray300 : AppTheme.colorFF334155,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: _isSaving ? null : _saveSettings,
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save_rounded),
+            label: Text(_isSaving ? 'Saving...' : 'Save Settings'),
+          ),
+        ],
       ),
     );
   }
@@ -904,6 +1262,8 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       isDark,
       title: 'Profile',
       icon: Icons.person_rounded,
+      subtitle: 'Your account details and current access level.',
+      accent: roleColor,
       child: Column(
         children: [
           Row(
@@ -1068,6 +1428,8 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       isDark,
       title: 'Notifications',
       icon: Icons.notifications_active_rounded,
+      subtitle: 'Choose the operational alerts you want to see.',
+      accent: accent,
       child: Column(
         children: [
           _toggleRow(
@@ -1113,6 +1475,8 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       isDark,
       title: 'Display Preferences',
       icon: Icons.tune_rounded,
+      subtitle: 'Units, dates, and timezone shown across the app.',
+      accent: AppTheme.colorFF3498DB,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 760;
@@ -1174,6 +1538,8 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       isDark,
       title: 'Appearance',
       icon: Icons.palette_rounded,
+      subtitle: 'Theme preference for the current browser session.',
+      accent: AppTheme.colorFF8B5CF6,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1233,6 +1599,8 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       isDark,
       title: 'Backend readiness',
       icon: Icons.verified_user_rounded,
+      subtitle: 'Production health signals for API, cache, queue, and scheduler.',
+      accent: statusColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1435,10 +1803,23 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
           ? 'System Configuration'
           : 'GeoTab Write-Back Approval',
       icon: Icons.admin_panel_settings_rounded,
+      subtitle: _canEditSystemSettings
+          ? 'Advanced operational rules. Edit carefully; changes are audited.'
+          : 'Review staged GeoTab changes without exposing global configuration.',
+      accent: accent,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_canEditSystemSettings) ...[
+            _settingsInfoBanner(
+              isDark,
+              icon: Icons.rule_folder_rounded,
+              title: 'Advanced settings are grouped by operational impact',
+              body:
+                  'Billing affects invoice computation, GeoTab controls fleet data freshness, alert thresholds drive notifications, and retention settings control how long operational history is kept.',
+              color: accent,
+            ),
+            const SizedBox(height: 16),
             _settingsSectionTitle(isDark, accent, 'Billing settings'),
             _responsiveFields([
               _textField(
@@ -2535,6 +2916,8 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       isDark,
       title: 'About',
       icon: Icons.info_rounded,
+      subtitle: 'Version and architecture reference.',
+      accent: AppTheme.colorFF14B8A6,
       child: Column(
         children: [
           _aboutRow(isDark, Icons.apps_rounded, 'Application', 'PioneerPath'),
@@ -2564,43 +2947,126 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     required String title,
     required IconData icon,
     required Widget child,
+    String? subtitle,
+    Color? accent,
   }) {
+    final cardAccent = accent ?? AppTheme.colorFF4B7BE5;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(18),
+        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
+              ? cardAccent.withValues(alpha: 0.18)
               : AppTheme.black.withValues(alpha: 0.06),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.black.withValues(alpha: isDark ? 0.18 : 0.04),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                icon,
-                size: 16,
-                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: cardAccent.withValues(alpha: isDark ? 0.18 : 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 18, color: cardAccent),
               ),
-              const SizedBox(width: 6),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: isDark ? AppTheme.gray300 : AppTheme.gray700,
-                  letterSpacing: 0.4,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                      ),
+                    ),
+                    if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.35,
+                          color: isDark
+                              ? AppTheme.gray400
+                              : AppTheme.colorFF64748B,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
           child,
+        ],
+      ),
+    );
+  }
+
+  Widget _settingsInfoBanner(
+    bool isDark, {
+    required IconData icon,
+    required String title,
+    required String body,
+    required Color color,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.14 : 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  body,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: isDark ? AppTheme.gray300 : AppTheme.colorFF475569,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
