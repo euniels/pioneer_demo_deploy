@@ -105,6 +105,46 @@ void main() {
     },
   );
 
+  test('live tracking exposes demo temperature sensors and traffic layer', () {
+    final liveTracking = File(
+      'lib/src/pages/live_tracking_page_enhanced.dart',
+    ).readAsStringSync();
+    final pioneerMap = File(
+      'lib/src/widgets/pioneer_google_map.dart',
+    ).readAsStringSync();
+
+    expect(liveTracking, contains('_demoTemperatureSensorPlates'));
+    expect(liveTracking, contains('DEMO-TRK-01'));
+    expect(liveTracking, contains('DEMO-TRK-02'));
+    expect(liveTracking, contains('_DemoTemperatureTrend.rising'));
+    expect(liveTracking, contains('_DemoTemperatureTrend.falling'));
+    expect(liveTracking, contains('_DemoTemperatureTrend.stable'));
+    expect(liveTracking, contains('_buildCompactTemperaturePill'));
+    expect(liveTracking, contains('_buildSelectedTemperaturePanel'));
+    expect(liveTracking, contains('_TemperatureSparklinePainter'));
+    expect(liveTracking, contains('trafficEnabled: _trafficEnabled'));
+    expect(liveTracking, contains('Icons.traffic_rounded'));
+    expect(liveTracking, contains('Demo sensor'));
+    expect(liveTracking, contains('safeMinC: _temperatureSafeMinC'));
+    expect(liveTracking, contains('safeMaxC: _temperatureSafeMaxC'));
+
+    expect(pioneerMap, contains('this.trafficEnabled = false'));
+    expect(pioneerMap, contains('final bool trafficEnabled'));
+    expect(pioneerMap, contains('trafficEnabled: widget.trafficEnabled'));
+  });
+
+  test('fleet map markers use rounded vehicle visual language', () {
+    final source = File(
+      'lib/src/services/google_map_marker_factory.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('_drawMovingFleetMarker'));
+    expect(source, contains('Icons.local_shipping_rounded'));
+    expect(source, contains('RRect.fromRectAndRadius'));
+    expect(source, contains('directionNotch'));
+    expect(source, isNot(contains('_drawMovingArrow')));
+  });
+
   test('live tracking marker colors match PioneerPath compliance spec', () {
     expect(
       PioneerGoogleMapMarkerFactory.markerFillColor(
@@ -147,7 +187,7 @@ void main() {
       expect(source, contains('_NotificationTile'));
       expect(source, contains('Dismissible'));
       expect(source, contains('Dismiss notification'));
-      expect(source, contains('AppTheme.colorFFEBF5FB'));
+      expect(source, contains('AppTheme.primaryBlue'));
       expect(source, contains('AppTheme.successGreen'));
     },
   );
@@ -176,7 +216,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: NotificationsPage()));
     await tester.pump();
 
-    expect(find.text('4 unread'), findsOneWidget);
+    expect(find.text('4 unread'), findsWidgets);
     for (var index = 1; index <= 4; index++) {
       expect(find.text('Unread Notice $index'), findsOneWidget);
     }

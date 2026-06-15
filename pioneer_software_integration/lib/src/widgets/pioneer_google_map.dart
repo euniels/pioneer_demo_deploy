@@ -20,6 +20,7 @@ class PioneerGoogleMap extends StatefulWidget {
     this.myLocationEnabled = false,
     this.zoomControlsEnabled = true,
     this.mapToolbarEnabled = false,
+    this.trafficEnabled = false,
   });
 
   final LatLng initialCenter;
@@ -35,6 +36,7 @@ class PioneerGoogleMap extends StatefulWidget {
   final bool myLocationEnabled;
   final bool zoomControlsEnabled;
   final bool mapToolbarEnabled;
+  final bool trafficEnabled;
 
   @override
   State<PioneerGoogleMap> createState() => _PioneerGoogleMapState();
@@ -90,6 +92,7 @@ class _PioneerGoogleMapState extends State<PioneerGoogleMap> {
           myLocationEnabled: widget.myLocationEnabled,
           zoomControlsEnabled: widget.zoomControlsEnabled,
           mapToolbarEnabled: widget.mapToolbarEnabled,
+          trafficEnabled: widget.trafficEnabled,
           rotateGesturesEnabled: false,
           compassEnabled: true,
         );

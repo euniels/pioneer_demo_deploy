@@ -114,7 +114,7 @@ class PioneerGoogleMapMarkerFactory {
       }
       switch (style) {
         case PioneerMapMarkerStyle.moving:
-          _drawMovingArrow(canvas, center);
+          _drawMovingFleetMarker(canvas, center);
           break;
         case PioneerMapMarkerStyle.idle:
           _drawDirectionalMarker(
@@ -218,7 +218,7 @@ class PioneerGoogleMapMarkerFactory {
     );
   }
 
-  static void _drawMovingArrow(Canvas canvas, Offset center) {
+  static void _drawMovingFleetMarker(Canvas canvas, Offset center) {
     _drawDirectionalMarker(
       canvas,
       center,
@@ -226,7 +226,6 @@ class PioneerGoogleMapMarkerFactory {
       strokeColor: AppTheme.white,
       accentColor: AppTheme.accentCyan,
       scale: 1,
-      badgeIcon: Icons.navigation_rounded,
     );
   }
 
@@ -316,15 +315,34 @@ class PioneerGoogleMapMarkerFactory {
       ..style = PaintingStyle.fill;
     halo.maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
 
-    final path = Path()
-      ..moveTo(center.dx, center.dy - 56 * scale)
-      ..lineTo(center.dx + 47 * scale, center.dy + 42 * scale)
-      ..lineTo(center.dx + 17 * scale, center.dy + 33 * scale)
-      ..lineTo(center.dx + 10 * scale, center.dy + 54 * scale)
-      ..lineTo(center.dx - 10 * scale, center.dy + 54 * scale)
-      ..lineTo(center.dx - 17 * scale, center.dy + 33 * scale)
-      ..lineTo(center.dx - 47 * scale, center.dy + 42 * scale)
+    final bodyRect = Rect.fromCenter(
+      center: center,
+      width: 78 * scale,
+      height: 74 * scale,
+    );
+    final bodyPath = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(bodyRect, Radius.circular(24 * scale)),
+      );
+    final directionNotch = Path()
+      ..moveTo(center.dx, center.dy - 57 * scale)
+      ..lineTo(center.dx + 13 * scale, center.dy - 36 * scale)
+      ..lineTo(center.dx - 13 * scale, center.dy - 36 * scale)
       ..close();
+    final lowerPin = Path()
+      ..moveTo(center.dx - 10 * scale, center.dy + 35 * scale)
+      ..quadraticBezierTo(
+        center.dx,
+        center.dy + 54 * scale,
+        center.dx + 10 * scale,
+        center.dy + 35 * scale,
+      )
+      ..close();
+    final path = Path.combine(
+      ui.PathOperation.union,
+      Path.combine(ui.PathOperation.union, bodyPath, directionNotch),
+      lowerPin,
+    );
 
     canvas.drawCircle(center, haloRadius, halo);
     canvas.drawPath(path.shift(Offset(0, 5 * scale)), shadow);
@@ -336,17 +354,12 @@ class PioneerGoogleMapMarkerFactory {
     canvas.drawPath(path, fill);
     canvas.drawPath(path, accentStroke);
 
-    final cabPath = Path()
-      ..moveTo(center.dx, center.dy - 23 * scale)
-      ..lineTo(center.dx + 15 * scale, center.dy + 18 * scale)
-      ..lineTo(center.dx, center.dy + 10 * scale)
-      ..lineTo(center.dx - 15 * scale, center.dy + 18 * scale)
-      ..close();
-    canvas.drawPath(
-      cabPath,
-      Paint()
-        ..color = AppTheme.white.withAlpha(dashedStroke ? 170 : 232)
-        ..style = PaintingStyle.fill,
+    _drawIconGlyph(
+      canvas,
+      center.translate(0, 2 * scale),
+      Icons.local_shipping_rounded,
+      size: 36 * scale,
+      color: AppTheme.white.withAlpha(dashedStroke ? 178 : 238),
     );
 
     if (badgeIcon != null) {

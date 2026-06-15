@@ -37,10 +37,16 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   late final AnimationController _pulseController;
   late final Ticker _motionTicker;
   final ValueNotifier<int> _motionFrame = ValueNotifier<int>(0);
+  final ValueNotifier<Map<String, _DemoTemperatureSample>>
+      _demoTemperatureSamples =
+      ValueNotifier<Map<String, _DemoTemperatureSample>>(const {});
   Timer? _updateTimer;
+  Timer? _temperatureTimer;
   Timer? _boundsRefreshDebounce;
   final Map<String, _MarkerMotionState> _markerMotionStates = {};
+  final math.Random _temperatureRandom = math.Random(42);
   bool _isFollowingSelected = false;
+  bool _trafficEnabled = false;
   DateTime? _lastFollowMoveAt;
   double _currentMapZoom = 10.0;
   gmaps.LatLngBounds? _visibleBounds;
@@ -82,6 +88,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   static const Duration _dataStaleThreshold = Duration(minutes: 5);
   static const Duration _followMoveThrottle = Duration(milliseconds: 220);
   static const double _stationarySpeedThresholdKph = 2.0;
+  static const double _temperatureSafeMinC = 2.0;
+  static const double _temperatureSafeMaxC = 8.0;
+  static const Set<String> _demoTemperatureSensorPlates = {
+    'DEMO-TRK-01',
+    'DEMO-TRK-02',
+  };
   static const double _bearingCorrectionThresholdDegrees = 5.0;
   static const Duration _markerRenderDelay = Duration(milliseconds: 900);
   static const double _viewportBufferFraction = 0.20;
@@ -294,6 +306,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     tripsNotifier.addListener(_onRouteOrdersChanged);
     refreshFleetBootstrapSilently();
     refreshFleetSnapshotSilently();
+    _seedDemoTemperatureSamples();
     _loadMarkerIcons();
     _loadZoneOverlays();
     _loadVehicles(fullRefresh: false, refreshTrail: true);
@@ -310,15 +323,20 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         refreshTrail: selectedPlate.isNotEmpty && _pollTick % 3 == 0,
       );
     });
+    _temperatureTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _advanceDemoTemperatureSamples();
+    });
   }
 
   @override
   void dispose() {
     _updateTimer?.cancel();
+    _temperatureTimer?.cancel();
     _boundsRefreshDebounce?.cancel();
     _pulseController.dispose();
     _motionTicker.dispose();
     _motionFrame.dispose();
+    _demoTemperatureSamples.dispose();
     vehiclesNotifier.removeListener(_onVehiclesChanged);
     tripsNotifier.removeListener(_onRouteOrdersChanged);
     super.dispose();
@@ -342,6 +360,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   void _onVehiclesChanged() {
     _syncMarkerAnimations();
+    _ensureDemoTemperatureSamples();
     if (_vehicleMarkers.isNotEmpty) {
       final nextSelectedPlate =
           selectedPlate.isNotEmpty &&
@@ -371,6 +390,116 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     if (mounted) {
       setState(() {});
     }
+  }
+
+  void _seedDemoTemperatureSamples() {
+    final now = DateTime.now();
+    _demoTemperatureSamples.value = {
+      'DEMO-TRK-01': _DemoTemperatureSample.seed(
+        plate: 'DEMO-TRK-01',
+        baseTemperatureC: 4.4,
+        updatedAt: now,
+        safeMinC: _temperatureSafeMinC,
+        safeMaxC: _temperatureSafeMaxC,
+      ),
+      'DEMO-TRK-02': _DemoTemperatureSample.seed(
+        plate: 'DEMO-TRK-02',
+        baseTemperatureC: 7.4,
+        updatedAt: now,
+        safeMinC: _temperatureSafeMinC,
+        safeMaxC: _temperatureSafeMaxC,
+      ),
+    };
+  }
+
+  void _ensureDemoTemperatureSamples() {
+    final current = Map<String, _DemoTemperatureSample>.from(
+      _demoTemperatureSamples.value,
+    );
+    var changed = false;
+    final now = DateTime.now();
+    for (final vehicle in _vehicleMarkers) {
+      final plate = _plateOf(vehicle);
+      if (!_hasDemoTemperatureSensor(vehicle) || current.containsKey(plate)) {
+        continue;
+      }
+      current[plate] = _DemoTemperatureSample.seed(
+        plate: plate,
+        baseTemperatureC: plate == 'DEMO-TRK-02' ? 7.4 : 4.4,
+        updatedAt: now,
+        safeMinC: _temperatureSafeMinC,
+        safeMaxC: _temperatureSafeMaxC,
+      );
+      changed = true;
+    }
+    if (changed) {
+      _demoTemperatureSamples.value = current;
+    }
+  }
+
+  void _advanceDemoTemperatureSamples() {
+    final current = _demoTemperatureSamples.value;
+    if (current.isEmpty) {
+      _seedDemoTemperatureSamples();
+      return;
+    }
+
+    final now = DateTime.now();
+    final next = <String, _DemoTemperatureSample>{};
+    for (final entry in current.entries) {
+      final plate = entry.key;
+      final sample = entry.value;
+      final phase = plate == 'DEMO-TRK-02' ? 1.7 : 0.25;
+      final baseline = plate == 'DEMO-TRK-02' ? 7.4 : 4.4;
+      final previousCarry = (sample.temperatureC - baseline) * 0.62;
+      final wave =
+          math.sin(now.millisecondsSinceEpoch / 6200 + phase) *
+          (plate == 'DEMO-TRK-02' ? 0.34 : 0.24);
+      final jitter = (_temperatureRandom.nextDouble() - 0.5) * 0.14;
+      final temperature = (baseline + previousCarry + wave + jitter).clamp(
+        1.4,
+        9.2,
+      );
+      next[plate] = sample.next(
+        nextTemperatureC: temperature.toDouble(),
+        updatedAt: now,
+        safeMinC: _temperatureSafeMinC,
+        safeMaxC: _temperatureSafeMaxC,
+      );
+    }
+    _demoTemperatureSamples.value = next;
+  }
+
+  bool _hasDemoTemperatureSensor(Map<String, dynamic>? vehicle) {
+    final plate = _plateOf(vehicle);
+    if (plate.isEmpty) {
+      return false;
+    }
+    return _demoTemperatureSensorPlates.contains(plate);
+  }
+
+  Color _temperatureStatusColor(_DemoTemperatureStatus status) {
+    return switch (status) {
+      _DemoTemperatureStatus.normal => AppTheme.accentCyan,
+      _DemoTemperatureStatus.review => AppTheme.warningOrange,
+      _DemoTemperatureStatus.critical => AppTheme.errorRed,
+    };
+  }
+
+  IconData _temperatureTrendIcon(_DemoTemperatureTrend trend) {
+    return switch (trend) {
+      _DemoTemperatureTrend.rising => Icons.trending_up_rounded,
+      _DemoTemperatureTrend.falling => Icons.trending_down_rounded,
+      _DemoTemperatureTrend.stable => Icons.trending_flat_rounded,
+    };
+  }
+
+  String _temperatureTrendLabel(_DemoTemperatureTrend trend) {
+    return switch (trend) {
+      _DemoTemperatureTrend.rising => 'rising',
+      _DemoTemperatureTrend.falling => 'falling',
+      _DemoTemperatureTrend.stable => 'stable',
+    };
   }
 
   List<Map<String, dynamic>> get _routeOrders {
@@ -1287,6 +1416,17 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           onTap: () => _loadVehicles(fullRefresh: true, refreshTrail: true),
           isDark: isDark,
           isMobile: isMobile,
+          tooltip: 'Refresh live data',
+        ),
+        SizedBox(height: isMobile ? 8 : 12),
+        _buildControlButton(
+          icon: Icons.traffic_rounded,
+          onTap: () => setState(() => _trafficEnabled = !_trafficEnabled),
+          isDark: isDark,
+          isMobile: isMobile,
+          active: _trafficEnabled,
+          activeColor: AppTheme.warningOrange,
+          tooltip: _trafficEnabled ? 'Hide traffic layer' : 'Show traffic',
         ),
         SizedBox(height: isMobile ? 8 : 12),
         _buildControlButton(
@@ -1294,6 +1434,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           onTap: () => _zoomBy(1),
           isDark: isDark,
           isMobile: isMobile,
+          tooltip: 'Zoom in',
         ),
         SizedBox(height: isMobile ? 8 : 12),
         _buildControlButton(
@@ -1301,6 +1442,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           onTap: () => _zoomBy(-1),
           isDark: isDark,
           isMobile: isMobile,
+          tooltip: 'Zoom out',
         ),
       ],
     );
@@ -1311,30 +1453,58 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required VoidCallback onTap,
     required bool isDark,
     required bool isMobile,
+    bool active = false,
+    Color? activeColor,
+    String? tooltip,
   }) {
-    return GestureDetector(
+    final accent = activeColor ?? AppTheme.colorFF4B7BE5;
+    final button = GestureDetector(
       onTap: onTap,
       child: Container(
         width: isMobile ? 40 : 48,
         height: isMobile ? 40 : 48,
         decoration: BoxDecoration(
-          color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+          color: active
+              ? Color.alphaBlend(
+                  accent.withValues(alpha: isDark ? 0.24 : 0.12),
+                  isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+                )
+              : isDark
+              ? AppTheme.colorFF1A1D23
+              : AppTheme.white,
           borderRadius: BorderRadius.circular(isMobile ? 10 : 12),
+          border: Border.all(
+            color: active
+                ? accent.withValues(alpha: 0.55)
+                : AppTheme.getBorderColor(context).withValues(alpha: 0.45),
+          ),
           boxShadow: [
             BoxShadow(
-              color: AppTheme.black.withValues(alpha: isDark ? 0.4 : 0.08),
-              blurRadius: 12,
+              color: (active ? accent : AppTheme.black).withValues(
+                alpha: active ? 0.18 : (isDark ? 0.4 : 0.08),
+              ),
+              blurRadius: active ? 16 : 12,
               offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Icon(
           icon,
-          color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+          color: active
+              ? accent
+              : isDark
+              ? AppTheme.white
+              : AppTheme.colorFF2C3E50,
           size: isMobile ? 20 : 24,
         ),
       ),
     );
+
+    if (tooltip == null) {
+      return button;
+    }
+
+    return Tooltip(message: tooltip, child: button);
   }
 
   Widget _buildVehicleListSidebar() {
@@ -1519,6 +1689,10 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                               const SizedBox(height: 12),
                               _buildFreshnessPill(freshness),
                               const SizedBox(height: 8),
+                              if (_hasDemoTemperatureSensor(vehicle)) ...[
+                                _buildCompactTemperaturePill(vehicle),
+                                const SizedBox(height: 8),
+                              ],
                               Row(
                                 children: [
                                   Icon(
@@ -1696,6 +1870,233 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCompactTemperaturePill(
+    Map<String, dynamic> vehicle, {
+    bool compact = false,
+  }) {
+    if (!_hasDemoTemperatureSensor(vehicle)) {
+      return const SizedBox.shrink();
+    }
+
+    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
+      valueListenable: _demoTemperatureSamples,
+      builder: (context, samples, _) {
+        final sample = samples[_plateOf(vehicle)];
+        if (sample == null) {
+          return const SizedBox.shrink();
+        }
+        final color = _temperatureStatusColor(sample.status);
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 260),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 7 : 9,
+            vertical: compact ? 4 : 5,
+          ),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.13),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: color.withValues(alpha: 0.34)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.device_thermostat_rounded, size: 13, color: color),
+              SizedBox(width: compact ? 4 : 5),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: Text(
+                  '${sample.temperatureC.toStringAsFixed(1)}\u00B0C',
+                  key: ValueKey(sample.temperatureC.toStringAsFixed(1)),
+                  style: TextStyle(
+                    fontSize: compact ? 10 : 11,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                  ),
+                ),
+              ),
+              SizedBox(width: compact ? 4 : 5),
+              Icon(_temperatureTrendIcon(sample.trend), size: 13, color: color),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSelectedTemperaturePanel(Map<String, dynamic> vehicle) {
+    if (!_hasDemoTemperatureSensor(vehicle)) {
+      return const SizedBox.shrink();
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+
+    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
+      valueListenable: _demoTemperatureSamples,
+      builder: (context, samples, _) {
+        final sample = samples[_plateOf(vehicle)];
+        if (sample == null) {
+          return const SizedBox.shrink();
+        }
+        final color = _temperatureStatusColor(sample.status);
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 260),
+          margin: EdgeInsets.only(top: isMobile ? 8 : 12),
+          padding: EdgeInsets.all(isMobile ? 10 : 12),
+          decoration: BoxDecoration(
+            color: Color.alphaBlend(
+              color.withValues(alpha: isDark ? 0.13 : 0.08),
+              isDark ? AppTheme.colorFF111827 : AppTheme.colorFFF8FAFC,
+            ),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: color.withValues(alpha: 0.30)),
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final tight = constraints.maxWidth < 430;
+              final reading = Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      Icons.device_thermostat_rounded,
+                      color: color,
+                      size: 21,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Cargo temperature',
+                        style: TextStyle(
+                          fontSize: isMobile ? 10.5 : 12,
+                          fontWeight: FontWeight.w800,
+                          color: isDark ? AppTheme.gray300 : AppTheme.gray600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: Text(
+                          '${sample.temperatureC.toStringAsFixed(1)}\u00B0C',
+                          key: ValueKey(
+                            sample.temperatureC.toStringAsFixed(1),
+                          ),
+                          style: TextStyle(
+                            fontSize: isMobile ? 18 : 22,
+                            fontWeight: FontWeight.w900,
+                            color: color,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+              final trend = Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(_temperatureTrendIcon(sample.trend), color: color),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${sample.statusLabel} - ${_temperatureTrendLabel(sample.trend)}',
+                    style: TextStyle(
+                      fontSize: isMobile ? 11 : 12,
+                      fontWeight: FontWeight.w900,
+                      color: color,
+                    ),
+                  ),
+                ],
+              );
+              final sparkline = SizedBox(
+                width: tight ? double.infinity : 120,
+                height: 34,
+                child: CustomPaint(
+                  painter: _TemperatureSparklinePainter(
+                    values: sample.history,
+                    color: color,
+                    safeMinC: _temperatureSafeMinC,
+                    safeMaxC: _temperatureSafeMaxC,
+                    isDark: isDark,
+                  ),
+                ),
+              );
+
+              if (tight) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    reading,
+                    const SizedBox(height: 10),
+                    sparkline,
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        trend,
+                        _buildDemoSensorBadge(isDark),
+                      ],
+                    ),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  reading,
+                  const SizedBox(width: 14),
+                  Expanded(child: sparkline),
+                  const SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      trend,
+                      const SizedBox(height: 6),
+                      _buildDemoSensorBadge(isDark),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDemoSensorBadge(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: AppTheme.primaryBlue.withValues(alpha: 0.28),
+        ),
+      ),
+      child: Text(
+        'Demo sensor',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
+          color: isDark ? AppTheme.white : AppTheme.primaryBlue,
+        ),
       ),
     );
   }
@@ -2143,6 +2544,15 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                                               compact: true,
                                             ),
                                             const SizedBox(height: 4),
+                                            if (_hasDemoTemperatureSensor(
+                                              vehicle,
+                                            )) ...[
+                                              _buildCompactTemperaturePill(
+                                                vehicle,
+                                                compact: true,
+                                              ),
+                                              const SizedBox(height: 4),
+                                            ],
                                             SelectableText(
                                               _lastKnownAddressLabel(vehicle),
                                               style: AppTheme.getCaptionStyle(
@@ -2307,6 +2717,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                     ),
                   ],
                 ),
+                _buildSelectedTemperaturePanel(vehicle),
                 if (_isFollowingSelected) ...[
                   SizedBox(height: isMobile ? 6 : 10),
                   Container(
@@ -2397,6 +2808,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
               initialCenter: _toGoogleLatLng(_defaultCenter),
               initialZoom: 10,
               zoomControlsEnabled: false,
+              trafficEnabled: _trafficEnabled,
               polygons: {
                 ..._visibleZoneOverlayPolygons,
                 ..._selectedGeofencePolygons,
@@ -2498,7 +2910,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _legendRow(
-            icon: Icons.navigation_rounded,
+            icon: Icons.local_shipping_rounded,
             color: AppTheme.colorFF1A3A6B,
             label: 'Moving',
             isDark: isDark,
@@ -2562,6 +2974,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   Set<gmaps.Polyline> _liveTrackingPolylines() {
+    final selectedVehicle = _selectedVehicle;
+    final selectedState = selectedVehicle == null
+        ? null
+        : _visualMarkerState(selectedVehicle);
+    final actualTrailColor = selectedState == PioneerMapMarkerStyle.stale
+        ? AppTheme.colorFF94A3B8
+        : AppTheme.colorFF0E7A43;
+
     return {
       if (_selectedPlannedPath.length > 1)
         gmaps.Polyline(
@@ -2569,20 +2989,33 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           points: _selectedPlannedPath.map(_toGoogleLatLng).toList(),
           color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.78),
           width: 3,
+          patterns: [
+            gmaps.PatternItem.dash(18),
+            gmaps.PatternItem.gap(10),
+          ],
+          startCap: gmaps.Cap.roundCap,
+          endCap: gmaps.Cap.roundCap,
+          jointType: gmaps.JointType.round,
         ),
       if (_selectedTrail.length > 1)
         gmaps.Polyline(
           polylineId: const gmaps.PolylineId('selected-live-trail-glow'),
           points: _selectedTrail.map(_toGoogleLatLng).toList(),
-          color: AppTheme.colorFF27AE60.withValues(alpha: 0.22),
-          width: 9,
+          color: actualTrailColor.withValues(alpha: 0.23),
+          width: 11,
+          startCap: gmaps.Cap.roundCap,
+          endCap: gmaps.Cap.roundCap,
+          jointType: gmaps.JointType.round,
         ),
       if (_selectedTrail.length > 1)
         gmaps.Polyline(
           polylineId: const gmaps.PolylineId('selected-live-trail'),
           points: _selectedTrail.map(_toGoogleLatLng).toList(),
-          color: AppTheme.colorFF0E7A43,
+          color: actualTrailColor,
           width: 4,
+          startCap: gmaps.Cap.roundCap,
+          endCap: gmaps.Cap.roundCap,
+          jointType: gmaps.JointType.round,
         ),
     };
   }
@@ -3460,7 +3893,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   IconData _motionStateIcon(Map<String, dynamic> vehicle) {
     switch (_visualMarkerState(vehicle)) {
       case PioneerMapMarkerStyle.moving:
-        return Icons.navigation_rounded;
+        return Icons.local_shipping_rounded;
       case PioneerMapMarkerStyle.idle:
         return Icons.pause_circle_filled_rounded;
       case PioneerMapMarkerStyle.offline:
@@ -3625,6 +4058,219 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   bool _hasMeaningfulMovement(LatLng from, LatLng to) {
     return _distanceMeters(from, to) > 1.0;
+  }
+}
+
+enum _DemoTemperatureTrend { rising, falling, stable }
+
+enum _DemoTemperatureStatus { normal, review, critical }
+
+class _DemoTemperatureSample {
+  const _DemoTemperatureSample({
+    required this.plate,
+    required this.temperatureC,
+    required this.previousTemperatureC,
+    required this.trend,
+    required this.status,
+    required this.updatedAt,
+    required this.history,
+  });
+
+  factory _DemoTemperatureSample.seed({
+    required String plate,
+    required double baseTemperatureC,
+    required DateTime updatedAt,
+    required double safeMinC,
+    required double safeMaxC,
+  }) {
+    final status = _statusFor(baseTemperatureC, safeMinC, safeMaxC);
+    return _DemoTemperatureSample(
+      plate: plate,
+      temperatureC: baseTemperatureC,
+      previousTemperatureC: baseTemperatureC,
+      trend: _DemoTemperatureTrend.stable,
+      status: status,
+      updatedAt: updatedAt,
+      history: List<double>.filled(12, baseTemperatureC),
+    );
+  }
+
+  final String plate;
+  final double temperatureC;
+  final double previousTemperatureC;
+  final _DemoTemperatureTrend trend;
+  final _DemoTemperatureStatus status;
+  final DateTime updatedAt;
+  final List<double> history;
+
+  _DemoTemperatureSample next({
+    required double nextTemperatureC,
+    required DateTime updatedAt,
+    required double safeMinC,
+    required double safeMaxC,
+  }) {
+    final delta = nextTemperatureC - temperatureC;
+    final nextTrend = delta.abs() < 0.05
+        ? _DemoTemperatureTrend.stable
+        : delta > 0
+        ? _DemoTemperatureTrend.rising
+        : _DemoTemperatureTrend.falling;
+    final nextHistory = <double>[
+      ...history.skip(math.max(0, history.length - 15)),
+      nextTemperatureC,
+    ];
+
+    return _DemoTemperatureSample(
+      plate: plate,
+      temperatureC: nextTemperatureC,
+      previousTemperatureC: temperatureC,
+      trend: nextTrend,
+      status: _statusFor(nextTemperatureC, safeMinC, safeMaxC),
+      updatedAt: updatedAt,
+      history: nextHistory,
+    );
+  }
+
+  String get statusLabel {
+    switch (status) {
+      case _DemoTemperatureStatus.normal:
+        return 'In range';
+      case _DemoTemperatureStatus.review:
+        return 'Review';
+      case _DemoTemperatureStatus.critical:
+        return 'Out of range';
+    }
+  }
+
+  static _DemoTemperatureStatus _statusFor(
+    double value,
+    double safeMinC,
+    double safeMaxC,
+  ) {
+    if (value < safeMinC || value > safeMaxC) {
+      return _DemoTemperatureStatus.critical;
+    }
+    if (value <= safeMinC + 0.5 || value >= safeMaxC - 0.5) {
+      return _DemoTemperatureStatus.review;
+    }
+    return _DemoTemperatureStatus.normal;
+  }
+}
+
+class _TemperatureSparklinePainter extends CustomPainter {
+  const _TemperatureSparklinePainter({
+    required this.values,
+    required this.color,
+    required this.safeMinC,
+    required this.safeMaxC,
+    required this.isDark,
+  });
+
+  final List<double> values;
+  final Color color;
+  final double safeMinC;
+  final double safeMaxC;
+  final bool isDark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.length < 2 || size.width <= 0 || size.height <= 0) {
+      return;
+    }
+
+    final minValue = math.min(
+      values.reduce((left, right) => math.min(left, right)),
+      safeMinC,
+    );
+    final maxValue = math.max(
+      values.reduce((left, right) => math.max(left, right)),
+      safeMaxC,
+    );
+    final paddedMin = minValue - 1;
+    final paddedMax = maxValue + 1;
+    final range = math.max(1.0, paddedMax - paddedMin);
+
+    double yFor(double value) {
+      final normalized = ((value - paddedMin) / range).clamp(0.0, 1.0);
+      return size.height - (normalized * size.height);
+    }
+
+    final safeTop = yFor(safeMaxC);
+    final safeBottom = yFor(safeMinC);
+    final safeBand = Rect.fromLTRB(
+      0,
+      math.min(safeTop, safeBottom),
+      size.width,
+      math.max(safeTop, safeBottom),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(safeBand, const Radius.circular(7)),
+      Paint()
+        ..color = AppTheme.accentCyan.withValues(alpha: isDark ? 0.10 : 0.08)
+        ..style = PaintingStyle.fill,
+    );
+
+    final grid = Paint()
+      ..color = (isDark ? AppTheme.white : AppTheme.black).withValues(
+        alpha: 0.08,
+      )
+      ..strokeWidth = 1;
+    canvas.drawLine(Offset(0, safeTop), Offset(size.width, safeTop), grid);
+    canvas.drawLine(Offset(0, safeBottom), Offset(size.width, safeBottom), grid);
+
+    final path = ui.Path();
+    for (var index = 0; index < values.length; index++) {
+      final x = values.length == 1
+          ? 0.0
+          : (index / (values.length - 1)) * size.width;
+      final y = yFor(values[index]);
+      if (index == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+
+    final glow = Paint()
+      ..color = color.withValues(alpha: 0.24)
+      ..strokeWidth = 7
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+    final line = Paint()
+      ..color = color
+      ..strokeWidth = 2.6
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(path, glow);
+    canvas.drawPath(path, line);
+
+    final latest = Offset(size.width, yFor(values.last));
+    canvas.drawCircle(
+      latest,
+      4.2,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      latest,
+      6.2,
+      Paint()
+        ..color = color.withValues(alpha: 0.22)
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TemperatureSparklinePainter oldDelegate) {
+    return oldDelegate.values != values ||
+        oldDelegate.color != color ||
+        oldDelegate.safeMinC != safeMinC ||
+        oldDelegate.safeMaxC != safeMaxC ||
+        oldDelegate.isDark != isDark;
   }
 }
 
