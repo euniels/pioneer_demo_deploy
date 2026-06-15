@@ -397,75 +397,110 @@ class _TripsPageState extends State<TripsPage> {
 
     return Column(
       children: [
-        Container(
-              padding: EdgeInsets.all(isMobile ? 16 : 24),
-              decoration: BoxDecoration(
-                color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-                border: Border(
-                  bottom: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withValues(alpha: 0.08)
-                        : AppTheme.black.withValues(alpha: 0.08),
+        _buildTripsToolbar(isDark, isMobile),
+        _buildAdvancedFilters(isDark, isMobile),
+        Expanded(
+          child: Container(
+            color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+            child: Column(
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    isMobile ? 16 : 24,
+                    18,
+                    isMobile ? 16 : 24,
+                    0,
+                  ),
+                  child: _buildSummaryStrip(isDark, isMobile),
+                ),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _refreshTrips,
+                    child: isMobile
+                        ? _buildMobileTripsList(isDark)
+                              .animate()
+                              .fadeIn(duration: 400.ms)
+                              .slideY(
+                                begin: 0.08,
+                                end: 0,
+                                duration: 400.ms,
+                                curve: Curves.easeOut,
+                              )
+                        : _buildDesktopTripsTable(isDark)
+                              .animate()
+                              .fadeIn(duration: 400.ms)
+                              .slideY(
+                                begin: 0.08,
+                                end: 0,
+                                duration: 400.ms,
+                                curve: Curves.easeOut,
+                              ),
                   ),
                 ),
-              ),
-              child: _buildSearchBar(isDark, isMobile),
-            )
-            .animate()
-            .fadeIn(duration: 500.ms)
-            .slideY(
-              begin: 0.2,
-              end: 0,
-              duration: 500.ms,
-              curve: Curves.easeOut,
+              ],
             ),
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.fromLTRB(
-            isMobile ? 16 : 24,
-            0,
-            isMobile ? 16 : 24,
-            12,
-          ),
-          color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
-          child: _buildAdvancedFilters(isDark, isMobile),
-        ),
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.fromLTRB(
-            isMobile ? 16 : 24,
-            16,
-            isMobile ? 16 : 24,
-            0,
-          ),
-          color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
-          child: _buildSummaryStrip(isDark, isMobile),
-        ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: _refreshTrips,
-            child: isMobile
-                ? _buildMobileTripsList(isDark)
-                      .animate()
-                      .fadeIn(duration: 600.ms)
-                      .slideY(
-                        begin: 0.2,
-                        end: 0,
-                        duration: 600.ms,
-                        curve: Curves.easeOut,
-                      )
-                : _buildDesktopTripsTable(isDark)
-                      .animate()
-                      .fadeIn(duration: 600.ms)
-                      .slideY(
-                        begin: 0.2,
-                        end: 0,
-                        duration: 600.ms,
-                        curve: Curves.easeOut,
-                      ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildTripsToolbar(bool isDark, bool isMobile) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final addButton = _TripAddButton(
+            label: compact ? 'Add' : 'New Trip',
+            onTap: _showNewTripModal,
+          );
+          final search = _TripSearchField(
+            value: _searchQuery,
+            isDark: isDark,
+            onChanged: (value) => setState(() => _searchQuery = value),
+            onClear: () => setState(() => _searchQuery = ''),
+          );
+
+          if (compact) {
+            return Column(
+              children: [
+                search,
+                if (CrudPermissions.canCreate(CrudEntity.trips)) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(width: double.infinity, child: addButton),
+                ],
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              if (CrudPermissions.canCreate(CrudEntity.trips)) ...[
+                const SizedBox(width: 14),
+                addButton,
+              ],
+            ],
+          );
+        },
+      ).animate().fadeIn(duration: 250.ms),
     );
   }
 
@@ -483,74 +518,158 @@ class _TripsPageState extends State<TripsPage> {
       tripsNotifier.value.map((trip) => trip['vehicle']?.toString() ?? ''),
     );
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        SizedBox(
-          width: isMobile ? double.infinity : 240,
-          child: _filterDropdown(
-            value: _clientFilter,
-            values: clientOptions,
-            isDark: isDark,
-            icon: Icons.business_rounded,
-            onChanged: (value) {
-              setState(() => _clientFilter = value);
-              _persistFilters();
-            },
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
         ),
-        SizedBox(
-          width: isMobile ? double.infinity : 220,
-          child: _filterDropdown(
-            value: _driverFilter,
-            values: driverOptions,
-            isDark: isDark,
-            icon: Icons.badge_rounded,
-            onChanged: (value) {
-              setState(() => _driverFilter = value);
-              _persistFilters();
-            },
-          ),
-        ),
-        SizedBox(
-          width: isMobile ? double.infinity : 220,
-          child: _filterDropdown(
-            value: _vehicleFilter,
-            values: vehicleOptions,
-            isDark: isDark,
-            icon: Icons.local_shipping_rounded,
-            onChanged: (value) {
-              setState(() => _vehicleFilter = value);
-              _persistFilters();
-            },
-          ),
-        ),
-        SizedBox(
-          width: isMobile ? double.infinity : 220,
-          child: _filterDropdown(
-            value: _sortMode,
-            values: const [
-              'Date Newest',
-              'Date Oldest',
-              'Status A-Z',
-              'Status Z-A',
-              'Client A-Z',
-              'Client Z-A',
-              'Driver A-Z',
-              'Driver Z-A',
-              'Vehicle A-Z',
-              'Vehicle Z-A',
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _TripResultCount(count: _filteredTrips.length),
+              const SizedBox(width: 10),
+              _TripFilterChip(
+                label: 'Status',
+                value: _statusFilter,
+                activeWhen: 'All Status',
+                options: const [
+                  'All Status',
+                  'Completed',
+                  'In Progress',
+                  'Dispatched',
+                  'Pending',
+                  'Pending Approval',
+                  'Cancelled',
+                ],
+                onSelected: (value) {
+                  setState(() => _statusFilter = value);
+                  _persistFilters();
+                },
+                onClear: () {
+                  setState(() => _statusFilter = 'All Status');
+                  _persistFilters();
+                },
+              ),
+              const SizedBox(width: 8),
+              _TripFilterChip(
+                label: 'Date',
+                value: _dateFilter,
+                activeWhen: 'All Dates',
+                options: const ['All Dates', 'Today', 'Last 7 Days', 'This Month'],
+                onSelected: (value) {
+                  setState(() => _dateFilter = value);
+                  _persistFilters();
+                },
+                onClear: () {
+                  setState(() => _dateFilter = 'All Dates');
+                  _persistFilters();
+                },
+              ),
+              const SizedBox(width: 8),
+              _TripFilterChip(
+                label: 'Client',
+                value: clientOptions.contains(_clientFilter)
+                    ? _clientFilter
+                    : 'All Clients',
+                activeWhen: 'All Clients',
+                options: clientOptions,
+                onSelected: (value) {
+                  setState(() => _clientFilter = value);
+                  _persistFilters();
+                },
+                onClear: () {
+                  setState(() => _clientFilter = 'All Clients');
+                  _persistFilters();
+                },
+              ),
+              const SizedBox(width: 8),
+              _TripFilterChip(
+                label: 'Driver',
+                value: driverOptions.contains(_driverFilter)
+                    ? _driverFilter
+                    : 'All Drivers',
+                activeWhen: 'All Drivers',
+                options: driverOptions,
+                onSelected: (value) {
+                  setState(() => _driverFilter = value);
+                  _persistFilters();
+                },
+                onClear: () {
+                  setState(() => _driverFilter = 'All Drivers');
+                  _persistFilters();
+                },
+              ),
+              const SizedBox(width: 8),
+              _TripFilterChip(
+                label: 'Vehicle',
+                value: vehicleOptions.contains(_vehicleFilter)
+                    ? _vehicleFilter
+                    : 'All Vehicles',
+                activeWhen: 'All Vehicles',
+                options: vehicleOptions,
+                onSelected: (value) {
+                  setState(() => _vehicleFilter = value);
+                  _persistFilters();
+                },
+                onClear: () {
+                  setState(() => _vehicleFilter = 'All Vehicles');
+                  _persistFilters();
+                },
+              ),
+              const SizedBox(width: 8),
+              _TripFilterChip(
+                label: 'Sort',
+                value: _sortMode,
+                activeWhen: 'Date Newest',
+                options: const [
+                  'Date Newest',
+                  'Date Oldest',
+                  'Status A-Z',
+                  'Status Z-A',
+                  'Client A-Z',
+                  'Client Z-A',
+                  'Driver A-Z',
+                  'Driver Z-A',
+                  'Vehicle A-Z',
+                  'Vehicle Z-A',
+                ],
+                onSelected: (value) {
+                  setState(() => _sortMode = value);
+                  _persistFilters();
+                },
+                onClear: () {
+                  setState(() => _sortMode = 'Date Newest');
+                  _persistFilters();
+                },
+              ),
+              if (_hasActiveTripFilters) ...[
+                const SizedBox(width: 10),
+                TextButton.icon(
+                  onPressed: _clearTripFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 16),
+                  label: const Text('Clear'),
+                ),
+              ],
             ],
-            isDark: isDark,
-            icon: Icons.sort_rounded,
-            onChanged: (value) {
-              setState(() => _sortMode = value);
-              _persistFilters();
-            },
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -565,6 +684,29 @@ class _TripsPageState extends State<TripsPage> {
     return [allLabel, ...cleaned];
   }
 
+  bool get _hasActiveTripFilters =>
+      _searchQuery.isNotEmpty ||
+      _statusFilter != 'All Status' ||
+      _dateFilter != 'All Dates' ||
+      _clientFilter != 'All Clients' ||
+      _driverFilter != 'All Drivers' ||
+      _vehicleFilter != 'All Vehicles' ||
+      _sortMode != 'Date Newest';
+
+  void _clearTripFilters() {
+    setState(() {
+      _searchQuery = '';
+      _statusFilter = 'All Status';
+      _dateFilter = 'All Dates';
+      _clientFilter = 'All Clients';
+      _driverFilter = 'All Drivers';
+      _vehicleFilter = 'All Vehicles';
+      _sortMode = 'Date Newest';
+    });
+    _persistFilters();
+  }
+
+  // ignore: unused_element
   Widget _filterDropdown({
     required String value,
     required List<String> values,
@@ -625,6 +767,7 @@ class _TripsPageState extends State<TripsPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildSearchBar(bool isDark, bool isMobile) {
     return isMobile
         ? Column(
@@ -1031,84 +1174,58 @@ class _TripsPageState extends State<TripsPage> {
   }
 
   Widget _buildSummaryStrip(bool isDark, bool isMobile) {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        _summaryCard(
-          title: 'Trips',
-          value: '${tripsNotifier.value.length} total',
-          color: AppTheme.colorFF4B7BE5,
-          icon: Icons.route_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        _summaryCard(
-          title: 'Active',
-          value: '$_activeTripsCount in motion',
-          color: AppTheme.colorFF27AE60,
-          icon: Icons.alt_route_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        _summaryCard(
-          title: 'Pending',
-          value: '$_pendingTripsCount review',
-          color: AppTheme.colorFFF39C12,
-          icon: Icons.pending_actions_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        _summaryCard(
-          title: 'Completed',
-          value: '$_completedTripsCount closed',
-          color: AppTheme.colorFF14B8A6,
-          icon: Icons.task_alt_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        InkWell(
-          onTap: () => refreshFleetSnapshotSilently(forceRefresh: true),
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: isMobile ? 14 : 16,
-              vertical: isMobile ? 12 : 14,
-            ),
-            decoration: BoxDecoration(
-              color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark
-                    ? AppTheme.white.withValues(alpha: 0.08)
-                    : AppTheme.black.withValues(alpha: 0.08),
+    final cards = [
+      _TripSummaryData(
+        title: 'Trips',
+        value: '${tripsNotifier.value.length}',
+        subtitle: 'total delivery records',
+        color: AppTheme.colorFF4B7BE5,
+        icon: Icons.route_rounded,
+      ),
+      _TripSummaryData(
+        title: 'Active',
+        value: '$_activeTripsCount',
+        subtitle: 'currently moving',
+        color: AppTheme.colorFF27AE60,
+        icon: Icons.alt_route_rounded,
+      ),
+      _TripSummaryData(
+        title: 'Pending',
+        value: '$_pendingTripsCount',
+        subtitle: 'need dispatch review',
+        color: AppTheme.colorFFF39C12,
+        icon: Icons.pending_actions_rounded,
+      ),
+      _TripSummaryData(
+        title: 'Completed',
+        value: '$_completedTripsCount',
+        subtitle: 'ready for billing flow',
+        color: AppTheme.colorFF14B8A6,
+        icon: Icons.task_alt_rounded,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = isMobile ? 12.0 : 16.0;
+        final columns = constraints.maxWidth < 720 ? 2 : 4;
+        final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final card in cards)
+              SizedBox(
+                width: width,
+                child: _TripSummaryCard(data: card, isDark: isDark),
               ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.refresh_rounded,
-                  size: 18,
-                  color: AppTheme.colorFF4B7BE5,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Refresh trips',
-                  style: TextStyle(
-                    fontSize: isMobile ? 12 : 13,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 
+  // ignore: unused_element
   Widget _summaryCard({
     required String title,
     required String value,
@@ -2092,6 +2209,313 @@ class _TripsPageState extends State<TripsPage> {
 // ============================================
 // TRIP DETAILS PAGE WITH KEBAB MENU
 // ============================================
+
+class _TripSearchField extends StatelessWidget {
+  const _TripSearchField({
+    required this.value,
+    required this.isDark,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final String value;
+  final bool isDark;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        hintText: 'Search by trip ID, client, driver, or vehicle...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: value.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+      ),
+      style: TextStyle(
+        fontSize: 14,
+        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+      ),
+    );
+  }
+}
+
+class _TripAddButton extends StatelessWidget {
+  const _TripAddButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          constraints: const BoxConstraints(minWidth: 172),
+          decoration: BoxDecoration(
+            color: AppTheme.successGreen,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.successGreen.withValues(alpha: 0.22),
+                blurRadius: 16,
+                spreadRadius: -10,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.add_rounded, color: AppTheme.white, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TripResultCount extends StatelessWidget {
+  const _TripResultCount({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        '$count trips shown',
+        style: const TextStyle(
+          color: AppTheme.infoBlue,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _TripFilterChip extends StatelessWidget {
+  const _TripFilterChip({
+    required this.label,
+    required this.value,
+    required this.activeWhen,
+    required this.options,
+    required this.onSelected,
+    required this.onClear,
+  });
+
+  final String label;
+  final String value;
+  final String activeWhen;
+  final List<String> options;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = value != activeWhen;
+    return PopupMenuButton<String>(
+      initialValue: value,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final option in options)
+          PopupMenuItem(value: option, child: Text(option)),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: active
+              ? AppTheme.successGreen.withValues(alpha: 0.13)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 180),
+              child: Text(
+                active ? '$label: $value' : label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: active ? AppTheme.successGreen : AppTheme.gray300,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: active ? AppTheme.successGreen : AppTheme.gray400,
+            ),
+            if (active) ...[
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: onClear,
+                borderRadius: BorderRadius.circular(999),
+                child: const Icon(Icons.close_rounded, size: 15),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TripSummaryData {
+  const _TripSummaryData({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+}
+
+class _TripSummaryCard extends StatelessWidget {
+  const _TripSummaryCard({required this.data, required this.isDark});
+
+  final _TripSummaryData data;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: data.color.withValues(alpha: isDark ? 0.34 : 0.2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: data.color.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: data.color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(data.icon, color: data.color, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  data.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  data.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  data.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class TripDetailsPage extends StatefulWidget {
   final Map trip;

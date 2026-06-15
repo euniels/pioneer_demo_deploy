@@ -187,13 +187,6 @@ class _NotificationsPageState extends State<NotificationsPage> {
       currentRoute: '/notifications',
       title: 'Notifications',
       subtitle: '${_svc.unreadCount} unread',
-      actions: [
-        TextButton.icon(
-          onPressed: _svc.unreadCount == 0 ? null : _markAllRead,
-          icon: const Icon(Icons.done_all_rounded),
-          label: const Text('Mark all as read'),
-        ),
-      ],
       child: _buildBody(context),
     );
   }
@@ -207,32 +200,56 @@ class _NotificationsPageState extends State<NotificationsPage> {
         _buildInboxControls(isDark),
         if (_loadError != null) _buildErrorBanner(isDark),
         Expanded(
-          child: _isLoading && _svc.notifications.value.isEmpty
-              ? const PioneerRouteSkeletonBody(routeName: '/notifications')
-              : RefreshIndicator(
-                  onRefresh: () => _load(forceRefresh: true),
-                  child: items.isEmpty
-                      ? ListView(
-                          padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
-                          children: [
-                            SizedBox(
-                              height: 360,
-                              child: _EmptyState(
-                                isDark: isDark,
-                                hasNotifications:
-                                    _svc.notifications.value.isNotEmpty,
-                                onClearFilters: _hasActiveFilters
-                                    ? _resetFilters
-                                    : null,
+          child: Container(
+            color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+            child: _isLoading && _svc.notifications.value.isEmpty
+                ? const PioneerRouteSkeletonBody(routeName: '/notifications')
+                : RefreshIndicator(
+                    onRefresh: () => _load(forceRefresh: true),
+                    child: items.isEmpty
+                        ? ListView(
+                            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                            children: [
+                              Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 1120,
+                                  ),
+                                  child: SizedBox(
+                                    height: 360,
+                                    child: _EmptyState(
+                                      isDark: isDark,
+                                      hasNotifications:
+                                          _svc.notifications.value.isNotEmpty,
+                                      onClearFilters: _hasActiveFilters
+                                          ? _resetFilters
+                                          : null,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
-                        )
-                      : ListView(
-                          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-                          children: _groupedNotificationChildren(items, isDark),
-                        ),
-                ),
+                            ],
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                            children: [
+                              Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 1120,
+                                  ),
+                                  child: Column(
+                                    children: _groupedNotificationChildren(
+                                      items,
+                                      isDark,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+          ),
         ),
       ],
     );
@@ -252,114 +269,110 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 12),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
         border: Border(
           bottom: BorderSide(
             color: isDark
-                ? AppTheme.white.withValues(alpha: 0.06)
-                : AppTheme.black.withValues(alpha: 0.06),
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
         ),
       ),
-      child: Column(
-        children: [
-          Row(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: Column(
             children: [
-              _summaryPill(
-                isDark,
-                label: 'Total',
-                value: '${_svc.notifications.value.length}',
-              ),
-              const SizedBox(width: 10),
-              _summaryPill(
-                isDark,
-                label: 'Unread',
-                value: '${_svc.unreadCount}',
-                accent: AppTheme.colorFF4B7BE5,
-              ),
-              const Spacer(),
-              Tooltip(
-                message: 'Refresh notifications',
-                child: IconButton(
-                  onPressed: () => _load(forceRefresh: true),
-                  icon: const Icon(Icons.refresh_rounded, size: 20),
-                ),
-              ),
-              Tooltip(
-                message: 'Mark all as read',
-                child: IconButton(
-                  onPressed: _svc.unreadCount == 0 ? null : _markAllRead,
-                  icon: const Icon(Icons.done_all_rounded, size: 20),
-                ),
-              ),
-              Tooltip(
-                message: 'Clear notifications',
-                child: IconButton(
-                  onPressed: _svc.notifications.value.isEmpty
-                      ? null
-                      : _clearAll,
-                  icon: const Icon(Icons.delete_sweep_rounded, size: 20),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final tab in _NotificationTab.values) ...[
-                        _tabChip(
-                          isDark,
-                          label: notificationPrimaryTabLabels[tab.index],
-                          selected: _activeTab == tab,
-                          onTap: () => setState(() {
-                            _activeTab = tab;
-                            if (_activeTab != _NotificationTab.all) {
-                              _activeCategory = null;
-                            }
-                          }),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Container(
-                        width: 1,
-                        height: 24,
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        color: AppTheme.getBorderColor(context),
-                      ),
-                      const SizedBox(width: 4),
-                      for (final category in categories) ...[
-                        _filterChip(
-                          isDark,
-                          label: category == null
-                              ? 'All Types'
-                              : category.label,
-                          selected: _activeCategory == category,
-                          onTap: () =>
-                              setState(() => _activeCategory = category),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                    ],
+              Row(
+                children: [
+                  _summaryPill(
+                    isDark,
+                    label: 'shown',
+                    value: '${_svc.notifications.value.length}',
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  _summaryPill(
+                    isDark,
+                    label: 'unread',
+                    value: '${_svc.unreadCount}',
+                    accent: AppTheme.colorFF4B7BE5,
+                  ),
+                  const Spacer(),
+                  _NotificationActionButton(
+                    label: 'Mark read',
+                    icon: Icons.done_all_rounded,
+                    color: AppTheme.successGreen,
+                    onTap: _svc.unreadCount == 0 ? null : _markAllRead,
+                  ),
+                  const SizedBox(width: 8),
+                  _NotificationActionButton(
+                    label: 'Clear',
+                    icon: Icons.delete_sweep_rounded,
+                    color: AppTheme.errorRed,
+                    onTap: _svc.notifications.value.isEmpty ? null : _clearAll,
+                  ),
+                  const SizedBox(width: 8),
+                  _filterMenu(),
+                ],
               ),
-              if (_hasActiveFilters)
-                TextButton.icon(
-                  onPressed: _resetFilters,
-                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
-                  label: const Text('Clear'),
-                ),
-              _filterMenu(),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final tab in _NotificationTab.values) ...[
+                            _tabChip(
+                              isDark,
+                              label: notificationPrimaryTabLabels[tab.index],
+                              selected: _activeTab == tab,
+                              onTap: () => setState(() {
+                                _activeTab = tab;
+                                if (_activeTab != _NotificationTab.all) {
+                                  _activeCategory = null;
+                                }
+                              }),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          Container(
+                            width: 1,
+                            height: 24,
+                            margin: const EdgeInsets.symmetric(horizontal: 4),
+                            color: AppTheme.getBorderColor(context),
+                          ),
+                          const SizedBox(width: 4),
+                          for (final category in categories) ...[
+                            _filterChip(
+                              isDark,
+                              label: category == null
+                                  ? 'All Types'
+                                  : category.label,
+                              selected: _activeCategory == category,
+                              onTap: () =>
+                                  setState(() => _activeCategory = category),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_hasActiveFilters)
+                    TextButton.icon(
+                      onPressed: _resetFilters,
+                      icon: const Icon(Icons.filter_alt_off_rounded, size: 16),
+                      label: const Text('Clear filters'),
+                    ),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -375,27 +388,27 @@ class _NotificationsPageState extends State<NotificationsPage> {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+        height: 38,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: selected
-              ? AppTheme.primaryBlue
-              : (isDark
-                    ? AppTheme.white.withValues(alpha: 0.04)
-                    : AppTheme.colorFFF3F4F6),
-          borderRadius: BorderRadius.circular(999),
+              ? AppTheme.successGreen.withValues(alpha: 0.14)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: selected
-                ? AppTheme.primaryBlue
-                : AppTheme.getBorderColor(context),
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 12,
-            fontWeight: FontWeight.w900,
+            fontWeight: FontWeight.w800,
             color: selected
-                ? AppTheme.white
+                ? AppTheme.successGreen
                 : (isDark ? AppTheme.gray300 : AppTheme.gray700),
           ),
         ),
@@ -583,18 +596,20 @@ class _NotificationsPageState extends State<NotificationsPage> {
     Color accent = AppTheme.colorFF10B981,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      height: 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F141D : AppTheme.colorFFF5F7FA,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: accent.withValues(alpha: 0.24)),
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accent.withValues(alpha: 0.22)),
       ),
       child: Text(
-        '$label: $value',
+        '$value $label',
         style: TextStyle(
           fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
+          fontWeight: FontWeight.w900,
+          color: accent,
         ),
       ),
     );
@@ -611,28 +626,81 @@ class _NotificationsPageState extends State<NotificationsPage> {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        height: 38,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
         decoration: BoxDecoration(
           color: selected
-              ? AppTheme.colorFF4B7BE5
-              : (isDark ? AppTheme.colorFF0F141D : AppTheme.colorFFF5F7FA),
-          borderRadius: BorderRadius.circular(999),
+              ? AppTheme.successGreen.withValues(alpha: 0.13)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected
-                ? AppTheme.colorFF4B7BE5
-                : (isDark
-                      ? AppTheme.white.withValues(alpha: 0.06)
-                      : AppTheme.black.withValues(alpha: 0.06)),
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 12,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w800,
             color: selected
-                ? AppTheme.white
+                ? AppTheme.successGreen
                 : (isDark ? AppTheme.white70 : AppTheme.colorFF334155),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationActionButton extends StatelessWidget {
+  const _NotificationActionButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = onTap == null;
+    return MouseRegion(
+      cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 140),
+          opacity: disabled ? 0.45 : 1,
+          child: Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 11),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withValues(alpha: 0.24)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: color, size: 16),
+                const SizedBox(width: 7),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -661,35 +729,57 @@ class _NotificationTile extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: item.isRead
-            ? (isDark ? AppTheme.colorFF141924 : AppTheme.white)
-            : (isDark ? AppTheme.colorFF102036 : AppTheme.colorFFEBF5FB),
-        borderRadius: BorderRadius.circular(8),
+            ? (isDark ? AppTheme.colorFF171B23 : AppTheme.white)
+            : Color.lerp(
+                isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+                accent,
+                isDark ? 0.14 : 0.08,
+              ),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: item.isRead
-              ? (isDark
-                    ? AppTheme.white.withValues(alpha: 0.06)
-                    : AppTheme.black.withValues(alpha: 0.06))
-              : accent.withValues(alpha: 0.35),
+              ? (isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(14))
+              : accent.withValues(alpha: 0.32),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: item.isRead ? 0.05 : 0.12),
+            blurRadius: 20,
+            spreadRadius: -14,
+            offset: const Offset(0, 12),
+          ),
+        ],
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(width: 4, color: accent),
+              Container(width: 5, color: accent),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
+                  padding: const EdgeInsets.all(16),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(_iconFor(item.category), color: accent, size: 24),
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.13),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: accent.withValues(alpha: 0.18),
+                          ),
+                        ),
+                        child: Icon(
+                          _iconFor(item.category),
+                          color: accent,
+                          size: 22,
+                        ),
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(

@@ -17,7 +17,7 @@ void main() {
   });
 
   test(
-    'analytics page displays predictive top, bottom, forecast, and trend panels',
+    'analytics page displays demo-only predictive panels',
     () {
       final source = File(
         'lib/src/pages/analytics_page.dart',
@@ -29,14 +29,16 @@ void main() {
       expect(source, contains('Route Efficiency'));
       expect(source, contains('Trip Forecast'));
       expect(source, contains('Fuel Trend'));
-      expect(source, contains("bundle.insights['driverPerformanceTop']"));
-      expect(source, contains("bundle.insights['driverPerformanceBottom']"));
-      expect(source, contains("bundle.insights['tripVolumeForecast']"));
+      expect(source, contains('const _AnalyticsBundle.demo()'));
+      expect(source, contains('final topDriverRows = _sampleTopDrivers'));
+      expect(source, contains('final telemetryAssets = _sampleTelemetryAssets'));
+      expect(source, isNot(contains('getFleetSummaryAnalytics')));
+      expect(source, isNot(contains("bundle.insights['driverPerformanceTop']")));
     },
   );
 
   test(
-    'analytics empty feeds use labelled sample panels and equal-height rows',
+    'analytics empty feeds use labelled sample panels and responsive chart rows',
     () {
       final source = File(
         'lib/src/pages/analytics_page.dart',
@@ -45,19 +47,25 @@ void main() {
       expect(
         source,
         contains(
-          'Sample data \\u2014 replace when real fleet data is available.',
+          'Sample data shown until real fleet analytics are available.',
         ),
       );
       expect(source, contains('class _SampleDataBanner'));
       expect(source, contains('class _AnalyticsEqualHeightGrid'));
-      expect(source, contains('IntrinsicHeight'));
+      expect(source, contains('class _DriverReliabilityBars'));
+      expect(source, contains('class _VehicleHealthSummary'));
+      expect(source, contains('class _RiskDistributionBar'));
+      expect(source, contains('class _TripForecastBars'));
+      expect(source, contains('class _FuelTrendBarsPainter'));
+      expect(source, contains('bodyHeight: 420'));
+      expect(source, contains('IgnorePointer'));
       expect(
         source,
-        contains('crossAxisAlignment: CrossAxisAlignment.stretch'),
+        contains('crossAxisAlignment: CrossAxisAlignment.start'),
       );
       expect(source, contains('AppTheme.getDashboardSectionHeaderStyle'));
       expect(source, contains('Cabuyao - Batangas City'));
-      expect(source, contains('PHP 5,420'));
+      expect(source, contains('₱5,420'));
     },
   );
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/dashboard_layout.dart';
 import '../services/drivers_store.dart';
 import '../services/crud_permissions.dart';
@@ -57,8 +58,15 @@ class _DriversPageState extends State<DriversPage>
   static const String _cacheKey = 'drivers_page';
 
   bool _isLeaderboardExpanded = true;
-  String _statusFilter = 'All Status';
+  bool _showGridView = true;
+  String _statusFilter = 'All';
+  String _vehicleFilter = 'All';
+  String _scoreFilter = 'All';
   String _sortMode = 'Name A-Z';
+  String _leaderboardPeriod = 'This week';
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
   late AnimationController _animationController;
   late Animation<double> _contentAnimation;
 
@@ -79,6 +87,7 @@ class _DriversPageState extends State<DriversPage>
     if (_isLeaderboardExpanded) {
       _animationController.value = 1.0;
     }
+    unawaited(_loadDriverViewPreferences());
   }
 
   void _onDriversChanged() {
@@ -105,31 +114,88 @@ class _DriversPageState extends State<DriversPage>
   }
 
   Color _driverStatusColor(Map<String, dynamic> driver) {
-    final color = driver['statusColor'];
-    return color is Color ? color : AppTheme.materialGrey;
+    final status = _driverStatus(driver).toLowerCase();
+    if (status == 'available' || status == 'active') {
+      return AppTheme.successGreen;
+    }
+    if (status == 'on trip' || status == 'ontrip' || status == 'in transit') {
+      return AppTheme.infoBlue;
+    }
+    return AppTheme.neutralGray;
+  }
+
+  Future<void> _loadDriverViewPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final view = prefs.getString('drivers_view_mode') ?? 'grid';
+    final expanded = prefs.getBool('drivers_leaderboard_expanded') ?? true;
+    setState(() {
+      _showGridView = view != 'list';
+      _isLeaderboardExpanded = expanded;
+      _animationController.value = expanded ? 1.0 : 0.0;
+    });
+  }
+
+  Future<void> _setDriverViewMode(bool grid) async {
+    setState(() => _showGridView = grid);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('drivers_view_mode', grid ? 'grid' : 'list');
   }
 
   @override
   void dispose() {
     driversNotifier.removeListener(_onDriversChanged);
+    _searchDebounce?.cancel();
+    _searchController.dispose();
     _animationController.dispose();
     super.dispose();
   }
 
   List<Map<String, dynamic>> get _leaderboardDrivers {
     final sorted = List<Map<String, dynamic>>.from(driversNotifier.value)
-      ..sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+      ..sort((a, b) => _driverScore(b).compareTo(_driverScore(a)));
     return sorted.take(3).toList();
   }
 
   List<Map<String, dynamic>> get _filteredDrivers {
     var drivers = driversNotifier.value;
-    if (_statusFilter != 'All Status') {
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      drivers = drivers.where((driver) {
+        return _driverName(driver).toLowerCase().contains(query) ||
+            _driverId(driver).toLowerCase().contains(query) ||
+            _driverVehicle(driver).toLowerCase().contains(query);
+      }).toList();
+    }
+
+    if (_statusFilter != 'All') {
       final target = _statusFilter.toLowerCase();
       drivers = drivers.where((driver) {
-        final status = driver['status']?.toString().toLowerCase() ?? '';
+        final status = _driverStatus(driver).toLowerCase();
         return status == target ||
             status.replaceAll(' ', '') == target.replaceAll(' ', '');
+      }).toList();
+    }
+
+    if (_vehicleFilter != 'All') {
+      drivers = drivers.where((driver) {
+        final vehicle = _driverVehicle(driver);
+        if (_vehicleFilter == 'Unassigned') {
+          return vehicle == 'Unassigned';
+        }
+        return vehicle == _vehicleFilter;
+      }).toList();
+    }
+
+    if (_scoreFilter != 'All') {
+      drivers = drivers.where((driver) {
+        final score = _driverScore(driver);
+        return switch (_scoreFilter) {
+          '>=90 Elite' => score >= 90,
+          '75-89 Good' => score >= 75 && score < 90,
+          '<75 Needs attention' => score < 75,
+          _ => true,
+        };
       }).toList();
     }
 
@@ -137,23 +203,69 @@ class _DriversPageState extends State<DriversPage>
     sorted.sort((a, b) {
       return switch (_sortMode) {
         'Name Z-A' => _compareDriverText(b, a, 'name'),
-        'Status A-Z' => _compareDriverText(a, b, 'status'),
-        'Status Z-A' => _compareDriverText(b, a, 'status'),
-        'Score High-Low' => _driverScore(b).compareTo(_driverScore(a)),
-        'Score Low-High' => _driverScore(a).compareTo(_driverScore(b)),
+        'Score: Highest first' => _driverScore(b).compareTo(_driverScore(a)),
+        'Score: Lowest first' => _driverScore(a).compareTo(_driverScore(b)),
+        'Trips: Most trips' => _driverTrips(b).compareTo(_driverTrips(a)),
+        'Trips: Fewest trips' => _driverTrips(a).compareTo(_driverTrips(b)),
+        'Earnings: Highest' => _moneyValue(_driverRevenue(b)).compareTo(
+          _moneyValue(_driverRevenue(a)),
+        ),
+        'Earnings: Lowest' => _moneyValue(_driverRevenue(a)).compareTo(
+          _moneyValue(_driverRevenue(b)),
+        ),
+        'Status: Available first' => _statusSortValue(
+          a,
+        ).compareTo(_statusSortValue(b)),
         _ => _compareDriverText(a, b, 'name'),
       };
     });
     return sorted;
   }
 
-  void _toggleLeaderboard() {
+  Future<void> _toggleLeaderboard() async {
     setState(() => _isLeaderboardExpanded = !_isLeaderboardExpanded);
     if (_isLeaderboardExpanded) {
       _animationController.forward();
     } else {
       _animationController.reverse();
     }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(
+      'drivers_leaderboard_expanded',
+      _isLeaderboardExpanded,
+    );
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value.trim());
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  bool get _hasActiveDriverFilters =>
+      _searchQuery.isNotEmpty ||
+      _statusFilter != 'All' ||
+      _vehicleFilter != 'All' ||
+      _scoreFilter != 'All';
+
+  void _clearDriverFilters() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+      _statusFilter = 'All';
+      _vehicleFilter = 'All';
+      _scoreFilter = 'All';
+      _sortMode = 'Name A-Z';
+    });
   }
 
   void _showAddDriverModal() {
@@ -254,7 +366,6 @@ class _DriversPageState extends State<DriversPage>
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
     final isMobile = screenWidth < 600;
-    final isTablet = screenWidth >= 600 && screenWidth < 1024;
 
     // Auto-collapse leaderboard in landscape (tight height) to prevent overflow
     if (screenHeight < 500 && _isLeaderboardExpanded) {
@@ -267,199 +378,72 @@ class _DriversPageState extends State<DriversPage>
     return ClipRect(
       child: Column(
         children: [
-          // Header
-          Container(
-            padding: EdgeInsets.all(isMobile ? 16 : 24),
-            decoration: BoxDecoration(
-              color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-              border: Border(
-                bottom: BorderSide(
-                  color: isDark
-                      ? AppTheme.white.withAlpha(20)
-                      : AppTheme.black.withAlpha(20),
-                ),
-              ),
-            ),
-            child: _buildHeader(isDark, isMobile, isTablet, screenWidth)
-                .animate()
-                .fadeIn(duration: 500.ms)
-                .slideY(
-                  begin: 0.2,
-                  end: 0,
-                  duration: 500.ms,
-                  curve: Curves.easeOut,
-                ),
-          ),
-
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.fromLTRB(
-              isMobile ? 16 : 24,
-              12,
-              isMobile ? 16 : 24,
-              12,
-            ),
-            color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-            child: _buildDriverControls(isDark),
-          ),
-
-          // Leaderboard section
-          Container(
-            decoration: BoxDecoration(
-              color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-              border: Border(
-                bottom: BorderSide(
-                  color: isDark
-                      ? AppTheme.white.withAlpha(20)
-                      : AppTheme.black.withAlpha(20),
-                ),
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GestureDetector(
-                  onTap: _toggleLeaderboard,
-                  child: Container(
-                    padding: EdgeInsets.all(
-                      isMobile
-                          ? 12
-                          : isTablet
-                          ? 16
-                          : 20,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'Performance Leaderboard',
-                                style: TextStyle(
-                                  fontSize: isMobile ? 16 : 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: isDark
-                                      ? AppTheme.white
-                                      : AppTheme.colorFF2C3E50,
-                                ),
-                              ),
-                              AnimatedOpacity(
-                                duration: const Duration(milliseconds: 200),
-                                opacity: _isLeaderboardExpanded ? 1.0 : 0.0,
-                                child: SizedBox(
-                                  height: _isLeaderboardExpanded ? 20 : 0,
-                                  child: Text(
-                                    'Top performing drivers',
-                                    style: TextStyle(
-                                      fontSize: isMobile ? 11 : 12,
-                                      color: isDark
-                                          ? AppTheme.gray400
-                                          : AppTheme.gray600,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? AppTheme.white.withAlpha(13)
-                                : AppTheme.black.withAlpha(13),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: AnimatedRotation(
-                            duration: const Duration(milliseconds: 300),
-                            turns: _isLeaderboardExpanded ? 0.5 : 0,
-                            child: Icon(
-                              Icons.keyboard_arrow_down_rounded,
-                              size: 20,
-                              color: isDark
-                                  ? AppTheme.gray400
-                                  : AppTheme.gray600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                SizeTransition(
-                  sizeFactor: _contentAnimation,
-                  axisAlignment: -1.0,
-                  child: Container(
-                    padding: EdgeInsets.fromLTRB(
-                      isMobile
-                          ? 12
-                          : isTablet
-                          ? 16
-                          : 20,
-                      0,
-                      isMobile
-                          ? 12
-                          : isTablet
-                          ? 16
-                          : 20,
-                      isMobile
-                          ? 12
-                          : isTablet
-                          ? 16
-                          : 20,
-                    ),
-                    child: _buildLeaderboardSection(isDark, isMobile, isTablet)
-                        .animate()
-                        .fadeIn(duration: 600.ms)
-                        .slideY(
-                          begin: 0.2,
-                          end: 0,
-                          duration: 500.ms,
-                          curve: Curves.easeOut,
-                        ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Driver cards grid
+          _buildDriverToolbar(isDark, isMobile),
+          _buildDriverFilterBar(isDark, isMobile),
           Expanded(
             child: RefreshIndicator(
               onRefresh: _refreshDrivers,
-              child: _filteredDrivers.isEmpty
-                  ? ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: [
-                        SizedBox(height: 420, child: _buildEmptyState(isDark)),
-                      ],
-                    )
-                  : GridView.builder(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.all(isMobile ? 16 : 24),
-                      gridDelegate:
-                          const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 400,
-                            crossAxisSpacing: 20,
-                            mainAxisSpacing: 20,
-                            childAspectRatio: 1.45,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final filtered = _filteredDrivers;
+                  final horizontalPadding = isMobile ? 16.0 : 24.0;
+                  return CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      SliverPadding(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          18,
+                          horizontalPadding,
+                          0,
+                        ),
+                        sliver: SliverToBoxAdapter(
+                          child: _buildLeaderboardSection(
+                            isDark,
+                            isMobile,
+                            constraints.maxWidth,
                           ),
-                      itemCount: _filteredDrivers.length,
-                      itemBuilder: (context, index) {
-                        return _buildDriverCard(_filteredDrivers[index], isDark)
-                            .animate()
-                            .fadeIn(duration: 700.ms)
-                            .slideY(
-                              begin: 0.2,
-                              end: 0,
-                              duration: 500.ms,
-                              curve: Curves.easeOut,
-                            );
-                      },
-                    ),
+                        ),
+                      ),
+                      if (filtered.isEmpty)
+                        SliverFillRemaining(
+                          hasScrollBody: false,
+                          child: _buildEmptyState(
+                            isDark,
+                            filteredOut: driversNotifier.value.isNotEmpty,
+                          ),
+                        )
+                      else if (_showGridView)
+                        SliverPadding(
+                          padding: EdgeInsets.all(horizontalPadding),
+                          sliver: SliverToBoxAdapter(
+                            child: _DriverCardWrap(
+                              children: [
+                                for (var index = 0; index < filtered.length; index++)
+                                  _buildDriverCard(filtered[index], isDark)
+                                      .animate()
+                                      .fadeIn(duration: 250.ms)
+                                      .slideY(
+                                        begin: 0.05,
+                                        end: 0,
+                                        duration: 250.ms,
+                                        curve: Curves.easeOut,
+                                      ),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        SliverPadding(
+                          padding: EdgeInsets.all(horizontalPadding),
+                          sliver: SliverToBoxAdapter(
+                            child: _buildDriverListView(filtered, isDark),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -467,157 +451,150 @@ class _DriversPageState extends State<DriversPage>
     );
   }
 
-  Widget _buildHeader(
-    bool isDark,
-    bool isMobile,
-    bool isTablet,
-    double screenWidth,
-  ) {
-    if (screenWidth < 500) {
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            '${_filteredDrivers.length} drivers shown',
-            style: TextStyle(
-              fontSize: 13,
-              color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-            ),
-          ),
-          if (CrudPermissions.canCreate(CrudEntity.drivers))
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: _showAddDriverModal,
-                child: Container(
-                  height: 40,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppTheme.colorFF4B7BE5, AppTheme.colorFF00D4FF],
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.add_rounded, color: AppTheme.white, size: 18),
-                      SizedBox(width: 4),
-                      Text(
-                        'Add',
-                        style: TextStyle(
-                          color: AppTheme.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-        ],
-      );
-    }
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          '${_filteredDrivers.length} drivers shown',
-          style: TextStyle(
-            fontSize: isMobile ? 14 : 16,
-            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+  Widget _buildDriverToolbar(bool isDark, bool isMobile) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(isMobile ? 16 : 24, 16, isMobile ? 16 : 24, 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(14),
           ),
         ),
-        if (CrudPermissions.canCreate(CrudEntity.drivers))
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: _showAddDriverModal,
-              child: Container(
-                height: 44,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppTheme.colorFF4B7BE5, AppTheme.colorFF00D4FF],
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.add_rounded, color: AppTheme.white, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Add Driver',
-                      style: TextStyle(
-                        color: AppTheme.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final addButton = FilledButton.icon(
+            onPressed: _showAddDriverModal,
+            icon: const Icon(Icons.add_rounded),
+            label: Text(compact ? 'Add' : 'Add Driver'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.successGreen,
+              foregroundColor: AppTheme.white,
+              minimumSize: const Size(172, 50),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 15,
               ),
             ),
-          ),
-      ],
+          );
+          final controls = Row(
+            mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              _DriverViewToggle(
+                gridActive: _showGridView,
+                onGrid: () => _setDriverViewMode(true),
+                onList: () => _setDriverViewMode(false),
+              ),
+              const SizedBox(width: 12),
+              if (CrudPermissions.canCreate(CrudEntity.drivers))
+                if (compact) Expanded(child: addButton) else addButton,
+            ],
+          );
+
+          final search = _DriverSearchField(
+            controller: _searchController,
+            onChanged: _onSearchChanged,
+            onClear: _clearSearch,
+            isDark: isDark,
+          );
+
+          if (compact) {
+            return Column(
+              children: [
+                search,
+                const SizedBox(height: 12),
+                controls,
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              const SizedBox(width: 14),
+              controls,
+            ],
+          );
+        },
+      ).animate().fadeIn(duration: 250.ms),
     );
   }
 
-  Widget _buildDriverControls(bool isDark) {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        SizedBox(
-          width: 210,
-          child: DropdownButtonFormField<String>(
-            initialValue: _statusFilter,
-            decoration: const InputDecoration(labelText: 'Status'),
-            items: const [
-              DropdownMenuItem(value: 'All Status', child: Text('All Status')),
-              DropdownMenuItem(value: 'Active', child: Text('Active')),
-              DropdownMenuItem(value: 'Available', child: Text('Available')),
-              DropdownMenuItem(value: 'On Trip', child: Text('On Trip')),
-              DropdownMenuItem(value: 'Inactive', child: Text('Inactive')),
-            ],
-            onChanged: (value) =>
-                setState(() => _statusFilter = value ?? 'All Status'),
+  Widget _buildDriverFilterBar(bool isDark, bool isMobile) {
+    final vehicles = _vehicleFilterOptions;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(isMobile ? 16 : 24, 10, isMobile ? 16 : 24, 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(14),
           ),
         ),
-        SizedBox(
-          width: 210,
-          child: DropdownButtonFormField<String>(
-            initialValue: _sortMode,
-            decoration: const InputDecoration(labelText: 'Sort'),
-            items: const [
-              DropdownMenuItem(value: 'Name A-Z', child: Text('Name A-Z')),
-              DropdownMenuItem(value: 'Name Z-A', child: Text('Name Z-A')),
-              DropdownMenuItem(value: 'Status A-Z', child: Text('Status A-Z')),
-              DropdownMenuItem(value: 'Status Z-A', child: Text('Status Z-A')),
-              DropdownMenuItem(
-                value: 'Score High-Low',
-                child: Text('Score High-Low'),
-              ),
-              DropdownMenuItem(
-                value: 'Score Low-High',
-                child: Text('Score Low-High'),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _DriverResultCount(count: _filteredDrivers.length),
+            const SizedBox(width: 12),
+            _DriverFilterChip(
+              label: 'Status',
+              value: _statusFilter,
+              options: const ['All', 'Available', 'On Trip', 'Offline', 'Inactive'],
+              onSelected: (value) => setState(() => _statusFilter = value),
+              onClear: () => setState(() => _statusFilter = 'All'),
+            ),
+            const SizedBox(width: 8),
+            _DriverFilterChip(
+              label: 'Vehicle',
+              value: _vehicleFilter,
+              options: vehicles,
+              onSelected: (value) => setState(() => _vehicleFilter = value),
+              onClear: () => setState(() => _vehicleFilter = 'All'),
+            ),
+            const SizedBox(width: 8),
+            _DriverFilterChip(
+              label: 'Score',
+              value: _scoreFilter,
+              options: const ['All', '>=90 Elite', '75-89 Good', '<75 Needs attention'],
+              onSelected: (value) => setState(() => _scoreFilter = value),
+              onClear: () => setState(() => _scoreFilter = 'All'),
+            ),
+            const SizedBox(width: 8),
+            _DriverFilterChip(
+              label: 'Sort',
+              value: _sortMode,
+              activeWhen: 'Name A-Z',
+              options: const [
+                'Name A-Z',
+                'Name Z-A',
+                'Score: Highest first',
+                'Score: Lowest first',
+                'Trips: Most trips',
+                'Trips: Fewest trips',
+                'Earnings: Highest',
+                'Earnings: Lowest',
+                'Status: Available first',
+              ],
+              onSelected: (value) => setState(() => _sortMode = value),
+              onClear: () => setState(() => _sortMode = 'Name A-Z'),
+            ),
+            if (_hasActiveDriverFilters) ...[
+              const SizedBox(width: 10),
+              TextButton.icon(
+                onPressed: _clearDriverFilters,
+                icon: const Icon(Icons.close_rounded, size: 16),
+                label: const Text('Clear all'),
               ),
             ],
-            onChanged: (value) =>
-                setState(() => _sortMode = value ?? 'Name A-Z'),
-          ),
+          ],
         ),
-        if (_statusFilter != 'All Status' || _sortMode != 'Name A-Z')
-          TextButton.icon(
-            onPressed: () => setState(() {
-              _statusFilter = 'All Status';
-              _sortMode = 'Name A-Z';
-            }),
-            icon: const Icon(Icons.filter_alt_off_rounded),
-            label: const Text('Reset'),
-          ),
-      ],
+      ),
     );
   }
 
@@ -637,7 +614,155 @@ class _DriversPageState extends State<DriversPage>
     return int.tryParse(score?.toString() ?? '') ?? 0;
   }
 
-  Widget _buildLeaderboardSection(bool isDark, bool isMobile, bool isTablet) {
+  List<String> get _vehicleFilterOptions {
+    final vehicles = driversNotifier.value
+        .map(_driverVehicle)
+        .where((vehicle) => vehicle.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return ['All', ...vehicles.where((vehicle) => vehicle != 'Unassigned'), 'Unassigned'];
+  }
+
+  String _driverName(Map<String, dynamic> driver) {
+    final name = driver['name']?.toString().trim() ?? '';
+    return name.isEmpty ? 'Unnamed driver' : name;
+  }
+
+  String _driverId(Map<String, dynamic> driver) {
+    final id = driver['license']?.toString().trim() ?? '';
+    return id.isEmpty || id.toLowerCase() == 'n/a' ? 'License not set' : id;
+  }
+
+  String _driverStatus(Map<String, dynamic> driver) {
+    final status = driver['status']?.toString().trim() ?? '';
+    return status.isEmpty ? 'offline' : status;
+  }
+
+  String _driverVehicle(Map<String, dynamic> driver) {
+    final vehicle =
+        driver['assignedVehiclePlate']?.toString().trim().isNotEmpty == true
+        ? driver['assignedVehiclePlate'].toString().trim()
+        : driver['assignedVehicle']?.toString().trim() ?? '';
+    if (vehicle.isEmpty || vehicle.toLowerCase() == 'n/a') {
+      return 'Unassigned';
+    }
+    return vehicle;
+  }
+
+  int _driverTrips(Map<String, dynamic> driver) {
+    final trips = driver['trips'];
+    if (trips is num) return trips.round();
+    return int.tryParse(trips?.toString() ?? '') ?? 0;
+  }
+
+  int _driverDelays(Map<String, dynamic> driver) {
+    final delays = driver['delays'];
+    if (delays is num) return delays.round();
+    return int.tryParse(delays?.toString() ?? '') ?? 0;
+  }
+
+  String _driverDelayText(Map<String, dynamic> driver) {
+    final delays = _driverDelays(driver);
+    return delays <= 0 ? 'No delays recorded' : '$delays delay${delays == 1 ? '' : 's'}';
+  }
+
+  String _driverRevenue(Map<String, dynamic> driver) {
+    final revenue = driver['revenue']?.toString().trim() ?? '';
+    if (revenue.isEmpty || revenue.toLowerCase() == 'n/a') {
+      return '₱0';
+    }
+    if (revenue.startsWith('₱')) {
+      return revenue;
+    }
+    final amount = _moneyValue(revenue);
+    if (amount <= 0) {
+      return revenue.replaceAll('PHP', '₱').trim();
+    }
+    return _peso(amount);
+  }
+
+  double _moneyValue(String value) {
+    final cleaned = value
+        .replaceAll('PHP', '')
+        .replaceAll('₱', '')
+        .replaceAll('â‚±', '')
+        .replaceAll(',', '')
+        .trim();
+    return double.tryParse(cleaned) ?? 0;
+  }
+
+  String _peso(double value) {
+    final rounded = value.round().toString();
+    final buffer = StringBuffer();
+    for (var index = 0; index < rounded.length; index++) {
+      final fromEnd = rounded.length - index;
+      buffer.write(rounded[index]);
+      if (fromEnd > 1 && fromEnd % 3 == 1) {
+        buffer.write(',');
+      }
+    }
+    return '₱$buffer';
+  }
+
+  int _statusSortValue(Map<String, dynamic> driver) {
+    return switch (_driverStatus(driver).toLowerCase()) {
+      'available' => 0,
+      'on trip' || 'ontrip' || 'in transit' => 1,
+      'inactive' || 'deactivated' => 2,
+      _ => 3,
+    };
+  }
+
+  String _licenseFilterLabel(Map<String, dynamic> driver) {
+    final raw = driver['licenseExpiry']?.toString().trim() ?? '';
+    if (raw.isEmpty || raw.toLowerCase() == 'n/a') {
+      return 'Not set';
+    }
+
+    final expiry = DateTime.tryParse(raw);
+    if (expiry == null) {
+      return 'Not set';
+    }
+
+    final today = DateTime.now();
+    final currentDate = DateTime(today.year, today.month, today.day);
+    final expiryDate = DateTime(expiry.year, expiry.month, expiry.day);
+    final days = expiryDate.difference(currentDate).inDays;
+    if (days < 0) return 'Expired';
+    if (days <= 30) return 'Expiring in 30d';
+    return 'Valid';
+  }
+
+  String _licenseExpiryText(Map<String, dynamic> driver) {
+    final raw = driver['licenseExpiry']?.toString().trim() ?? '';
+    if (raw.isEmpty || raw.toLowerCase() == 'n/a') {
+      return 'N/A';
+    }
+    return raw;
+  }
+
+  Color _driverScoreColor(int score) {
+    if (score >= 90) return AppTheme.successGreen;
+    if (score >= 75) return AppTheme.infoBlue;
+    if (score >= 60) return AppTheme.warningOrange;
+    return AppTheme.errorRed;
+  }
+
+  String _scoreTooltip(Map<String, dynamic> driver) {
+    final trips = _driverTrips(driver);
+    final delays = _driverDelays(driver);
+    if (delays == 0) {
+      return '$trips trips with no recorded delays';
+    }
+    return '$trips trips with $delays delay${delays == 1 ? '' : 's'}';
+  }
+
+  Widget _buildLeaderboardSection(
+    bool isDark,
+    bool isMobile,
+    double availableWidth,
+  ) {
     final leaders = _leaderboardDrivers;
     if (leaders.isEmpty) {
       return const SizedBox(height: 0);
@@ -649,39 +774,111 @@ class _DriversPageState extends State<DriversPage>
       {'icon': Icons.emoji_events, 'color': AppTheme.colorFFCD7F32},
     ];
 
-    if (isMobile) {
-      return FadeTransition(
-        opacity: _contentAnimation,
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Column(
-            children: [
-              for (int i = 0; i < leaders.length; i++) ...[
-                _buildLeaderboardCard(leaders[i], medals[i], isDark, isMobile),
-                if (i < leaders.length - 1) const SizedBox(height: 8),
-              ],
-            ],
-          ),
+    return Container(
+      padding: EdgeInsets.all(isMobile ? 14 : 18),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? AppTheme.white.withAlpha(16) : AppTheme.black.withAlpha(12),
         ),
-      );
-    }
-
-    return FadeTransition(
-      opacity: _contentAnimation,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        boxShadow: AppTheme.getElevatedShadow(context),
+      ),
+      child: Column(
         children: [
-          for (int i = 0; i < leaders.length; i++) ...[
-            Expanded(
-              child: _buildLeaderboardCard(
-                leaders[i],
-                medals[i],
-                isDark,
-                false,
-              ),
+          InkWell(
+            onTap: _toggleLeaderboard,
+            borderRadius: BorderRadius.circular(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Performance leaderboard',
+                        style: TextStyle(
+                          fontSize: isMobile ? 18 : 22,
+                          fontWeight: FontWeight.w900,
+                          color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Top performing drivers this period',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  initialValue: _leaderboardPeriod,
+                  onSelected: (value) => setState(() => _leaderboardPeriod = value),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'This week', child: Text('This week')),
+                    PopupMenuItem(value: 'This month', child: Text('This month')),
+                    PopupMenuItem(value: 'All time', child: Text('All time')),
+                  ],
+                  child: _DriverSoftPill(
+                    icon: Icons.calendar_month_rounded,
+                    label: _leaderboardPeriod,
+                    color: AppTheme.infoBlue,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                AnimatedRotation(
+                  turns: _isLeaderboardExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
             ),
-            if (i < leaders.length - 1) const SizedBox(width: 12),
-          ],
+          ),
+          SizeTransition(
+            sizeFactor: _contentAnimation,
+            axisAlignment: -1,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: availableWidth < 760
+                  ? Column(
+                      children: [
+                        for (var i = 0; i < leaders.length; i++) ...[
+                          _buildLeaderboardCard(
+                            leaders[i],
+                            medals[i],
+                            isDark,
+                            isMobile,
+                            i,
+                          ),
+                          if (i < leaders.length - 1) const SizedBox(height: 12),
+                        ],
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        for (var i = 0; i < leaders.length; i++) ...[
+                          Expanded(
+                            child: _buildLeaderboardCard(
+                              leaders[i],
+                              medals[i],
+                              isDark,
+                              false,
+                              i,
+                            ),
+                          ),
+                          if (i < leaders.length - 1) const SizedBox(width: 12),
+                        ],
+                      ],
+                    ),
+            ),
+          ),
         ],
       ),
     );
@@ -692,16 +889,30 @@ class _DriversPageState extends State<DriversPage>
     Map<String, dynamic> medal,
     bool isDark,
     bool isMobile,
+    int rank,
   ) {
+    final color = medal['color'] as Color;
+    final score = _driverScore(driver);
+    final heightOffset = rank == 0
+        ? 18.0
+        : rank == 1
+        ? 8.0
+        : 0.0;
     return Container(
-      padding: EdgeInsets.all(isMobile ? 10 : 12),
+      constraints: BoxConstraints(minHeight: isMobile ? 0 : 162 + heightOffset),
+      padding: EdgeInsets.all(isMobile ? 14 : 16),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFD,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: (medal['color'] as Color).withAlpha(77),
-          width: 1,
-        ),
+        color: isDark ? AppTheme.colorFF101827 : AppTheme.colorFFF8FAFD,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(58)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: isDark ? 0.13 : 0.08),
+            blurRadius: 18,
+            spreadRadius: -14,
+            offset: const Offset(0, 12),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -709,55 +920,57 @@ class _DriversPageState extends State<DriversPage>
         children: [
           Row(
             children: [
-              Icon(
-                medal['icon'] as IconData,
-                color: medal['color'] as Color,
-                size: isMobile ? 16 : 20,
+              _DriverInitialsAvatar(
+                name: _driverName(driver),
+                color: color,
+                size: 48,
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      driver['name'].toString().split(' ').last,
+                      _driverName(driver),
                       style: TextStyle(
-                        fontSize: isMobile ? 12 : 13,
-                        fontWeight: FontWeight.w700,
+                        fontSize: isMobile ? 14 : 16,
+                        fontWeight: FontWeight.w800,
                         color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
+                    const SizedBox(height: 3),
                     Text(
-                      'Score: ${driver['score']}',
+                      '#${rank + 1} driver',
                       style: TextStyle(
-                        fontSize: isMobile ? 10 : 11,
+                        fontSize: 12,
                         color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                       ),
                     ),
                   ],
                 ),
               ),
+              Icon(medal['icon'] as IconData, color: color, size: 24),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 14),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '${driver['trips']} trips',
-                style: TextStyle(
-                  fontSize: isMobile ? 10 : 11,
-                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                ),
-              ),
-              Text(
-                driver['revenue'],
-                style: TextStyle(
-                  fontSize: isMobile ? 11 : 12,
-                  fontWeight: FontWeight.w700,
-                  color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              _DriverScoreArc(score: score, color: _driverScoreColor(score), size: 64),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _LeaderboardFact(
+                      icon: Icons.route_rounded,
+                      label: '${_driverTrips(driver)} trips',
+                    ),
+                    const SizedBox(height: 8),
+                    _LeaderboardFact(
+                      icon: Icons.payments_rounded,
+                      label: '${_driverRevenue(driver)} earned',
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -767,443 +980,438 @@ class _DriversPageState extends State<DriversPage>
     );
   }
 
+  Widget _buildDriverListView(
+    List<Map<String, dynamic>> drivers,
+    bool isDark,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? AppTheme.white.withAlpha(16) : AppTheme.black.withAlpha(12),
+        ),
+      ),
+      child: Column(
+        children: [
+          _DriverListHeader(isDark: isDark),
+          for (var index = 0; index < drivers.length; index++)
+            _buildDriverListRow(drivers[index], isDark, index),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDriverListRow(
+    Map<String, dynamic> driver,
+    bool isDark,
+    int index,
+  ) {
+    final crudPolicy = FleetCrudPolicy.driver(driver);
+    final score = _driverScore(driver);
+    final statusColor = _driverStatusColor(driver);
+    return InkWell(
+      onTap: () => _showDriverDetails(driver, isDark),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 58),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: index.isEven
+              ? Colors.transparent
+              : (isDark ? AppTheme.white.withAlpha(7) : AppTheme.black.withAlpha(5)),
+          border: Border(
+            top: BorderSide(
+              color: isDark ? AppTheme.white.withAlpha(12) : AppTheme.black.withAlpha(8),
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            _DriverInitialsAvatar(
+              name: _driverName(driver),
+              color: statusColor,
+              size: 36,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: _DriverPrimaryText(
+                name: _driverName(driver),
+                id: _driverId(driver),
+                query: _searchQuery,
+                isDark: isDark,
+              ),
+            ),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _DriverStatusBadge(
+                  label: _statusLabel(_driverStatus(driver)),
+                  color: statusColor,
+                  onTap: () => setState(() => _statusFilter = _driverStatus(driver)),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: _DriverScoreInline(score: score, color: _driverScoreColor(score)),
+            ),
+            Expanded(
+              flex: 2,
+              child: Text(
+                _driverVehicle(driver),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                '${_driverTrips(driver)} trips',
+                style: TextStyle(color: isDark ? AppTheme.gray300 : AppTheme.gray600),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: _LicenseBadge(label: _licenseFilterLabel(driver)),
+            ),
+            _driverActionsMenu(driver, isDark, crudPolicy),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildDriverCard(Map<String, dynamic> driver, bool isDark) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final scale = (constraints.maxWidth / 350).clamp(0.85, 1.2);
+        final scale = (constraints.maxWidth / 390).clamp(0.88, 1.08);
         final crudPolicy = FleetCrudPolicy.driver(driver);
+        final statusColor = _driverStatusColor(driver);
+        final score = _driverScore(driver);
+        final scoreColor = _driverScoreColor(score);
+        final accent = statusColor;
 
-        return Container(
-          padding: EdgeInsets.fromLTRB(
-            16 * scale,
-            12 * scale,
-            16 * scale,
-            12 * scale,
-          ),
-          decoration: BoxDecoration(
-            color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isDark
-                  ? AppTheme.white.withAlpha(20)
-                  : AppTheme.black.withAlpha(20),
+        return _DriverHoverLift(
+          child: Container(
+            padding: EdgeInsets.all(14 * scale),
+            decoration: BoxDecoration(
+              color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: accent.withAlpha(isDark ? 62 : 52)),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: isDark ? 0.13 : 0.08),
+                  blurRadius: 20,
+                  spreadRadius: -12,
+                  offset: const Offset(0, 14),
+                ),
+              ],
             ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 40 * scale,
-                    height: 40 * scale,
-                    decoration: BoxDecoration(
-                      color: _driverStatusColor(driver).withAlpha(38),
-                      shape: BoxShape.circle,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _DriverInitialsAvatar(
+                      name: _driverName(driver),
+                      color: statusColor,
+                      size: 42 * scale,
                     ),
-                    child: Icon(
-                      Icons.person_rounded,
-                      color: _driverStatusColor(driver),
-                      size: 20 * scale,
-                    ),
-                  ),
-                  SizedBox(width: 12 * scale),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          driver['name'],
-                          style: TextStyle(
-                            fontSize: 16.0 * scale,
-                            fontWeight: FontWeight.w900,
-                            color: isDark
-                                ? AppTheme.white
-                                : AppTheme.colorFF2C3E50,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        SizedBox(height: 2 * scale),
-                        Text(
-                          driver['license'],
-                          style: TextStyle(
-                            fontSize: 12.0 * scale,
-                            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 10 * scale,
-                      vertical: 5 * scale,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _driverStatusColor(driver).withAlpha(38),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _statusLabel(driver['status']),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _driverStatusColor(driver),
+                    SizedBox(width: 12 * scale),
+                    Expanded(
+                      child: _DriverPrimaryText(
+                        name: _driverName(driver),
+                        id: _driverId(driver),
+                        query: _searchQuery,
+                        isDark: isDark,
+                        allowWrap: true,
                       ),
                     ),
-                  ),
-                  PopupMenuButton<String>(
-                    tooltip: 'Driver actions',
-                    onSelected: (value) async {
-                      if (value == 'view') {
-                        await _showDriverDetails(driver, isDark);
-                      } else if (value == 'deactivate') {
-                        if (!crudPolicy.canDeactivate) {
-                          _showDriverActionMessage(
-                            crudPolicy.deactivateDisabledReason,
-                          );
-                          return;
-                        }
-                        final confirmed = await _confirmDeactivateDriver(
-                          driver,
-                          isDark,
-                        );
-                        if (!confirmed) {
-                          return;
-                        }
-                        try {
-                          await deactivateDriverInBackend(driver);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text('Driver deactivated successfully.'),
-                            ),
-                          );
-                        } catch (error) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text(
-                                FormValidation.backendError(
-                                  error,
-                                  'Driver deactivation could not be saved. The driver was restored.',
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                      } else if (value == 'reactivate') {
-                        if (!crudPolicy.canReactivate) {
-                          _showDriverActionMessage(
-                            crudPolicy.deactivateDisabledReason,
-                          );
-                          return;
-                        }
-                        try {
-                          await reactivateDriverInBackend(driver);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text('Driver reactivated successfully.'),
-                            ),
-                          );
-                        } catch (error) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text(
-                                FormValidation.backendError(
-                                  error,
-                                  'Driver reactivation could not be saved. The driver was restored.',
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                      } else if (value == 'edit') {
-                        _showEditDriverModal(driver);
-                      } else if (value == 'delete') {
-                        if (!crudPolicy.canDelete) {
-                          _showDriverActionMessage(
-                            crudPolicy.deleteDisabledReason,
-                          );
-                          return;
-                        }
-                        final confirmed = await _confirmDeleteDriver(
-                          driver,
-                          isDark,
-                        );
-                        if (!confirmed) return;
-                        try {
-                          await deleteDriverInBackend(driver);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text('Driver deleted successfully.'),
-                            ),
-                          );
-                        } catch (error) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text(
-                                FormValidation.backendError(
-                                  error,
-                                  'Driver could not be deleted.',
-                                ),
-                              ),
-                            ),
-                          );
-                        }
-                      } else if (value == 'anonymize') {
-                        final reason = await _confirmAnonymizeDriver(
-                          driver,
-                          isDark,
-                        );
-                        if (reason == null || reason.trim().isEmpty) {
-                          return;
-                        }
-                        try {
-                          await anonymizeDriverInBackend(
-                            driver,
-                            reason: reason.trim(),
-                          );
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text('Driver personal data anonymized.'),
-                            ),
-                          );
-                        } catch (_) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              content: Text(
-                                'Driver personal data could not be anonymized.',
-                              ),
-                            ),
-                          );
-                        }
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'view',
-                        child: _DriverActionMenuItem(
-                          icon: Icons.visibility_rounded,
-                          label: 'View Details',
+                    SizedBox(width: 8 * scale),
+                    _DriverStatusBadge(
+                      label: _statusLabel(_driverStatus(driver)),
+                      color: statusColor,
+                      onTap: () => setState(
+                        () => _statusFilter = _driverStatus(driver),
+                      ),
+                    ),
+                    _driverActionsMenu(driver, isDark, crudPolicy),
+                  ],
+                ),
+                SizedBox(height: 13 * scale),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '$score',
+                        style: TextStyle(
+                          fontSize: 32 * scale,
+                          fontWeight: FontWeight.w900,
+                          color: scoreColor,
                         ),
                       ),
-                      if (CrudPermissions.canEdit(CrudEntity.drivers))
-                        PopupMenuItem(
-                          value: 'edit',
-                          enabled: crudPolicy.canEdit,
-                          child: _DriverActionMenuItem(
-                            icon: Icons.edit_rounded,
-                            label: crudPolicy.canEdit
-                                ? 'Edit'
-                                : 'Edit - GeoTab read-only',
-                          ),
+                      TextSpan(
+                        text: ' / 100',
+                        style: TextStyle(
+                          fontSize: 13 * scale,
+                          fontWeight: FontWeight.w800,
+                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                         ),
-                      if (CrudPermissions.canEdit(CrudEntity.drivers) &&
-                          _isDriverInactive(driver))
-                        PopupMenuItem(
-                          value: 'reactivate',
-                          enabled: crudPolicy.canReactivate,
-                          child: _DriverActionMenuItem(
-                            icon: Icons.person_add_alt_1_rounded,
-                            label: 'Reactivate',
-                          ),
-                        ),
-                      if (CrudPermissions.canDelete(CrudEntity.drivers) &&
-                          !_isDriverInactive(driver))
-                        PopupMenuItem(
-                          value: 'deactivate',
-                          enabled: crudPolicy.canDeactivate,
-                          child: _DriverActionMenuItem(
-                            icon: Icons.person_off_rounded,
-                            label: crudPolicy.canDeactivate
-                                ? 'Deactivate'
-                                : 'Deactivate - unavailable',
-                          ),
-                        ),
-                      if (CrudPermissions.canDelete(CrudEntity.drivers))
-                        PopupMenuItem(
-                          value: 'delete',
-                          enabled: crudPolicy.canDelete,
-                          child: _DriverActionMenuItem(
-                            icon: Icons.delete_outline_rounded,
-                            label: crudPolicy.canDelete
-                                ? 'Delete'
-                                : 'Delete - managed only',
-                            destructive: true,
-                          ),
-                        ),
-                      if (CrudPermissions.isSuperAdmin &&
-                          _isDriverInactive(driver))
-                        const PopupMenuItem(
-                          value: 'anonymize',
-                          child: _DriverActionMenuItem(
-                            icon: Icons.privacy_tip_outlined,
-                            label: 'Anonymize personal data',
-                          ),
-                        ),
+                      ),
                     ],
                   ),
-                ],
-              ),
-              SizedBox(height: 12 * scale),
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.local_shipping_rounded,
-                              size: 16.0 * scale,
-                              color: isDark
-                                  ? AppTheme.gray500
-                                  : AppTheme.gray600,
-                            ),
-                            SizedBox(width: 4 * scale),
-                            Text(
-                              '${driver['trips']} trips',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark
-                                    ? AppTheme.gray400
-                                    : AppTheme.gray600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 4 * scale),
-                        Text(
-                          driver['revenue'],
-                          style: TextStyle(
-                            fontSize: 14.0 * scale,
-                            fontWeight: FontWeight.w700,
-                            color: isDark
-                                ? AppTheme.white
-                                : AppTheme.colorFF2C3E50,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        SizedBox(height: 4 * scale),
-                        Text(
-                          'License expiry: ${driver['licenseExpiry'] ?? 'N/A'}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (_licenseExpiryWarning(driver) != null) ...[
-                          SizedBox(height: 6 * scale),
-                          _licenseExpiryWarningBadge(driver, scale),
-                        ],
-                      ],
+                ),
+                SizedBox(height: 7 * scale),
+                Tooltip(
+                  message: 'Score $score/100 - ${_scoreTooltip(driver)}',
+                  child: _DriverScoreBar(score: score, color: scoreColor),
+                ),
+                SizedBox(height: 13 * scale),
+                _DriverCardFact(
+                  icon: Icons.local_shipping_rounded,
+                  label: 'Vehicle',
+                  value: _driverVehicle(driver),
+                  query: _searchQuery,
+                ),
+                SizedBox(height: 7 * scale),
+                _DriverCardFact(
+                  icon: Icons.route_rounded,
+                  label: 'Trips',
+                  value:
+                      '${_driverTrips(driver)} trips | ${_driverRevenue(driver)} earned',
+                ),
+                SizedBox(height: 7 * scale),
+                _DriverCardFact(
+                  icon: Icons.schedule_rounded,
+                  label: 'Delays',
+                  value: _driverDelayText(driver),
+                ),
+                SizedBox(height: 10 * scale),
+                _DriverCardDivider(isDark: isDark),
+                SizedBox(height: 10 * scale),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _DriverLicenseLine(
+                        label: _licenseFilterLabel(driver),
+                        expiry: _licenseExpiryText(driver),
+                      ),
                     ),
-                  ),
-                  SizedBox(width: 12 * scale),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.star_rounded,
-                              size: 16.0 * scale,
-                              color: AppTheme.colorFFFFA500,
-                            ),
-                            SizedBox(width: 4 * scale),
-                            Text(
-                              'Score: ${driver['score']}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark
-                                    ? AppTheme.gray400
-                                    : AppTheme.gray600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 4 * scale),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.access_time_rounded,
-                              size: 14.0 * scale,
-                              color: isDark
-                                  ? AppTheme.gray500
-                                  : AppTheme.gray600,
-                            ),
-                            SizedBox(width: 4 * scale),
-                            Text(
-                              '${driver['delays']} delays',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark
-                                    ? AppTheme.gray400
-                                    : AppTheme.gray600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 4 * scale),
-                        Text(
-                          'Vehicle: ${driver['assignedVehicle'] ?? 'N/A'}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        SizedBox(height: 4 * scale),
-                        Wrap(
-                          spacing: 8 * scale,
-                          runSpacing: 6 * scale,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            GeoTabSyncStatusBadge.fromEntity(
-                              driver,
-                              compact: true,
-                              scale: scale,
-                            ),
-                            _fleetCrudScopeChip(crudPolicy, isDark, scale),
-                            _pushToGeotabButton(
-                              enabled: crudPolicy.canPushToGeotab,
-                              disabledReason: crudPolicy.pushDisabledReason,
-                              onPressed: () => _pushDriverToGeotab(driver),
-                              scale: scale,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
+                ),
+                if (_licenseExpiryWarning(driver) != null) ...[
+                  SizedBox(height: 6 * scale),
+                  _licenseExpiryWarningBadge(driver, scale),
                 ],
-              ),
-            ],
+                SizedBox(height: 10 * scale),
+                Wrap(
+                  spacing: 8 * scale,
+                  runSpacing: 8 * scale,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    GeoTabSyncStatusBadge.fromEntity(
+                      driver,
+                      compact: true,
+                      scale: scale,
+                    ),
+                    _fleetCrudScopeChip(crudPolicy, isDark, scale),
+                    _pushToGeotabButton(
+                      enabled: crudPolicy.canPushToGeotab,
+                      disabledReason: crudPolicy.pushDisabledReason,
+                      onPressed: () => _pushDriverToGeotab(driver),
+                      scale: scale,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+
+  PopupMenuButton<String> _driverActionsMenu(
+    Map<String, dynamic> driver,
+    bool isDark,
+    FleetCrudPolicy crudPolicy,
+  ) {
+    return PopupMenuButton<String>(
+      tooltip: 'Driver actions',
+      onSelected: (value) async {
+        if (value == 'view') {
+          await _showDriverDetails(driver, isDark);
+        } else if (value == 'deactivate') {
+          if (!crudPolicy.canDeactivate) {
+            _showDriverActionMessage(crudPolicy.deactivateDisabledReason);
+            return;
+          }
+          final confirmed = await _confirmDeactivateDriver(driver, isDark);
+          if (!confirmed) return;
+          try {
+            await deactivateDriverInBackend(driver);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('Driver deactivated successfully.'),
+              ),
+            );
+          } catch (error) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text(
+                  FormValidation.backendError(
+                    error,
+                    'Driver deactivation could not be saved. The driver was restored.',
+                  ),
+                ),
+              ),
+            );
+          }
+        } else if (value == 'reactivate') {
+          if (!crudPolicy.canReactivate) {
+            _showDriverActionMessage(crudPolicy.deactivateDisabledReason);
+            return;
+          }
+          try {
+            await reactivateDriverInBackend(driver);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('Driver reactivated successfully.'),
+              ),
+            );
+          } catch (error) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text(
+                  FormValidation.backendError(
+                    error,
+                    'Driver reactivation could not be saved. The driver was restored.',
+                  ),
+                ),
+              ),
+            );
+          }
+        } else if (value == 'edit') {
+          _showEditDriverModal(driver);
+        } else if (value == 'delete') {
+          if (!crudPolicy.canDelete) {
+            _showDriverActionMessage(crudPolicy.deleteDisabledReason);
+            return;
+          }
+          final confirmed = await _confirmDeleteDriver(driver, isDark);
+          if (!confirmed) return;
+          try {
+            await deleteDriverInBackend(driver);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('Driver deleted successfully.'),
+              ),
+            );
+          } catch (error) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text(
+                  FormValidation.backendError(error, 'Driver could not be deleted.'),
+                ),
+              ),
+            );
+          }
+        } else if (value == 'anonymize') {
+          final reason = await _confirmAnonymizeDriver(driver, isDark);
+          if (reason == null || reason.trim().isEmpty) return;
+          try {
+            await anonymizeDriverInBackend(driver, reason: reason.trim());
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('Driver personal data anonymized.'),
+              ),
+            );
+          } catch (_) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                behavior: SnackBarBehavior.floating,
+                content: Text('Driver personal data could not be anonymized.'),
+              ),
+            );
+          }
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: 'view',
+          child: _DriverActionMenuItem(
+            icon: Icons.visibility_rounded,
+            label: 'View Details',
+          ),
+        ),
+        if (CrudPermissions.canEdit(CrudEntity.drivers))
+          PopupMenuItem(
+            value: 'edit',
+            enabled: crudPolicy.canEdit,
+            child: _DriverActionMenuItem(
+              icon: Icons.edit_rounded,
+              label: crudPolicy.canEdit ? 'Edit' : 'Edit - GeoTab read-only',
+            ),
+          ),
+        if (CrudPermissions.canEdit(CrudEntity.drivers) && _isDriverInactive(driver))
+          PopupMenuItem(
+            value: 'reactivate',
+            enabled: crudPolicy.canReactivate,
+            child: const _DriverActionMenuItem(
+              icon: Icons.person_add_alt_1_rounded,
+              label: 'Reactivate',
+            ),
+          ),
+        if (CrudPermissions.canDelete(CrudEntity.drivers) && !_isDriverInactive(driver))
+          PopupMenuItem(
+            value: 'deactivate',
+            enabled: crudPolicy.canDeactivate,
+            child: _DriverActionMenuItem(
+              icon: Icons.person_off_rounded,
+              label: crudPolicy.canDeactivate
+                  ? 'Deactivate'
+                  : 'Deactivate - unavailable',
+            ),
+          ),
+        if (CrudPermissions.canDelete(CrudEntity.drivers))
+          PopupMenuItem(
+            value: 'delete',
+            enabled: crudPolicy.canDelete,
+            child: _DriverActionMenuItem(
+              icon: Icons.delete_outline_rounded,
+              label: crudPolicy.canDelete ? 'Delete' : 'Delete - managed only',
+              destructive: true,
+            ),
+          ),
+        if (CrudPermissions.isSuperAdmin && _isDriverInactive(driver))
+          const PopupMenuItem(
+            value: 'anonymize',
+            child: _DriverActionMenuItem(
+              icon: Icons.privacy_tip_outlined,
+              label: 'Anonymize personal data',
+            ),
+          ),
+      ],
     );
   }
 
@@ -1481,7 +1689,7 @@ class _DriversPageState extends State<DriversPage>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'This removes license, phone, email, address, and emergency contact for $name while preserving trip history.',
+              'This removes stored personal contact details for $name while preserving trip history.',
               style: TextStyle(
                 color: isDark ? AppTheme.gray300 : AppTheme.colorFF475569,
               ),
@@ -1590,7 +1798,7 @@ class _DriversPageState extends State<DriversPage>
     }
   }
 
-  Widget _buildEmptyState(bool isDark) {
+  Widget _buildEmptyState(bool isDark, {bool filteredOut = false}) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -1613,7 +1821,7 @@ class _DriversPageState extends State<DriversPage>
           ),
           const SizedBox(height: 24),
           Text(
-            'No drivers registered yet',
+            filteredOut ? 'No drivers found' : 'No drivers registered yet',
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w700,
@@ -1622,7 +1830,9 @@ class _DriversPageState extends State<DriversPage>
           ),
           const SizedBox(height: 8),
           Text(
-            'Create a complete driver profile with license, vehicle assignment, and emergency contact details.',
+            filteredOut
+                ? 'Try clearing the active search and filters to show all demo drivers.'
+                : 'Create a driver assignment profile for dispatch and tracking.',
             style: TextStyle(
               fontSize: 14,
               color: isDark ? AppTheme.gray500 : AppTheme.gray500,
@@ -1630,7 +1840,13 @@ class _DriversPageState extends State<DriversPage>
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 20),
-          if (CrudPermissions.canCreate(CrudEntity.drivers))
+          if (filteredOut)
+            OutlinedButton.icon(
+              onPressed: _clearDriverFilters,
+              icon: const Icon(Icons.filter_alt_off_rounded),
+              label: const Text('Clear filters'),
+            )
+          else if (CrudPermissions.canCreate(CrudEntity.drivers))
             FilledButton.icon(
               onPressed: _showAddDriverModal,
               icon: const Icon(Icons.person_add_rounded),
@@ -1643,6 +1859,806 @@ class _DriversPageState extends State<DriversPage>
 }
 
 // ADD DRIVER DIALOG
+
+class _DriverCardWrap extends StatelessWidget {
+  const _DriverCardWrap({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 18.0;
+        final maxWidth = constraints.maxWidth;
+        final columns = maxWidth < 760
+            ? 1
+            : maxWidth < 1120
+            ? 2
+            : 3;
+        final cardWidth = (maxWidth - spacing * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          alignment: WrapAlignment.start,
+          children: [
+            for (final child in children)
+              SizedBox(
+                width: cardWidth,
+                child: child,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _DriverSearchField extends StatelessWidget {
+  const _DriverSearchField({
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
+    required this.isDark,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        hintText: 'Search by name, driver ID, or vehicle...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(12),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverViewToggle extends StatelessWidget {
+  const _DriverViewToggle({
+    required this.gridActive,
+    required this.onGrid,
+    required this.onList,
+  });
+
+  final bool gridActive;
+  final VoidCallback onGrid;
+  final VoidCallback onList;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF1A1D23,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.white.withAlpha(18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ViewToggleButton(
+            icon: Icons.grid_view_rounded,
+            active: gridActive,
+            tooltip: 'Grid view',
+            onTap: onGrid,
+          ),
+          _ViewToggleButton(
+            icon: Icons.view_list_rounded,
+            active: !gridActive,
+            tooltip: 'List view',
+            onTap: onList,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ViewToggleButton extends StatelessWidget {
+  const _ViewToggleButton({
+    required this.icon,
+    required this.active,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool active;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          width: 38,
+          height: 36,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.18)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            color: active ? AppTheme.successGreen : AppTheme.gray400,
+            size: 19,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverResultCount extends StatelessWidget {
+  const _DriverResultCount({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        '$count drivers shown',
+        style: const TextStyle(
+          color: AppTheme.infoBlue,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverFilterChip extends StatelessWidget {
+  const _DriverFilterChip({
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onSelected,
+    required this.onClear,
+    this.activeWhen = 'All',
+  });
+
+  final String label;
+  final String value;
+  final List<String> options;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onClear;
+  final String activeWhen;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = value != activeWhen;
+    return PopupMenuButton<String>(
+      initialValue: value,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final option in options)
+          PopupMenuItem(value: option, child: Text(option)),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: active
+              ? AppTheme.successGreen.withValues(alpha: 0.13)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              active ? '$label: $value' : label,
+              style: TextStyle(
+                color: active ? AppTheme.successGreen : AppTheme.gray300,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: active ? AppTheme.successGreen : AppTheme.gray400,
+            ),
+            if (active) ...[
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: onClear,
+                borderRadius: BorderRadius.circular(999),
+                child: const Icon(Icons.close_rounded, size: 15),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverSoftPill extends StatelessWidget {
+  const _DriverSoftPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(width: 3),
+          Icon(Icons.keyboard_arrow_down_rounded, size: 15, color: color),
+        ],
+      ),
+    );
+  }
+}
+
+class _DriverInitialsAvatar extends StatelessWidget {
+  const _DriverInitialsAvatar({
+    required this.name,
+    required this.color,
+    required this.size,
+  });
+
+  final String name;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final initials = name
+        .split(' ')
+        .where((part) => part.trim().isNotEmpty)
+        .take(2)
+        .map((part) => part[0].toUpperCase())
+        .join();
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.18),
+        shape: BoxShape.circle,
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        initials.isEmpty ? 'DR' : initials,
+        style: TextStyle(
+          color: color,
+          fontSize: size * 0.34,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverPrimaryText extends StatelessWidget {
+  const _DriverPrimaryText({
+    required this.name,
+    required this.id,
+    required this.query,
+    required this.isDark,
+    this.allowWrap = false,
+  });
+
+  final String name;
+  final String id;
+  final String query;
+  final bool isDark;
+  final bool allowWrap;
+
+  @override
+  Widget build(BuildContext context) {
+    final textColor = isDark ? AppTheme.white : AppTheme.colorFF111827;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RichText(
+          maxLines: allowWrap ? 2 : 1,
+          overflow: TextOverflow.ellipsis,
+          text: _highlightSpan(
+            name,
+            query,
+            TextStyle(
+              fontSize: name.length > 24 ? 13 : 15,
+              fontWeight: FontWeight.w900,
+              color: textColor,
+            ),
+          ),
+        ),
+        const SizedBox(height: 3),
+        RichText(
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          text: _highlightSpan(
+            'Driver ID: $id',
+            query,
+            TextStyle(
+              fontSize: 12,
+              color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+TextSpan _highlightSpan(String text, String query, TextStyle baseStyle) {
+  final normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.isEmpty) {
+    return TextSpan(text: text, style: baseStyle);
+  }
+  final lower = text.toLowerCase();
+  final start = lower.indexOf(normalizedQuery);
+  if (start < 0) {
+    return TextSpan(text: text, style: baseStyle);
+  }
+  final end = start + normalizedQuery.length;
+  return TextSpan(
+    style: baseStyle,
+    children: [
+      TextSpan(text: text.substring(0, start)),
+      TextSpan(
+        text: text.substring(start, end),
+        style: baseStyle.copyWith(
+          color: AppTheme.goldAccent,
+          backgroundColor: AppTheme.goldAccent.withValues(alpha: 0.18),
+        ),
+      ),
+      TextSpan(text: text.substring(end)),
+    ],
+  );
+}
+
+class _DriverStatusBadge extends StatelessWidget {
+  const _DriverStatusBadge({
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.13),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.28)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverScoreBar extends StatelessWidget {
+  const _DriverScoreBar({required this.score, required this.color});
+
+  final int score;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: SizedBox(
+        height: 10,
+        child: Stack(
+          children: [
+            Container(color: AppTheme.white.withAlpha(18)),
+            FractionallySizedBox(
+              widthFactor: (score / 100).clamp(0.0, 1.0),
+              child: Container(color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverScoreInline extends StatelessWidget {
+  const _DriverScoreInline({required this.score, required this.color});
+
+  final int score;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 42,
+          child: Text(
+            '$score',
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            ),
+          ),
+        ),
+        Expanded(child: _DriverScoreBar(score: score, color: color)),
+      ],
+    );
+  }
+}
+
+class _DriverScoreArc extends StatelessWidget {
+  const _DriverScoreArc({
+    required this.score,
+    required this.color,
+    required this.size,
+  });
+
+  final int score;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _DriverScoreArcPainter(
+          progress: (score / 100).clamp(0.0, 1.0),
+          color: color,
+        ),
+        child: Center(
+          child: Text(
+            '$score',
+            style: TextStyle(
+              color: color,
+              fontSize: size * 0.28,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverScoreArcPainter extends CustomPainter {
+  const _DriverScoreArcPainter({required this.progress, required this.color});
+
+  final double progress;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.shortestSide / 2 - 5;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    final base = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round
+      ..color = AppTheme.white.withAlpha(18);
+    final active = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    canvas.drawArc(rect, -1.57, 6.28, false, base);
+    canvas.drawArc(rect, -1.57, 6.28 * progress, false, active);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DriverScoreArcPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
+  }
+}
+
+class _LeaderboardFact extends StatelessWidget {
+  const _LeaderboardFact({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, color: AppTheme.gray400, size: 15),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppTheme.gray300,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DriverCardFact extends StatelessWidget {
+  const _DriverCardFact({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.query = '',
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final String query;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 17, color: AppTheme.gray400),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            text: TextSpan(
+              style: const TextStyle(
+                color: AppTheme.gray300,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+              children: [
+                TextSpan(text: '$label: '),
+                _highlightSpan(
+                  value,
+                  query,
+                  const TextStyle(
+                    color: AppTheme.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DriverCardDivider extends StatelessWidget {
+  const _DriverCardDivider({required this.isDark});
+
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 1,
+      color: isDark ? AppTheme.white.withAlpha(14) : AppTheme.black.withAlpha(10),
+    );
+  }
+}
+
+class _DriverLicenseLine extends StatelessWidget {
+  const _DriverLicenseLine({required this.label, required this.expiry});
+
+  final String label;
+  final String expiry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(Icons.badge_rounded, color: AppTheme.gray400, size: 17),
+        const SizedBox(width: 8),
+        _LicenseBadge(label: label),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'License expiry: $expiry',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppTheme.gray300,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LicenseBadge extends StatelessWidget {
+  const _LicenseBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (label) {
+      'Valid' => AppTheme.successGreen,
+      'Expiring in 30d' => AppTheme.warningOrange,
+      'Expired' => AppTheme.errorRed,
+      _ => AppTheme.neutralGray,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverListHeader extends StatelessWidget {
+  const _DriverListHeader({required this.isDark});
+
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+      fontSize: 11,
+      fontWeight: FontWeight.w900,
+      letterSpacing: 0.2,
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF101827 : AppTheme.colorFFF8FAFD,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 48),
+          Expanded(flex: 3, child: Text('DRIVER', style: style)),
+          Expanded(child: Text('STATUS', style: style)),
+          Expanded(flex: 2, child: Text('SCORE', style: style)),
+          Expanded(flex: 2, child: Text('VEHICLE', style: style)),
+          Expanded(child: Text('TRIPS', style: style)),
+          Expanded(flex: 2, child: Text('LICENSE', style: style)),
+          const SizedBox(width: 42),
+        ],
+      ),
+    );
+  }
+}
+
+class _DriverHoverLift extends StatefulWidget {
+  const _DriverHoverLift({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_DriverHoverLift> createState() => _DriverHoverLiftState();
+}
+
+class _DriverHoverLiftState extends State<_DriverHoverLift> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedScale(
+        scale: _hovering ? 1.005 : 1,
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          curve: Curves.easeOut,
+          transform: Matrix4.translationValues(0, _hovering ? -2 : 0, 0),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
 
 class _DriverActionMenuItem extends StatelessWidget {
   final IconData icon;
@@ -1868,7 +2884,7 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
           ),
           child: Container(
             constraints: BoxConstraints(
-              maxWidth: isVerySmall ? sw - 16 : 480,
+              maxWidth: isVerySmall ? sw - 16 : (isMobile ? 520 : 680),
               maxHeight: sh - keyboardH - verticalInset * 2,
             ),
             decoration: BoxDecoration(
@@ -1887,88 +2903,86 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
                 ),
               ],
             ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Header
-                  Container(
-                    padding: EdgeInsets.all(isVerySmall ? 16 : 24),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [
-                          AppTheme.colorFF4B7BE5,
-                          AppTheme.colorFF1B2A4A,
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(isVerySmall ? 14 : 24),
-                        topRight: Radius.circular(isVerySmall ? 14 : 24),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: AppTheme.white.withAlpha(38),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.person_add_rounded,
-                            color: AppTheme.white,
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                widget.initialDriver == null
-                                    ? 'Add New Driver'
-                                    : 'Edit Driver',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppTheme.white,
-                                ),
-                              ),
-                              SizedBox(height: 2),
-                              Text(
-                                'Fill in the driver details below',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppTheme.white70,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () => Navigator.pop(context),
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: AppTheme.white.withAlpha(38),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(
-                              Icons.close_rounded,
-                              color: AppTheme.white,
-                              size: 20,
-                            ),
-                          ),
-                        ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.all(isVerySmall ? 16 : 24),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [
+                        AppTheme.colorFF4B7BE5,
+                        AppTheme.colorFF1B2A4A,
                       ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(isVerySmall ? 14 : 24),
+                      topRight: Radius.circular(isVerySmall ? 14 : 24),
                     ),
                   ),
-
-                  // Form
-                  Padding(
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppTheme.white.withAlpha(38),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.person_add_rounded,
+                          color: AppTheme.white,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.initialDriver == null
+                                  ? 'Add New Driver'
+                                  : 'Edit Driver',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.white,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Fill in the required driver profile and assignment details',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppTheme.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => Navigator.pop(context),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: AppTheme.white.withAlpha(38),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.close_rounded,
+                            color: AppTheme.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Padding(
                     padding: EdgeInsets.all(isVerySmall ? 16 : 24),
                     child: Form(
                       key: _formKey,
@@ -2134,8 +3148,9 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
                       ),
                     ),
                   ),
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         )

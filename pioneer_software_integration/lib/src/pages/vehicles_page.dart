@@ -28,6 +28,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
   static const String _cacheKey = 'vehicles_page';
 
   String _searchQuery = '';
+  bool _showGridView = true;
   String _statusFilter = 'All Status';
   String _typeFilter = 'All Types';
   String _fuelFilter = 'All Fuel';
@@ -149,8 +150,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
   int get _movingCount => vehiclesNotifier.value
       .where(
         (vehicle) =>
-            (vehicle['speed'] as num?)?.toInt() != null &&
-                (vehicle['speed'] as num).toInt() > 0 ||
+            ((vehicle['speed'] as num?)?.toInt() ?? 0) > 0 ||
             vehicle['isDriving'] == true,
       )
       .length;
@@ -200,74 +200,63 @@ class _VehiclesPageState extends State<VehiclesPage> {
           ),
           child: _buildHeader(isDark, screenWidth),
         ),
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.fromLTRB(
-            isMobile ? 16 : 24,
-            16,
-            isMobile ? 16 : 24,
-            0,
-          ),
-          color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
-          child: _buildSummaryStrip(isDark, isMobile),
-        ),
         Expanded(
           child: Container(
             color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
             child: RefreshIndicator(
               onRefresh: _refreshVehicles,
-              child: _filteredVehicles.isEmpty
-                  ? ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: [
-                        SizedBox(height: 420, child: _buildEmptyState(isDark)),
-                      ],
-                    )
-                  : ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.all(isMobile ? 16 : 24),
-                      children: [
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final gap = isMobile ? 12.0 : 20.0;
-                            final width = constraints.maxWidth;
-                            final columns = width >= 1040
-                                ? 3
-                                : width >= 680
-                                ? 2
-                                : 1;
-                            final cardWidth =
-                                (width - (gap * (columns - 1))) / columns;
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.all(isMobile ? 16 : 24),
+                children: [
+                  _buildFleetSummaryCards(isDark, isMobile),
+                  SizedBox(height: isMobile ? 14 : 20),
+                  if (_filteredVehicles.isEmpty)
+                    SizedBox(height: 360, child: _buildEmptyState(isDark))
+                  else
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final gap = isMobile ? 12.0 : 20.0;
+                        final width = constraints.maxWidth;
+                        final columns = !_showGridView
+                            ? 1
+                            : width >= 1040
+                            ? 3
+                            : width >= 680
+                            ? 2
+                            : 1;
+                        final cardWidth =
+                            (width - (gap * (columns - 1))) / columns;
 
-                            return Wrap(
-                              spacing: gap,
-                              runSpacing: gap,
-                              children: List.generate(
-                                _filteredVehicles.length,
-                                (index) {
-                                  return SizedBox(
-                                    width: cardWidth,
-                                    child:
-                                        _buildVehicleCard(
-                                              _filteredVehicles[index],
-                                              isDark,
-                                            )
-                                            .animate()
-                                            .fadeIn(duration: 500.ms)
-                                            .slideY(
-                                              begin: 0.2,
-                                              end: 0,
-                                              duration: 500.ms,
-                                              curve: Curves.easeOut,
-                                            ),
-                                  );
-                                },
-                              ),
-                            );
-                          },
-                        ),
-                      ],
+                        return Wrap(
+                          spacing: gap,
+                          runSpacing: gap,
+                          children: List.generate(
+                            _filteredVehicles.length,
+                            (index) {
+                              return SizedBox(
+                                width: cardWidth,
+                                child:
+                                    _buildVehicleCard(
+                                          _filteredVehicles[index],
+                                          isDark,
+                                        )
+                                        .animate()
+                                        .fadeIn(duration: 500.ms)
+                                        .slideY(
+                                          begin: 0.2,
+                                          end: 0,
+                                          duration: 500.ms,
+                                          curve: Curves.easeOut,
+                                        ),
+                              );
+                            },
+                          ),
+                        );
+                      },
                     ),
+                ],
+              ),
             ),
           ),
         ),
@@ -278,315 +267,147 @@ class _VehiclesPageState extends State<VehiclesPage> {
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ HEADER Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
   Widget _buildHeader(bool isDark, double screenWidth) {
-    if (screenWidth < 500) return _buildMobileHeader(isDark);
-    if (screenWidth < 900) return _buildCompactHeader(isDark);
-    return _buildDesktopHeader(isDark);
-  }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 720;
+        final addButton = _addButton(label: compact ? 'Add' : 'Add Vehicle');
+        final controls = Row(
+          mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            _VehicleViewToggle(
+              gridActive: _showGridView,
+              onGrid: () => setState(() => _showGridView = true),
+              onList: () => setState(() => _showGridView = false),
+            ),
+            const SizedBox(width: 12),
+            if (compact) Expanded(child: addButton) else addButton,
+          ],
+        );
+        final filterRow = Align(
+          alignment: Alignment.centerLeft,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _VehicleResultCount(count: _filteredVehicles.length),
+                const SizedBox(width: 10),
+                _VehicleFilterChip(
+                  label: 'Status',
+                  value: _statusFilter,
+                  activeWhen: 'All Status',
+                  options: const [
+                    'All Status',
+                    'Available',
+                    'On Trip',
+                    'Maintenance',
+                    'Inactive',
+                  ],
+                  onSelected: (value) => setState(() => _statusFilter = value),
+                  onClear: () => setState(() => _statusFilter = 'All Status'),
+                ),
+                const SizedBox(width: 8),
+                _VehicleFilterChip(
+                  label: 'Type',
+                  value: _typeFilter,
+                  activeWhen: 'All Types',
+                  options: const [
+                    'All Types',
+                    'Light Commercial Vehicle',
+                    'Drop-side Truck',
+                    'Refrigerated Truck',
+                    'Tanker',
+                    'Other',
+                  ],
+                  onSelected: (value) => setState(() => _typeFilter = value),
+                  onClear: () => setState(() => _typeFilter = 'All Types'),
+                ),
+                const SizedBox(width: 8),
+                _VehicleFilterChip(
+                  label: 'Fuel',
+                  value: _fuelFilter,
+                  activeWhen: 'All Fuel',
+                  options: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
+                  onSelected: (value) => setState(() => _fuelFilter = value),
+                  onClear: () => setState(() => _fuelFilter = 'All Fuel'),
+                ),
+                const SizedBox(width: 8),
+                _VehicleFilterChip(
+                  label: 'Sort',
+                  value: _sortMode,
+                  activeWhen: 'Plate A-Z',
+                  options: const [
+                    'Plate A-Z',
+                    'Plate Z-A',
+                    'Status A-Z',
+                    'Status Z-A',
+                    'Type A-Z',
+                    'Type Z-A',
+                  ],
+                  onSelected: (value) => setState(() => _sortMode = value),
+                  onClear: () => setState(() => _sortMode = 'Plate A-Z'),
+                ),
+              ],
+            ),
+          ),
+        );
 
-  Widget _buildDesktopHeader(bool isDark) {
-    return Row(
-      children: [
-        Expanded(child: _searchField(isDark)),
-        const SizedBox(width: 12),
-        _statusDropdown(isDark, isExpanded: false),
-        const SizedBox(width: 12),
-        _filterDropdown(
-          isDark,
-          value: _typeFilter,
-          values: const [
-            'All Types',
-            'Light Commercial Vehicle',
-            'Drop-side Truck',
-            'Refrigerated Truck',
-            'Tanker',
-            'Other',
-          ],
-          onChanged: (value) => setState(() => _typeFilter = value),
-        ),
-        const SizedBox(width: 12),
-        _filterDropdown(
-          isDark,
-          value: _fuelFilter,
-          values: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
-          onChanged: (value) => setState(() => _fuelFilter = value),
-        ),
-        const SizedBox(width: 12),
-        _filterDropdown(
-          isDark,
-          value: _sortMode,
-          values: const [
-            'Plate A-Z',
-            'Plate Z-A',
-            'Status A-Z',
-            'Status Z-A',
-            'Type A-Z',
-            'Type Z-A',
-          ],
-          onChanged: (value) => setState(() => _sortMode = value),
-        ),
-        const SizedBox(width: 12),
-        _addButton(label: 'Add Vehicle'),
-      ],
-    );
-  }
+        if (compact) {
+          return Column(
+            children: [
+              _searchField(isDark),
+              const SizedBox(height: 12),
+              controls,
+              const SizedBox(height: 12),
+              filterRow,
+            ],
+          );
+        }
 
-  Widget _buildCompactHeader(bool isDark) {
-    return Column(
-      children: [
-        _searchField(isDark),
-        const SizedBox(height: 12),
-        Row(
+        return Column(
           children: [
-            Expanded(child: _statusDropdown(isDark, isExpanded: true)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _filterDropdown(
-                isDark,
-                value: _typeFilter,
-                values: const [
-                  'All Types',
-                  'Light Commercial Vehicle',
-                  'Drop-side Truck',
-                  'Refrigerated Truck',
-                  'Tanker',
-                  'Other',
-                ],
-                onChanged: (value) => setState(() => _typeFilter = value),
-                isExpanded: true,
-              ),
+            Row(
+              children: [
+                Expanded(child: _searchField(isDark)),
+                const SizedBox(width: 14),
+                controls,
+              ],
             ),
+            const SizedBox(height: 12),
+            filterRow,
           ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _filterDropdown(
-                isDark,
-                value: _fuelFilter,
-                values: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
-                onChanged: (value) => setState(() => _fuelFilter = value),
-                isExpanded: true,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _filterDropdown(
-                isDark,
-                value: _sortMode,
-                values: const [
-                  'Plate A-Z',
-                  'Plate Z-A',
-                  'Status A-Z',
-                  'Status Z-A',
-                  'Type A-Z',
-                  'Type Z-A',
-                ],
-                onChanged: (value) => setState(() => _sortMode = value),
-                isExpanded: true,
-              ),
-            ),
-            const SizedBox(width: 12),
-            _addButton(label: 'Add'),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMobileHeader(bool isDark) {
-    return Column(
-      children: [
-        _searchField(isDark),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(child: _statusDropdown(isDark, isExpanded: true)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _filterDropdown(
-                isDark,
-                value: _typeFilter,
-                values: const [
-                  'All Types',
-                  'Light Commercial Vehicle',
-                  'Drop-side Truck',
-                  'Refrigerated Truck',
-                  'Tanker',
-                  'Other',
-                ],
-                onChanged: (value) => setState(() => _typeFilter = value),
-                isExpanded: true,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _filterDropdown(
-                isDark,
-                value: _fuelFilter,
-                values: const ['All Fuel', 'Diesel', 'Gasoline', 'Electric'],
-                onChanged: (value) => setState(() => _fuelFilter = value),
-                isExpanded: true,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _filterDropdown(
-                isDark,
-                value: _sortMode,
-                values: const [
-                  'Plate A-Z',
-                  'Plate Z-A',
-                  'Status A-Z',
-                  'Status Z-A',
-                  'Type A-Z',
-                  'Type Z-A',
-                ],
-                onChanged: (value) => setState(() => _sortMode = value),
-                isExpanded: true,
-              ),
-            ),
-            const SizedBox(width: 12),
-            _addButton(label: 'Add'),
-          ],
-        ),
-      ],
+        );
+      },
     );
   }
 
   Widget _searchField(bool isDark) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.08),
-        ),
+    return TextField(
+      onChanged: (v) => setState(() => _searchQuery = v),
+      style: TextStyle(
+        fontSize: 14,
+        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
       ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.search_rounded,
-            color: isDark ? AppTheme.gray600 : AppTheme.gray500,
-            size: 20,
+      decoration: InputDecoration(
+        hintText: 'Search by plate, type, driver, or model...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: TextField(
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: TextStyle(
-                fontSize: 14,
-                color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Search vehicles...',
-                hintStyle: TextStyle(
-                  color: isDark ? AppTheme.gray600 : AppTheme.gray500,
-                  fontSize: 14,
-                ),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statusDropdown(bool isDark, {required bool isExpanded}) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.08),
         ),
-      ),
-      child: DropdownButton<String>(
-        value: _statusFilter,
-        underline: const SizedBox(),
-        isExpanded: isExpanded,
-        icon: Icon(
-          Icons.keyboard_arrow_down_rounded,
-          color: isDark ? AppTheme.gray400 : AppTheme.gray700,
-          size: 20,
-        ),
-        style: TextStyle(
-          fontSize: 14,
-          color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-          fontWeight: FontWeight.w500,
-        ),
-        dropdownColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        items: [
-          'All Status',
-          'Available',
-          'On Trip',
-          'Maintenance',
-          'Inactive',
-        ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-        onChanged: (v) => setState(() => _statusFilter = v!),
-      ),
-    );
-  }
-
-  Widget _filterDropdown(
-    bool isDark, {
-    required String value,
-    required List<String> values,
-    required ValueChanged<String> onChanged,
-    bool isExpanded = false,
-  }) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF5F6F8,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.08),
-        ),
-      ),
-      child: DropdownButton<String>(
-        value: value,
-        underline: const SizedBox(),
-        isExpanded: isExpanded,
-        icon: Icon(
-          Icons.keyboard_arrow_down_rounded,
-          color: isDark ? AppTheme.gray400 : AppTheme.gray700,
-          size: 20,
-        ),
-        style: TextStyle(
-          fontSize: 14,
-          color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-          fontWeight: FontWeight.w500,
-        ),
-        dropdownColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        items: values
-            .map((item) => DropdownMenuItem(value: item, child: Text(item)))
-            .toList(),
-        onChanged: (next) {
-          if (next != null) onChanged(next);
-        },
       ),
     );
   }
@@ -600,22 +421,23 @@ class _VehiclesPageState extends State<VehiclesPage> {
       child: GestureDetector(
         onTap: _showAddVehicleModal,
         child: Container(
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          constraints: const BoxConstraints(minWidth: 172),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [AppTheme.colorFF4B7BE5, AppTheme.colorFF00D4FF],
-            ),
+            color: AppTheme.successGreen,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+                color: AppTheme.successGreen.withValues(alpha: 0.22),
+                blurRadius: 16,
+                spreadRadius: -10,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(Icons.add_rounded, color: AppTheme.white, size: 18),
               const SizedBox(width: 8),
@@ -635,6 +457,58 @@ class _VehiclesPageState extends State<VehiclesPage> {
   }
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ ADD VEHICLE MODAL Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+  Widget _buildFleetSummaryCards(bool isDark, bool isMobile) {
+    final cards = [
+      _VehicleSummaryData(
+        title: 'Fleet',
+        value: '${vehiclesNotifier.value.length}',
+        subtitle: 'registered vehicles',
+        icon: Icons.local_shipping_rounded,
+        color: AppTheme.colorFF4B7BE5,
+      ),
+      _VehicleSummaryData(
+        title: 'Reporting',
+        value: '$_reportingCount',
+        subtitle: 'live telemetry',
+        icon: Icons.gps_fixed_rounded,
+        color: AppTheme.colorFF14B8A6,
+      ),
+      _VehicleSummaryData(
+        title: 'Moving',
+        value: '$_movingCount',
+        subtitle: 'currently active',
+        icon: Icons.route_rounded,
+        color: AppTheme.successGreen,
+      ),
+      _VehicleSummaryData(
+        title: 'Maintenance',
+        value: '$_maintenanceCount',
+        subtitle: 'need attention',
+        icon: Icons.build_circle_rounded,
+        color: AppTheme.warningOrange,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = isMobile ? 12.0 : 16.0;
+        final columns = constraints.maxWidth < 720 ? 2 : 4;
+        final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final card in cards)
+              SizedBox(
+                width: width,
+                child: _VehicleSummaryCard(data: card, isDark: isDark),
+              ),
+          ],
+        );
+      },
+    );
+  }
 
   void _showAddVehicleModal() {
     showDialog(
@@ -897,7 +771,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final scale = (constraints.maxWidth / 350).clamp(0.84, 1.08);
-        final p = 16.0 * scale;
+        final p = 14.0 * scale;
         final locationLabel =
             vehicle['currentLocationLabel']?.toString().trim() ?? '';
         final importedOnly = _isGeotabOnlyVehicle(vehicle);
@@ -971,36 +845,34 @@ class _VehiclesPageState extends State<VehiclesPage> {
           ),
         ];
 
-        return InkWell(
-          onTap: () {
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: AppTheme.transparent,
-              builder: (_) => DraggableScrollableSheet(
-                initialChildSize: 0.75,
-                minChildSize: 0.5,
-                maxChildSize: 0.95,
-                expand: false,
-                builder: (_, __) => VehicleDetailsModal(vehicle: vehicle),
-              ),
-            );
-          },
-          borderRadius: BorderRadius.circular(18),
-          child: Container(
+        return _VehicleHoverLift(
+          child: InkWell(
+            onTap: () {
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: AppTheme.transparent,
+                builder: (_) => DraggableScrollableSheet(
+                  initialChildSize: 0.75,
+                  minChildSize: 0.5,
+                  maxChildSize: 0.95,
+                  expand: false,
+                  builder: (_, __) => VehicleDetailsModal(vehicle: vehicle),
+                ),
+              );
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
             decoration: BoxDecoration(
               color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: isDark
-                    ? AppTheme.white.withValues(alpha: 0.08)
-                    : AppTheme.black.withValues(alpha: 0.08),
-              ),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: statusColor.withAlpha(isDark ? 62 : 52)),
               boxShadow: [
                 BoxShadow(
-                  color: AppTheme.black.withValues(alpha: isDark ? 0.22 : 0.05),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
+                  color: statusColor.withValues(alpha: isDark ? 0.13 : 0.08),
+                  blurRadius: 20,
+                  spreadRadius: -12,
+                  offset: const Offset(0, 14),
                 ),
               ],
             ),
@@ -1015,12 +887,15 @@ class _VehiclesPageState extends State<VehiclesPage> {
                         width: 44 * scale,
                         height: 44 * scale,
                         decoration: BoxDecoration(
-                          color: AppTheme.colorFF1B2A4A,
-                          borderRadius: BorderRadius.circular(14),
+                          color: statusColor.withValues(alpha: 0.18),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: statusColor.withValues(alpha: 0.38),
+                          ),
                         ),
                         child: Icon(
                           Icons.local_shipping_rounded,
-                          color: AppTheme.colorFF4B7BE5,
+                          color: statusColor,
                           size: 22 * scale,
                         ),
                       ),
@@ -1079,29 +954,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
                           ],
                         ),
                       ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: 112 * scale),
-                        child: Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 10 * scale,
-                            vertical: 5 * scale,
-                          ),
-                          decoration: BoxDecoration(
-                            color: statusColor.withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            statusLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: statusColor,
-                            ),
-                          ),
-                        ),
-                      ),
+                      _VehicleStatusBadge(label: statusLabel, color: statusColor),
                       PopupMenuButton<String>(
                         tooltip: 'Vehicle actions',
                         color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
@@ -1161,9 +1014,9 @@ class _VehiclesPageState extends State<VehiclesPage> {
                       ),
                     ],
                   ),
-                  SizedBox(height: 14 * scale),
+                  SizedBox(height: 10 * scale),
                   _vehicleInfoWrap(infoItems, scale),
-                  SizedBox(height: 12 * scale),
+                  SizedBox(height: 10 * scale),
                   Container(
                     width: double.infinity,
                     padding: EdgeInsets.all(12 * scale),
@@ -1200,7 +1053,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
                       ],
                     ),
                   ),
-                  SizedBox(height: 12 * scale),
+                  SizedBox(height: 10 * scale),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -1238,12 +1091,12 @@ class _VehiclesPageState extends State<VehiclesPage> {
                     ],
                   ),
                   if (locationLabel.isNotEmpty) ...[
-                    SizedBox(height: 12 * scale),
+                    SizedBox(height: 10 * scale),
                     Container(
                       width: double.infinity,
                       padding: EdgeInsets.symmetric(
                         horizontal: 12 * scale,
-                        vertical: 10 * scale,
+                        vertical: 8 * scale,
                       ),
                       decoration: BoxDecoration(
                         color: isDark
@@ -1285,6 +1138,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
                 ],
               ),
             ),
+          ),
           ),
         );
       },
@@ -1610,147 +1464,6 @@ class _VehiclesPageState extends State<VehiclesPage> {
     );
   }
 
-  Widget _buildSummaryStrip(bool isDark, bool isMobile) {
-    final total = vehiclesNotifier.value.length;
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        _summaryCard(
-          title: 'Fleet',
-          value: '$total vehicles',
-          color: AppTheme.colorFF4B7BE5,
-          icon: Icons.local_shipping_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        _summaryCard(
-          title: 'Reporting',
-          value: '$_reportingCount live',
-          color: AppTheme.colorFF14B8A6,
-          icon: Icons.gps_fixed_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        _summaryCard(
-          title: 'Moving',
-          value: '$_movingCount active',
-          color: AppTheme.colorFF27AE60,
-          icon: Icons.route_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        _summaryCard(
-          title: 'Maintenance',
-          value: '$_maintenanceCount due',
-          color: AppTheme.colorFFF39C12,
-          icon: Icons.build_circle_rounded,
-          isDark: isDark,
-          isMobile: isMobile,
-        ),
-        InkWell(
-          onTap: () => refreshFleetSnapshotSilently(forceRefresh: true),
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: isMobile ? 14 : 16,
-              vertical: isMobile ? 12 : 14,
-            ),
-            decoration: BoxDecoration(
-              color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark
-                    ? AppTheme.white.withValues(alpha: 0.08)
-                    : AppTheme.black.withValues(alpha: 0.08),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.refresh_rounded,
-                  size: 18,
-                  color: AppTheme.colorFF4B7BE5,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Refresh fleet',
-                  style: TextStyle(
-                    fontSize: isMobile ? 12 : 13,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _summaryCard({
-    required String title,
-    required String value,
-    required Color color,
-    required IconData icon,
-    required bool isDark,
-    required bool isMobile,
-  }) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: isMobile ? 14 : 16,
-        vertical: isMobile ? 12 : 14,
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.08),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 18, color: color),
-          ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: isMobile ? 11 : 12,
-                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: isMobile ? 13 : 14,
-                  fontWeight: FontWeight.w800,
-                  color: isDark ? AppTheme.white : AppTheme.colorFF233244,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -2246,6 +1959,353 @@ class _AddVehicleDialogState extends State<_AddVehicleDialog> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _VehicleResultCount extends StatelessWidget {
+  const _VehicleResultCount({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        '$count vehicles shown',
+        style: const TextStyle(
+          color: AppTheme.infoBlue,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _VehicleSummaryData {
+  const _VehicleSummaryData({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+}
+
+class _VehicleSummaryCard extends StatelessWidget {
+  const _VehicleSummaryCard({required this.data, required this.isDark});
+
+  final _VehicleSummaryData data;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: data.color.withValues(alpha: isDark ? 0.34 : 0.2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: data.color.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: data.color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(data.icon, color: data.color, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  data.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  data.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  data.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VehicleViewToggle extends StatelessWidget {
+  const _VehicleViewToggle({
+    required this.gridActive,
+    required this.onGrid,
+    required this.onList,
+  });
+
+  final bool gridActive;
+  final VoidCallback onGrid;
+  final VoidCallback onList;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 50,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF1A1D23,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.white.withAlpha(18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _VehicleViewToggleButton(
+            icon: Icons.grid_view_rounded,
+            active: gridActive,
+            tooltip: 'Grid view',
+            onTap: onGrid,
+          ),
+          _VehicleViewToggleButton(
+            icon: Icons.view_list_rounded,
+            active: !gridActive,
+            tooltip: 'List view',
+            onTap: onList,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VehicleViewToggleButton extends StatelessWidget {
+  const _VehicleViewToggleButton({
+    required this.icon,
+    required this.active,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool active;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(9),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          width: 42,
+          height: 42,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.22)
+                : AppTheme.transparent,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(
+            icon,
+            color: active ? AppTheme.successGreen : AppTheme.gray400,
+            size: 20,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VehicleFilterChip extends StatelessWidget {
+  const _VehicleFilterChip({
+    required this.label,
+    required this.value,
+    required this.activeWhen,
+    required this.options,
+    required this.onSelected,
+    required this.onClear,
+  });
+
+  final String label;
+  final String value;
+  final String activeWhen;
+  final List<String> options;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = value != activeWhen;
+    return PopupMenuButton<String>(
+      initialValue: value,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final option in options)
+          PopupMenuItem(value: option, child: Text(option)),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: active
+              ? AppTheme.successGreen.withValues(alpha: 0.13)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              active ? '$label: $value' : label,
+              style: TextStyle(
+                color: active ? AppTheme.successGreen : AppTheme.gray300,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: active ? AppTheme.successGreen : AppTheme.gray400,
+            ),
+            if (active) ...[
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: onClear,
+                borderRadius: BorderRadius.circular(999),
+                child: const Icon(Icons.close_rounded, size: 15),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VehicleStatusBadge extends StatelessWidget {
+  const _VehicleStatusBadge({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 118),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        label.toUpperCase(),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+          color: color,
+        ),
+      ),
+    );
+  }
+}
+
+class _VehicleHoverLift extends StatefulWidget {
+  const _VehicleHoverLift({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_VehicleHoverLift> createState() => _VehicleHoverLiftState();
+}
+
+class _VehicleHoverLiftState extends State<_VehicleHoverLift> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedScale(
+        scale: _hovering ? 1.005 : 1,
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          curve: Curves.easeOut,
+          transform: Matrix4.translationValues(0, _hovering ? -2 : 0, 0),
+          child: widget.child,
+        ),
+      ),
     );
   }
 }

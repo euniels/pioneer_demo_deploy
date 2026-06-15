@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'local_fleet_mirror_service.dart';
 import 'network_status_service.dart';
 import 'offline_sync_service.dart';
+import 'offline_demo_backend.dart';
 
 class BackendApiException implements Exception {
   final String message;
@@ -48,6 +49,8 @@ class PaginatedBackendList {
 
 class BackendApiService {
   BackendApiService._();
+
+  static bool get isOfflineDemo => OfflineDemoBackend.enabled;
 
   static const String _configuredBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
@@ -119,6 +122,10 @@ class BackendApiService {
   }
 
   static Future<void> bootstrapOfflineSupport() {
+    if (isOfflineDemo) {
+      return Future<void>.value();
+    }
+
     if (_bootstrapFuture != null) {
       return _bootstrapFuture!;
     }
@@ -1918,6 +1925,11 @@ class BackendApiService {
   }
 
   static Future<void> _postNoBody(String path) async {
+    if (isOfflineDemo) {
+      OfflineDemoBackend.mutate('POST', path, const <String, dynamic>{});
+      return;
+    }
+
     if (_sessionTerminating && !_isAuthPath(path)) {
       throw const BackendApiException(
         'Session is signing out. Please sign in again before making changes.',
@@ -1949,6 +1961,15 @@ class BackendApiService {
     Map<String, dynamic> payload, {
     bool allowAuthRetry = true,
   }) async {
+    if (isOfflineDemo) {
+      final response = OfflineDemoBackend.mutate(method, path, payload);
+      final rawData = response['data'];
+      if (rawData is Map) {
+        return rawData.map((key, value) => MapEntry(key.toString(), value));
+      }
+      return {'offlineDemo': true, 'updated': true};
+    }
+
     if (_sessionTerminating && !_isAuthPath(path)) {
       throw const BackendApiException(
         'Session is signing out. Please sign in again before making changes.',
@@ -2019,6 +2040,11 @@ class BackendApiService {
   }
 
   static Future<void> _delete(String path) async {
+    if (isOfflineDemo) {
+      OfflineDemoBackend.mutate('DELETE', path, const <String, dynamic>{});
+      return;
+    }
+
     if (_sessionTerminating && !_isAuthPath(path)) {
       throw const BackendApiException(
         'Session is signing out. Please sign in again before making changes.',
@@ -2268,6 +2294,17 @@ class BackendApiService {
     String path,
     Duration cacheTtl,
   ) async {
+    if (isOfflineDemo) {
+      final decoded = OfflineDemoBackend.decodedResponse(path);
+      _cache[path] = _CachedBackendResponse(
+        payload: decoded,
+        expiresAt: DateTime.now().add(cacheTtl),
+        storedAt: DateTime.now(),
+      );
+      NetworkStatusService.reportOnline();
+      return decoded;
+    }
+
     if (_sessionTerminating) {
       throw const BackendApiException(
         'Session is signing out. Please sign in again.',

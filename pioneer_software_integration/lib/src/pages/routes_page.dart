@@ -23,6 +23,10 @@ class RoutesPage extends StatefulWidget {
 
 class _RoutesPageState extends State<RoutesPage> {
   List<Map<String, dynamic>> _routes = const [];
+  String _searchQuery = '';
+  bool _showGridView = true;
+  String _sourceFilter = 'All Sources';
+  String _statusFilter = 'All Status';
   String _sortMode = 'Name A-Z';
   bool _loading = true;
   String? _error;
@@ -86,19 +90,6 @@ class _RoutesPageState extends State<RoutesPage> {
       currentRoute: '/routes',
       title: 'Routes',
       subtitle: 'Reusable delivery templates and GeoTab route plans',
-      actions: [
-        IconButton(
-          tooltip: 'Refresh routes',
-          onPressed: () => _loadRoutes(forceRefresh: true),
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-        if (CrudPermissions.canCreate(CrudEntity.routes))
-          FilledButton.icon(
-            onPressed: _openCreateRoute,
-            icon: const Icon(Icons.add_road_rounded, size: 18),
-            label: const Text('New Route'),
-          ),
-      ],
       child: _buildBody(),
     );
   }
@@ -106,72 +97,169 @@ class _RoutesPageState extends State<RoutesPage> {
   Widget _buildBody() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final routes = _sortedRoutes;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 850;
     if (_loading) {
       return const PioneerRouteSkeletonBody(routeName: '/routes');
     }
 
-    return RefreshIndicator(
-      onRefresh: () => _loadRoutes(forceRefresh: true),
-      child: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          if (_error != null) ...[
-            PioneerStateCard(
-              icon: Icons.cloud_off_rounded,
-              title: 'Route refresh paused',
-              message: _error!,
-              actionLabel: 'Retry',
-              onAction: () => _loadRoutes(forceRefresh: true),
-              tone: PioneerStateTone.warning,
-            ),
-            const SizedBox(height: 12),
-          ],
-          _buildHeaderCard(isDark),
-          const SizedBox(height: 16),
-          _buildRouteControls(isDark),
-          const SizedBox(height: 12),
-          if (routes.isEmpty)
-            PioneerStateCard(
-              icon: Icons.alt_route_rounded,
-              title: 'No routes yet',
-              message:
-                  'Create a route template with ordered stops, then assign it to a vehicle when ready.',
-              actionLabel: 'Create route',
-              onAction: _openCreateRoute,
-            )
-          else
-            ...routes.map(
-              (route) => _RouteCard(
-                route: route,
-                onView: () => _openRouteDetails(route),
-                onEdit:
-                    CrudPermissions.canEdit(CrudEntity.routes) &&
-                        _canEdit(route)
-                    ? () => _openEditRoute(route)
-                    : null,
-                onDelete:
-                    CrudPermissions.canDelete(CrudEntity.routes) &&
-                        _canEdit(route) &&
-                        route['managedLocally'] == true
-                    ? () => _confirmDeleteRoute(route)
-                    : null,
-                onPush: canPushToGeotab(route)
-                    ? () => _pushRouteToGeotab(route)
-                    : null,
-                editBlockedReason: _routeEditBlockedReason(route),
-                deleteBlockedReason: _routeDeleteBlockedReason(route),
-                pushBlockedReason: canPushToGeotab(route)
-                    ? null
-                    : _routePushBlockedReason(route),
+    return Column(
+      children: [
+        _buildRoutesToolbar(isDark, isMobile),
+        _buildRouteFilterBar(isDark, isMobile),
+        Expanded(
+          child: Container(
+            color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+            child: RefreshIndicator(
+              onRefresh: () => _loadRoutes(forceRefresh: true),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.all(isMobile ? 16 : 24),
+                children: [
+                  if (_error != null) ...[
+                    PioneerStateCard(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Route refresh paused',
+                      message: _error!,
+                      actionLabel: 'Retry',
+                      onAction: () => _loadRoutes(forceRefresh: true),
+                      tone: PioneerStateTone.warning,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  _buildRouteSummaryCards(isDark, isMobile),
+                  SizedBox(height: isMobile ? 14 : 20),
+                  if (routes.isEmpty)
+                    PioneerStateCard(
+                      icon: Icons.alt_route_rounded,
+                      title: _routes.isEmpty ? 'No routes yet' : 'No routes found',
+                      message: _routes.isEmpty
+                          ? 'Create a route template with ordered stops, then assign it to a vehicle when ready.'
+                          : 'Try clearing the active search and filters to show all routes.',
+                      actionLabel: _routes.isEmpty
+                          ? 'Create route'
+                          : 'Clear filters',
+                      onAction: _routes.isEmpty
+                          ? _openCreateRoute
+                          : _clearRouteFilters,
+                    )
+                  else
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final gap = isMobile ? 12.0 : 20.0;
+                        final width = constraints.maxWidth;
+                        final columns = !_showGridView
+                            ? 1
+                            : width >= 1040
+                            ? 3
+                            : width >= 680
+                            ? 2
+                            : 1;
+                        final cardWidth =
+                            (width - (gap * (columns - 1))) / columns;
+
+                        return Wrap(
+                          spacing: gap,
+                          runSpacing: gap,
+                          children: [
+                            for (final route in routes)
+                              SizedBox(
+                                width: cardWidth,
+                                child: _RouteCard(
+                                  route: route,
+                                  onView: () => _openRouteDetails(route),
+                                  onEdit:
+                                      CrudPermissions.canEdit(
+                                            CrudEntity.routes,
+                                          ) &&
+                                          _canEdit(route)
+                                      ? () => _openEditRoute(route)
+                                      : null,
+                                  onDelete:
+                                      CrudPermissions.canDelete(
+                                            CrudEntity.routes,
+                                          ) &&
+                                          _canEdit(route) &&
+                                          route['managedLocally'] == true
+                                      ? () => _confirmDeleteRoute(route)
+                                      : null,
+                                  onPush: canPushToGeotab(route)
+                                      ? () => _pushRouteToGeotab(route)
+                                      : null,
+                                  editBlockedReason: _routeEditBlockedReason(
+                                    route,
+                                  ),
+                                  deleteBlockedReason: _routeDeleteBlockedReason(
+                                    route,
+                                  ),
+                                  pushBlockedReason: canPushToGeotab(route)
+                                      ? null
+                                      : _routePushBlockedReason(route),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                ],
               ),
             ),
-        ],
-      ),
+          ),
+        ),
+      ],
     );
   }
 
   List<Map<String, dynamic>> get _sortedRoutes {
-    final sorted = List<Map<String, dynamic>>.from(_routes);
+    var routes = _routes;
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      routes = routes.where((route) {
+        final name = (route['name'] ?? route['routeName'] ?? '')
+            .toString()
+            .toLowerCase();
+        final assigned =
+            (route['assignedVehicle'] ?? route['assignedVehiclePlate'] ?? '')
+                .toString()
+                .toLowerCase();
+        final description = (route['description'] ?? '')
+            .toString()
+            .toLowerCase();
+        return name.contains(query) ||
+            assigned.contains(query) ||
+            description.contains(query);
+      }).toList();
+    }
+
+    if (_sourceFilter != 'All Sources') {
+      routes = routes.where((route) {
+        final managed = route['managedLocally'] == true;
+        return _sourceFilter == 'PioneerPath'
+            ? managed
+            : _sourceFilter == 'GeoTab'
+            ? !managed
+            : true;
+      }).toList();
+    }
+
+    if (_statusFilter != 'All Status') {
+      routes = routes.where((route) {
+        final status =
+            (route['syncStatus'] ?? route['status'] ?? 'synced')
+                .toString()
+                .toLowerCase();
+        final inUse = route['inUseByActiveTrip'] == true;
+        return switch (_statusFilter) {
+          'In use' => inUse,
+          'Writable' => _canEdit(route),
+          'Pending approval' => status == 'pending_approval',
+          'Synced' => status == 'synced',
+          _ => true,
+        };
+      }).toList();
+    }
+
+    final sorted = List<Map<String, dynamic>>.from(routes);
     sorted.sort((a, b) {
       return switch (_sortMode) {
         'Name Z-A' => _compareRouteText(b, a, 'name'),
@@ -185,42 +273,210 @@ class _RoutesPageState extends State<RoutesPage> {
     return sorted;
   }
 
-  Widget _buildRouteControls(bool isDark) {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        SizedBox(
-          width: 220,
-          child: DropdownButtonFormField<String>(
-            initialValue: _sortMode,
-            decoration: const InputDecoration(labelText: 'Sort routes'),
-            items: const [
-              DropdownMenuItem(value: 'Name A-Z', child: Text('Name A-Z')),
-              DropdownMenuItem(value: 'Name Z-A', child: Text('Name Z-A')),
-              DropdownMenuItem(
-                value: 'Usage High-Low',
-                child: Text('Usage High-Low'),
-              ),
-              DropdownMenuItem(
-                value: 'Usage Low-High',
-                child: Text('Usage Low-High'),
-              ),
-              DropdownMenuItem(
-                value: 'Stops High-Low',
-                child: Text('Stops High-Low'),
-              ),
-              DropdownMenuItem(
-                value: 'Stops Low-High',
-                child: Text('Stops Low-High'),
-              ),
-            ],
-            onChanged: (value) =>
-                setState(() => _sortMode = value ?? 'Name A-Z'),
+  Widget _buildRoutesToolbar(bool isDark, bool isMobile) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
         ),
-      ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final addButton = _routeAddButton(label: compact ? 'Add' : 'Add Route');
+          final controls = Row(
+            mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              _RouteViewToggle(
+                gridActive: _showGridView,
+                onGrid: () => setState(() => _showGridView = true),
+                onList: () => setState(() => _showGridView = false),
+              ),
+              const SizedBox(width: 12),
+              if (compact) Expanded(child: addButton) else addButton,
+            ],
+          );
+
+          final search = _RouteSearchField(
+            value: _searchQuery,
+            onChanged: (value) => setState(() => _searchQuery = value.trim()),
+            onClear: () => setState(() => _searchQuery = ''),
+            isDark: isDark,
+          );
+
+          if (compact) {
+            return Column(
+              children: [
+                search,
+                const SizedBox(height: 12),
+                controls,
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              const SizedBox(width: 14),
+              controls,
+            ],
+          );
+        },
+      ),
     );
+  }
+
+  Widget _routeAddButton({required String label}) {
+    if (!CrudPermissions.canCreate(CrudEntity.routes)) {
+      return const SizedBox.shrink();
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: _openCreateRoute,
+        child: Container(
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          constraints: const BoxConstraints(minWidth: 172),
+          decoration: BoxDecoration(
+            color: AppTheme.successGreen,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.successGreen.withValues(alpha: 0.22),
+                blurRadius: 16,
+                spreadRadius: -10,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.add_road_rounded, color: AppTheme.white, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRouteFilterBar(bool isDark, bool isMobile) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _RouteResultCount(count: _sortedRoutes.length),
+              const SizedBox(width: 10),
+              _RouteFilterChip(
+                label: 'Source',
+                value: _sourceFilter,
+                activeWhen: 'All Sources',
+                options: const ['All Sources', 'PioneerPath', 'GeoTab'],
+                onSelected: (value) => setState(() => _sourceFilter = value),
+                onClear: () => setState(() => _sourceFilter = 'All Sources'),
+              ),
+              const SizedBox(width: 8),
+              _RouteFilterChip(
+                label: 'Status',
+                value: _statusFilter,
+                activeWhen: 'All Status',
+                options: const [
+                  'All Status',
+                  'Writable',
+                  'In use',
+                  'Pending approval',
+                  'Synced',
+                ],
+                onSelected: (value) => setState(() => _statusFilter = value),
+                onClear: () => setState(() => _statusFilter = 'All Status'),
+              ),
+              const SizedBox(width: 8),
+              _RouteFilterChip(
+                label: 'Sort',
+                value: _sortMode,
+                activeWhen: 'Name A-Z',
+                options: const [
+                  'Name A-Z',
+                  'Name Z-A',
+                  'Usage High-Low',
+                  'Usage Low-High',
+                  'Stops High-Low',
+                  'Stops Low-High',
+                ],
+                onSelected: (value) => setState(() => _sortMode = value),
+                onClear: () => setState(() => _sortMode = 'Name A-Z'),
+              ),
+              if (_hasActiveRouteFilters) ...[
+                const SizedBox(width: 10),
+                TextButton.icon(
+                  onPressed: _clearRouteFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 16),
+                  label: const Text('Clear'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool get _hasActiveRouteFilters =>
+      _searchQuery.isNotEmpty ||
+      _sourceFilter != 'All Sources' ||
+      _statusFilter != 'All Status' ||
+      _sortMode != 'Name A-Z';
+
+  void _clearRouteFilters() {
+    setState(() {
+      _searchQuery = '';
+      _sourceFilter = 'All Sources';
+      _statusFilter = 'All Status';
+      _sortMode = 'Name A-Z';
+    });
   }
 
   int _compareRouteText(
@@ -248,58 +504,63 @@ class _RoutesPageState extends State<RoutesPage> {
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
-  Widget _buildHeaderCard(bool isDark) {
+  Widget _buildRouteSummaryCards(bool isDark, bool isMobile) {
     final localCount = _routes
         .where((route) => route['managedLocally'] == true)
         .length;
     final geotabCount = _routes.length - localCount;
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-      ),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        alignment: WrapAlignment.spaceBetween,
-        children: [
-          _metric('Managed templates', '$localCount', Icons.route_rounded),
-          _metric('GeoTab plans', '$geotabCount', Icons.cloud_done_rounded),
-          _metric(
-            'Writable routes',
-            '${_routes.where(_canEdit).length}',
-            Icons.edit_road_rounded,
-          ),
-        ],
-      ),
+    final stopTotal = _routes.fold<int>(
+      0,
+      (sum, route) => sum + _routeStopCount(route),
     );
-  }
-
-  Widget _metric(String label, String value, IconData icon) {
-    return SizedBox(
-      width: 220,
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppTheme.primaryBlue.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: AppTheme.primaryBlue),
-          ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(value, style: AppTheme.getHeadingStyle(context)),
-              Text(label, style: AppTheme.getSubtitleStyle(context)),
-            ],
-          ),
-        ],
+    final cards = [
+      _RouteSummaryData(
+        title: 'Route library',
+        value: '${_routes.length}',
+        subtitle: 'total templates and plans',
+        icon: Icons.alt_route_rounded,
+        color: AppTheme.colorFF4B7BE5,
       ),
+      _RouteSummaryData(
+        title: 'PioneerPath',
+        value: '$localCount',
+        subtitle: 'managed local routes',
+        icon: Icons.route_rounded,
+        color: AppTheme.successGreen,
+      ),
+      _RouteSummaryData(
+        title: 'GeoTab plans',
+        value: '$geotabCount',
+        subtitle: 'read-only imported routes',
+        icon: Icons.cloud_done_rounded,
+        color: AppTheme.colorFF00A8E8,
+      ),
+      _RouteSummaryData(
+        title: 'Stops mapped',
+        value: '$stopTotal',
+        subtitle: 'route stop points',
+        icon: Icons.pin_drop_rounded,
+        color: AppTheme.warningOrange,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = isMobile ? 12.0 : 16.0;
+        final columns = constraints.maxWidth < 720 ? 2 : 4;
+        final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final card in cards)
+              SizedBox(
+                width: width,
+                child: _RouteSummaryCard(data: card, isDark: isDark),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -436,6 +697,246 @@ class _RoutesPageState extends State<RoutesPage> {
   }
 }
 
+class _RouteSearchField extends StatelessWidget {
+  const _RouteSearchField({
+    required this.value,
+    required this.onChanged,
+    required this.onClear,
+    required this.isDark,
+  });
+
+  final String value;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      onChanged: onChanged,
+      style: TextStyle(
+        fontSize: 14,
+        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+      ),
+      decoration: InputDecoration(
+        hintText: 'Search by route name, vehicle, or description...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: value.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteViewToggle extends StatelessWidget {
+  const _RouteViewToggle({
+    required this.gridActive,
+    required this.onGrid,
+    required this.onList,
+  });
+
+  final bool gridActive;
+  final VoidCallback onGrid;
+  final VoidCallback onList;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 50,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF1A1D23,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.white.withAlpha(18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _RouteViewToggleButton(
+            icon: Icons.grid_view_rounded,
+            active: gridActive,
+            tooltip: 'Grid view',
+            onTap: onGrid,
+          ),
+          _RouteViewToggleButton(
+            icon: Icons.view_list_rounded,
+            active: !gridActive,
+            tooltip: 'List view',
+            onTap: onList,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteViewToggleButton extends StatelessWidget {
+  const _RouteViewToggleButton({
+    required this.icon,
+    required this.active,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool active;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(9),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          width: 42,
+          height: 42,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.22)
+                : AppTheme.transparent,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(
+            icon,
+            color: active ? AppTheme.successGreen : AppTheme.gray400,
+            size: 20,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteResultCount extends StatelessWidget {
+  const _RouteResultCount({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        '$count routes shown',
+        style: const TextStyle(
+          color: AppTheme.infoBlue,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteFilterChip extends StatelessWidget {
+  const _RouteFilterChip({
+    required this.label,
+    required this.value,
+    required this.activeWhen,
+    required this.options,
+    required this.onSelected,
+    required this.onClear,
+  });
+
+  final String label;
+  final String value;
+  final String activeWhen;
+  final List<String> options;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = value != activeWhen;
+    return PopupMenuButton<String>(
+      initialValue: value,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final option in options)
+          PopupMenuItem(value: option, child: Text(option)),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: active
+              ? AppTheme.successGreen.withValues(alpha: 0.13)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              active ? '$label: $value' : label,
+              style: TextStyle(
+                color: active ? AppTheme.successGreen : AppTheme.gray300,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: active ? AppTheme.successGreen : AppTheme.gray400,
+            ),
+            if (active) ...[
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: onClear,
+                borderRadius: BorderRadius.circular(999),
+                child: const Icon(Icons.close_rounded, size: 15),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _RouteCard extends StatelessWidget {
   const _RouteCard({
     required this.route,
@@ -469,105 +970,152 @@ class _RouteCard extends StatelessWidget {
         route['assignedVehicle']?.toString() ??
         route['assignedVehiclePlate']?.toString() ??
         'Unassigned';
+    final managed = route['managedLocally'] == true;
+    final accent = managed ? AppTheme.successGreen : AppTheme.colorFF00A8E8;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      constraints: const BoxConstraints(minHeight: 190),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppTheme.primaryBlue.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(
-              Icons.alt_route_rounded,
-              color: AppTheme.primaryBlue,
-            ),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: isDark ? 0.34 : 0.22)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: isDark ? 0.12 : 0.07),
+            blurRadius: 20,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.alt_route_rounded, color: accent, size: 21),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      child: Text(
-                        route['name']?.toString() ??
-                            route['routeName']?.toString() ??
-                            'Untitled route',
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTheme.getHeadingStyle(context, fontSize: 16),
+                    Text(
+                      route['name']?.toString() ??
+                          route['routeName']?.toString() ??
+                          'Untitled route',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? AppTheme.white : AppTheme.colorFF233244,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    GeoTabSyncStatusBadge.fromEntity({
-                      ...route,
-                      'syncStatus': status,
-                    }, compact: true),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 14,
-                  runSpacing: 6,
-                  children: [
-                    _MiniFact(Icons.pin_drop_rounded, '$stopCount stops'),
-                    _MiniFact(Icons.local_shipping_rounded, assigned),
-                    _MiniFact(
-                      Icons.event_available_rounded,
-                      route['lastUsedAt']?.toString().isNotEmpty == true
-                          ? route['lastUsedAt'].toString()
-                          : 'Not used yet',
+                    const SizedBox(height: 3),
+                    Text(
+                      managed ? 'PioneerPath managed' : 'GeoTab route plan',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                      ),
                     ),
                   ],
                 ),
-                if (route['inUseByActiveTrip'] == true) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Read-only while assigned to an active trip.',
-                    style: AppTheme.getSubtitleStyle(context).copyWith(
-                      color: AppTheme.warningOrange,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ],
+              ),
+              GeoTabSyncStatusBadge.fromEntity({
+                ...route,
+                'syncStatus': status,
+              }, compact: true),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _RouteFactPill(Icons.pin_drop_rounded, '$stopCount stops'),
+              _RouteFactPill(Icons.local_shipping_rounded, assigned),
+              _RouteFactPill(
+                Icons.timeline_rounded,
+                '${route['usageCount'] ?? route['tripCount'] ?? 0} uses',
+              ),
+              _RouteFactPill(
+                Icons.event_available_rounded,
+                route['lastUsedAt']?.toString().isNotEmpty == true
+                    ? route['lastUsedAt'].toString()
+                    : 'Not used yet',
+              ),
+            ],
+          ),
+          if (route['inUseByActiveTrip'] == true) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.warningOrange.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: AppTheme.warningOrange.withValues(alpha: 0.22),
+                ),
+              ),
+              child: Text(
+                'Read-only while assigned to an active trip.',
+                style: TextStyle(
+                  color: AppTheme.warningOrange,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: 'View route',
-            onPressed: onView,
-            icon: const Icon(Icons.visibility_rounded),
-          ),
-          IconButton(
-            tooltip: onEdit == null
-                ? (editBlockedReason ?? 'Route cannot be edited.')
-                : 'Edit local route',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_rounded),
-          ),
-          IconButton(
-            tooltip: onPush == null
-                ? (pushBlockedReason ?? 'GeoTab is already up to date.')
-                : 'Push to GeoTab',
-            onPressed: onPush,
-            icon: const Icon(Icons.cloud_upload_outlined),
-          ),
-          IconButton(
-            tooltip: onDelete == null
-                ? (deleteBlockedReason ?? 'Route cannot be deleted.')
-                : 'Soft delete local route',
-            onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline_rounded),
+          ],
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.end,
+            children: [
+              _RouteActionButton(
+                tooltip: 'View route',
+                icon: Icons.visibility_rounded,
+                onPressed: onView,
+              ),
+              _RouteActionButton(
+                tooltip: onEdit == null
+                    ? (editBlockedReason ?? 'Route cannot be edited.')
+                    : 'Edit local route',
+                icon: Icons.edit_rounded,
+                onPressed: onEdit,
+              ),
+              _RouteActionButton(
+                tooltip: onPush == null
+                    ? (pushBlockedReason ?? 'GeoTab is already up to date.')
+                    : 'Push to GeoTab',
+                icon: Icons.cloud_upload_outlined,
+                onPressed: onPush,
+              ),
+              _RouteActionButton(
+                tooltip: onDelete == null
+                    ? (deleteBlockedReason ?? 'Route cannot be deleted.')
+                    : 'Soft delete local route',
+                icon: Icons.delete_outline_rounded,
+                onPressed: onDelete,
+                danger: true,
+              ),
+            ],
           ),
         ],
       ),
@@ -575,21 +1123,175 @@ class _RouteCard extends StatelessWidget {
   }
 }
 
-class _MiniFact extends StatelessWidget {
-  const _MiniFact(this.icon, this.label);
+class _RouteFactPill extends StatelessWidget {
+  const _RouteFactPill(this.icon, this.label);
 
   final IconData icon;
   final String label;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14, color: AppTheme.getMutedTextColor(context)),
-        const SizedBox(width: 5),
-        Text(label, style: AppTheme.getSubtitleStyle(context)),
-      ],
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF11161F : AppTheme.colorFFF7F9FC,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.06)
+              : AppTheme.black.withValues(alpha: 0.06),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: AppTheme.getMutedTextColor(context)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteActionButton extends StatelessWidget {
+  const _RouteActionButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.danger = false,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? AppTheme.colorFFE74C3C : AppTheme.colorFF4B7BE5;
+    return Tooltip(
+      message: tooltip,
+      child: IconButton.filledTonal(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18),
+        style: IconButton.styleFrom(
+          foregroundColor: onPressed == null ? AppTheme.gray500 : color,
+          backgroundColor: color.withValues(alpha: 0.12),
+          disabledBackgroundColor: AppTheme.gray500.withValues(alpha: 0.08),
+          minimumSize: const Size(38, 38),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteSummaryData {
+  const _RouteSummaryData({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+}
+
+class _RouteSummaryCard extends StatelessWidget {
+  const _RouteSummaryCard({required this.data, required this.isDark});
+
+  final _RouteSummaryData data;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: data.color.withValues(alpha: isDark ? 0.34 : 0.20),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: data.color.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: data.color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(data.icon, color: data.color, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  data.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  data.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  data.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

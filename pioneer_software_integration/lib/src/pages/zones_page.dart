@@ -69,7 +69,11 @@ class ZonesPage extends StatefulWidget {
 
 class _ZonesPageState extends State<ZonesPage> {
   List<Map<String, dynamic>> _zones = const [];
+  String _searchQuery = '';
+  bool _showGridView = true;
   String _typeFilter = 'All Types';
+  String _sourceFilter = 'All Sources';
+  String _statusFilter = 'All Status';
   String _sortMode = 'Name A-Z';
   bool _loading = true;
   String? _error;
@@ -127,93 +131,160 @@ class _ZonesPageState extends State<ZonesPage> {
       currentRoute: '/zones',
       title: 'Zones & Geofences',
       subtitle: 'Customer sites, depots, restricted areas, and route overlays',
-      actions: [
-        IconButton(
-          tooltip: 'Refresh zones',
-          onPressed: () => _loadZones(forceRefresh: true),
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-        if (CrudPermissions.canCreate(CrudEntity.zones))
-          FilledButton.icon(
-            onPressed: () => _openZoneEditor(),
-            icon: const Icon(Icons.add_location_alt_rounded, size: 18),
-            label: const Text('New Zone'),
-          ),
-      ],
       child: _buildBody(),
     );
   }
 
   Widget _buildBody() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 850;
     final zones = _filteredZones;
     if (_loading) {
       return const PioneerRouteSkeletonBody(routeName: '/zones');
     }
 
-    return RefreshIndicator(
-      onRefresh: () => _loadZones(forceRefresh: true),
-      child: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          if (_error != null) ...[
-            PioneerStateCard(
-              icon: Icons.cloud_off_rounded,
-              title: 'Zone refresh paused',
-              message: _error!,
-              actionLabel: 'Retry',
-              onAction: () => _loadZones(forceRefresh: true),
-              tone: PioneerStateTone.warning,
-            ),
-            const SizedBox(height: 12),
-          ],
-          _ZoneSummary(zones: _zones),
-          const SizedBox(height: 12),
-          _buildZoneControls(),
-          const SizedBox(height: 12),
-          if (zones.isEmpty)
-            PioneerStateCard(
-              icon: Icons.hexagon_rounded,
-              title: 'No managed zones yet',
-              message:
-                  'Draw customer sites, depots, rest stops, or restricted areas so dispatch and live tracking can show delivery geofences.',
-              actionLabel: CrudPermissions.canCreate(CrudEntity.zones)
-                  ? 'Create zone'
-                  : null,
-              onAction: CrudPermissions.canCreate(CrudEntity.zones)
-                  ? () => _openZoneEditor()
-                  : null,
-            )
-          else
-            ...zones.map(
-              (zone) => _ZoneCard(
-                zone: zone,
-                onEdit:
-                    CrudPermissions.canEdit(CrudEntity.zones) &&
-                        zone['managedLocally'] == true
-                    ? () => _openZoneEditor(zone: zone)
-                    : null,
-                onDelete:
-                    CrudPermissions.canDelete(CrudEntity.zones) &&
-                        zone['managedLocally'] == true
-                    ? () => _confirmDelete(zone)
-                    : null,
-                onPush: canPushToGeotab(zone)
-                    ? () => _pushZoneToGeotab(zone)
-                    : null,
-                onView: () => _showZoneMap(zone),
+    return Column(
+      children: [
+        _buildZonesToolbar(isDark, isMobile),
+        _buildZoneFilterBar(isDark, isMobile),
+        Expanded(
+          child: Container(
+            color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+            child: RefreshIndicator(
+              onRefresh: () => _loadZones(forceRefresh: true),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.all(isMobile ? 16 : 24),
+                children: [
+                  if (_error != null) ...[
+                    PioneerStateCard(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Zone refresh paused',
+                      message: _error!,
+                      actionLabel: 'Retry',
+                      onAction: () => _loadZones(forceRefresh: true),
+                      tone: PioneerStateTone.warning,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  _buildZoneSummaryCards(isDark, isMobile),
+                  SizedBox(height: isMobile ? 14 : 20),
+                  if (zones.isEmpty)
+                    PioneerStateCard(
+                      icon: Icons.hexagon_rounded,
+                      title: _zones.isEmpty
+                          ? 'No managed zones yet'
+                          : 'No zones found',
+                      message: _zones.isEmpty
+                          ? 'Draw customer sites, depots, rest stops, or restricted areas so dispatch and live tracking can show delivery geofences.'
+                          : 'Try clearing the active search and filters to show all zones.',
+                      actionLabel: _zones.isEmpty
+                          ? (CrudPermissions.canCreate(CrudEntity.zones)
+                                ? 'Create zone'
+                                : null)
+                          : 'Clear filters',
+                      onAction: _zones.isEmpty
+                          ? (CrudPermissions.canCreate(CrudEntity.zones)
+                                ? () => _openZoneEditor()
+                                : null)
+                          : _clearZoneFilters,
+                    )
+                  else
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final gap = isMobile ? 12.0 : 20.0;
+                        final width = constraints.maxWidth;
+                        final columns = !_showGridView
+                            ? 1
+                            : width >= 1040
+                            ? 3
+                            : width >= 680
+                            ? 2
+                            : 1;
+                        final cardWidth =
+                            (width - (gap * (columns - 1))) / columns;
+                        return Wrap(
+                          spacing: gap,
+                          runSpacing: gap,
+                          children: [
+                            for (final zone in zones)
+                              SizedBox(
+                                width: cardWidth,
+                                child: _ZoneCard(
+                                  zone: zone,
+                                  onEdit:
+                                      CrudPermissions.canEdit(
+                                            CrudEntity.zones,
+                                          ) &&
+                                          zone['managedLocally'] == true
+                                      ? () => _openZoneEditor(zone: zone)
+                                      : null,
+                                  onDelete:
+                                      CrudPermissions.canDelete(
+                                            CrudEntity.zones,
+                                          ) &&
+                                          zone['managedLocally'] == true
+                                      ? () => _confirmDelete(zone)
+                                      : null,
+                                  onPush: canPushToGeotab(zone)
+                                      ? () => _pushZoneToGeotab(zone)
+                                      : null,
+                                  onView: () => _showZoneMap(zone),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                ],
               ),
             ),
-        ],
-      ),
+          ),
+        ),
+      ],
     );
   }
 
   List<Map<String, dynamic>> get _filteredZones {
     var zones = _zones;
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      zones = zones.where((zone) {
+        final name = (zone['name'] ?? '').toString().toLowerCase();
+        final client = (zone['clientName'] ?? '').toString().toLowerCase();
+        final notes = zoneNotes(zone).toLowerCase();
+        return name.contains(query) ||
+            client.contains(query) ||
+            notes.contains(query);
+      }).toList();
+    }
     if (_typeFilter != 'All Types') {
       zones = zones.where((zone) {
         final type = readableZoneType(zone['zoneType'] ?? zone['type']);
         return type.toLowerCase() == _typeFilter.toLowerCase();
+      }).toList();
+    }
+    if (_sourceFilter != 'All Sources') {
+      zones = zones.where((zone) {
+        final managed = zone['managedLocally'] == true;
+        return _sourceFilter == 'PioneerPath'
+            ? managed
+            : _sourceFilter == 'GeoTab'
+            ? !managed
+            : true;
+      }).toList();
+    }
+    if (_statusFilter != 'All Status') {
+      zones = zones.where((zone) {
+        final syncStatus = (zone['syncStatus'] ?? 'not_staged').toString();
+        return switch (_statusFilter) {
+          'Writable' => zone['managedLocally'] == true,
+          'Pending approval' => syncStatus == 'pending_approval',
+          'Synced' => syncStatus == 'synced',
+          'Not staged' => syncStatus == 'not_staged',
+          _ => true,
+        };
       }).toList();
     }
     final sorted = List<Map<String, dynamic>>.from(zones);
@@ -230,7 +301,114 @@ class _ZonesPageState extends State<ZonesPage> {
     return sorted;
   }
 
-  Widget _buildZoneControls() {
+  Widget _buildZonesToolbar(bool isDark, bool isMobile) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final addButton = _zoneAddButton(label: compact ? 'Add' : 'New Zone');
+          final controls = Row(
+            mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
+            children: [
+              _ZoneViewToggle(
+                gridActive: _showGridView,
+                onGrid: () => setState(() => _showGridView = true),
+                onList: () => setState(() => _showGridView = false),
+              ),
+              const SizedBox(width: 12),
+              if (compact) Expanded(child: addButton) else addButton,
+            ],
+          );
+          final search = _ZoneSearchField(
+            value: _searchQuery,
+            isDark: isDark,
+            onChanged: (value) => setState(() => _searchQuery = value.trim()),
+            onClear: () => setState(() => _searchQuery = ''),
+          );
+
+          if (compact) {
+            return Column(
+              children: [search, const SizedBox(height: 12), controls],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: search),
+              const SizedBox(width: 14),
+              controls,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _zoneAddButton({required String label}) {
+    if (!CrudPermissions.canCreate(CrudEntity.zones)) {
+      return const SizedBox.shrink();
+    }
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => _openZoneEditor(),
+        child: Container(
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          constraints: const BoxConstraints(minWidth: 172),
+          decoration: BoxDecoration(
+            color: AppTheme.successGreen,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.successGreen.withValues(alpha: 0.22),
+                blurRadius: 16,
+                spreadRadius: -10,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.add_location_alt_rounded,
+                color: AppTheme.white,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildZoneFilterBar(bool isDark, bool isMobile) {
     final types = {
       'All Types',
       ..._zones.map(
@@ -240,41 +418,110 @@ class _ZonesPageState extends State<ZonesPage> {
     final safeTypeFilter = types.contains(_typeFilter)
         ? _typeFilter
         : 'All Types';
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        SizedBox(
-          width: 220,
-          child: DropdownButtonFormField<String>(
-            initialValue: safeTypeFilter,
-            decoration: const InputDecoration(labelText: 'Type'),
-            items: types
-                .map((type) => DropdownMenuItem(value: type, child: Text(type)))
-                .toList(),
-            onChanged: (value) =>
-                setState(() => _typeFilter = value ?? 'All Types'),
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
         ),
-        SizedBox(
-          width: 220,
-          child: DropdownButtonFormField<String>(
-            initialValue: _sortMode,
-            decoration: const InputDecoration(labelText: 'Sort zones'),
-            items: const [
-              DropdownMenuItem(value: 'Name A-Z', child: Text('Name A-Z')),
-              DropdownMenuItem(value: 'Name Z-A', child: Text('Name Z-A')),
-              DropdownMenuItem(value: 'Type A-Z', child: Text('Type A-Z')),
-              DropdownMenuItem(value: 'Type Z-A', child: Text('Type Z-A')),
-              DropdownMenuItem(value: 'Client A-Z', child: Text('Client A-Z')),
-              DropdownMenuItem(value: 'Client Z-A', child: Text('Client Z-A')),
+      ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _ZoneResultCount(count: _filteredZones.length),
+              const SizedBox(width: 10),
+              _ZoneFilterChip(
+                label: 'Type',
+                value: safeTypeFilter,
+                activeWhen: 'All Types',
+                options: types,
+                onSelected: (value) => setState(() => _typeFilter = value),
+                onClear: () => setState(() => _typeFilter = 'All Types'),
+              ),
+              const SizedBox(width: 8),
+              _ZoneFilterChip(
+                label: 'Source',
+                value: _sourceFilter,
+                activeWhen: 'All Sources',
+                options: const ['All Sources', 'PioneerPath', 'GeoTab'],
+                onSelected: (value) => setState(() => _sourceFilter = value),
+                onClear: () => setState(() => _sourceFilter = 'All Sources'),
+              ),
+              const SizedBox(width: 8),
+              _ZoneFilterChip(
+                label: 'Status',
+                value: _statusFilter,
+                activeWhen: 'All Status',
+                options: const [
+                  'All Status',
+                  'Writable',
+                  'Pending approval',
+                  'Synced',
+                  'Not staged',
+                ],
+                onSelected: (value) => setState(() => _statusFilter = value),
+                onClear: () => setState(() => _statusFilter = 'All Status'),
+              ),
+              const SizedBox(width: 8),
+              _ZoneFilterChip(
+                label: 'Sort',
+                value: _sortMode,
+                activeWhen: 'Name A-Z',
+                options: const [
+                  'Name A-Z',
+                  'Name Z-A',
+                  'Type A-Z',
+                  'Type Z-A',
+                  'Client A-Z',
+                  'Client Z-A',
+                ],
+                onSelected: (value) => setState(() => _sortMode = value),
+                onClear: () => setState(() => _sortMode = 'Name A-Z'),
+              ),
+              if (_hasActiveZoneFilters) ...[
+                const SizedBox(width: 10),
+                TextButton.icon(
+                  onPressed: _clearZoneFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 16),
+                  label: const Text('Clear'),
+                ),
+              ],
             ],
-            onChanged: (value) =>
-                setState(() => _sortMode = value ?? 'Name A-Z'),
           ),
         ),
-      ],
+      ),
     );
+  }
+
+  bool get _hasActiveZoneFilters =>
+      _searchQuery.isNotEmpty ||
+      _typeFilter != 'All Types' ||
+      _sourceFilter != 'All Sources' ||
+      _statusFilter != 'All Status' ||
+      _sortMode != 'Name A-Z';
+
+  void _clearZoneFilters() {
+    setState(() {
+      _searchQuery = '';
+      _typeFilter = 'All Types';
+      _sourceFilter = 'All Sources';
+      _statusFilter = 'All Status';
+      _sortMode = 'Name A-Z';
+    });
   }
 
   int _compareZoneText(
@@ -452,55 +699,399 @@ class _ZonesPageState extends State<ZonesPage> {
       ),
     );
   }
+
+  Widget _buildZoneSummaryCards(bool isDark, bool isMobile) {
+    final synced = _zones.where((zone) => zone['syncStatus'] == 'synced').length;
+    final pending = _zones
+        .where((zone) => zone['syncStatus'] == 'pending_approval')
+        .length;
+    final local = _zones.where((zone) => zone['managedLocally'] == true).length;
+    final pointTotal = _zones.fold<int>(
+      0,
+      (sum, zone) => sum + (((zone['points'] as List?) ?? const []).length),
+    );
+    final cards = [
+      _ZoneSummaryData(
+        title: 'Managed zones',
+        value: '${_zones.length}',
+        subtitle: 'delivery geofences',
+        icon: Icons.hexagon_rounded,
+        color: AppTheme.colorFF4B7BE5,
+      ),
+      _ZoneSummaryData(
+        title: 'PioneerPath',
+        value: '$local',
+        subtitle: 'editable local zones',
+        icon: Icons.edit_location_alt_rounded,
+        color: AppTheme.successGreen,
+      ),
+      _ZoneSummaryData(
+        title: 'GeoTab synced',
+        value: '$synced',
+        subtitle: '$pending pending approval',
+        icon: Icons.cloud_done_rounded,
+        color: AppTheme.colorFF00A8E8,
+      ),
+      _ZoneSummaryData(
+        title: 'Points mapped',
+        value: '$pointTotal',
+        subtitle: 'boundary points',
+        icon: Icons.polyline_rounded,
+        color: AppTheme.warningOrange,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = isMobile ? 12.0 : 16.0;
+        final columns = constraints.maxWidth < 720 ? 2 : 4;
+        final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final card in cards)
+              SizedBox(
+                width: width,
+                child: _ZoneSummaryCard(data: card, isDark: isDark),
+              ),
+          ],
+        );
+      },
+    );
+  }
 }
 
-class _ZoneSummary extends StatelessWidget {
-  const _ZoneSummary({required this.zones});
+class _ZoneSearchField extends StatelessWidget {
+  const _ZoneSearchField({
+    required this.value,
+    required this.isDark,
+    required this.onChanged,
+    required this.onClear,
+  });
 
-  final List<Map<String, dynamic>> zones;
+  final String value;
+  final bool isDark;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    final local = zones.length;
-    final synced = zones.where((zone) => zone['syncStatus'] == 'synced').length;
-    final pending = zones
-        .where((zone) => zone['syncStatus'] == 'pending_approval')
-        .length;
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        _summaryTile(context, 'Managed zones', '$local', Icons.hexagon_rounded),
-        _summaryTile(context, 'GeoTab synced', '$synced', Icons.cloud_done),
-        _summaryTile(context, 'Pending approval', '$pending', Icons.pending),
-      ],
+    return TextField(
+      onChanged: onChanged,
+      style: TextStyle(
+        fontSize: 14,
+        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+      ),
+      decoration: InputDecoration(
+        hintText: 'Search by zone name, client, or notes...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: value.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+      ),
     );
   }
+}
 
-  Widget _summaryTile(
-    BuildContext context,
-    String label,
-    String value,
-    IconData icon,
-  ) {
+class _ZoneViewToggle extends StatelessWidget {
+  const _ZoneViewToggle({
+    required this.gridActive,
+    required this.onGrid,
+    required this.onList,
+  });
+
+  final bool gridActive;
+  final VoidCallback onGrid;
+  final VoidCallback onList;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      width: 240,
-      padding: const EdgeInsets.all(16),
+      height: 50,
+      padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: AppTheme.getCardBg(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
+        color: AppTheme.colorFF1A1D23,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.white.withAlpha(18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ZoneViewToggleButton(
+            icon: Icons.grid_view_rounded,
+            active: gridActive,
+            tooltip: 'Grid view',
+            onTap: onGrid,
+          ),
+          _ZoneViewToggleButton(
+            icon: Icons.view_list_rounded,
+            active: !gridActive,
+            tooltip: 'List view',
+            onTap: onList,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ZoneViewToggleButton extends StatelessWidget {
+  const _ZoneViewToggleButton({
+    required this.icon,
+    required this.active,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool active;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(9),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          width: 42,
+          height: 42,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.22)
+                : AppTheme.transparent,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(
+            icon,
+            color: active ? AppTheme.successGreen : AppTheme.gray400,
+            size: 20,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneResultCount extends StatelessWidget {
+  const _ZoneResultCount({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.infoBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        '$count zones shown',
+        style: const TextStyle(
+          color: AppTheme.infoBlue,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneFilterChip extends StatelessWidget {
+  const _ZoneFilterChip({
+    required this.label,
+    required this.value,
+    required this.activeWhen,
+    required this.options,
+    required this.onSelected,
+    required this.onClear,
+  });
+
+  final String label;
+  final String value;
+  final String activeWhen;
+  final List<String> options;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = value != activeWhen;
+    return PopupMenuButton<String>(
+      initialValue: value,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final option in options)
+          PopupMenuItem(value: option, child: Text(option)),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          color: active
+              ? AppTheme.successGreen.withValues(alpha: 0.13)
+              : AppTheme.white.withAlpha(8),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active
+                ? AppTheme.successGreen.withValues(alpha: 0.34)
+                : AppTheme.white.withAlpha(18),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              active ? '$label: $value' : label,
+              style: TextStyle(
+                color: active ? AppTheme.successGreen : AppTheme.gray300,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: active ? AppTheme.successGreen : AppTheme.gray400,
+            ),
+            if (active) ...[
+              const SizedBox(width: 4),
+              InkWell(
+                onTap: onClear,
+                borderRadius: BorderRadius.circular(999),
+                child: const Icon(Icons.close_rounded, size: 15),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneSummaryData {
+  const _ZoneSummaryData({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+}
+
+class _ZoneSummaryCard extends StatelessWidget {
+  const _ZoneSummaryCard({required this.data, required this.isDark});
+
+  final _ZoneSummaryData data;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: data.color.withValues(alpha: isDark ? 0.34 : 0.20),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: data.color.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
+          ),
+        ],
       ),
       child: Row(
         children: [
-          Icon(icon, color: AppTheme.primaryBlue),
-          const SizedBox(width: 10),
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: data.color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(data.icon, color: data.color, size: 22),
+          ),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(value, style: AppTheme.getHeadingStyle(context)),
-                Text(label, style: AppTheme.getSubtitleStyle(context)),
+                Text(
+                  data.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  data.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  data.subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
               ],
             ),
           ),
@@ -533,114 +1124,245 @@ class _ZoneCard extends StatelessWidget {
     final notes = zoneNotes(zone);
     final isMockZone =
         zone['meta'] is Map && zone['meta']['isMockZone'] == true;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final managed = zone['managedLocally'] == true;
+    final accent = managed ? AppTheme.successGreen : AppTheme.colorFF00A8E8;
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      constraints: const BoxConstraints(minHeight: 210),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppTheme.getCardBg(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppTheme.primaryBlue.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Icon(
-              Icons.hexagon_rounded,
-              color: AppTheme.primaryBlue,
-            ),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: isDark ? 0.34 : 0.22)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: isDark ? 0.12 : 0.07),
+            blurRadius: 20,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  (zone['name'] ?? 'Unnamed zone').toString(),
-                  style: AppTheme.getHeadingStyle(context, fontSize: 16),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '$zoneType • ${zone['clientName'] ?? 'No client'} • $pointCount points',
-                  style: AppTheme.getSubtitleStyle(context),
-                ),
-                if (notes.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      notes,
+                child: Icon(Icons.hexagon_rounded, color: accent, size: 21),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      (zone['name'] ?? 'Unnamed zone').toString(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AppTheme.getSubtitleStyle(context),
-                    ),
-                  ),
-                if (isMockZone)
-                  Container(
-                    margin: const EdgeInsets.only(top: 7),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.warningOrange.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: AppTheme.warningOrange.withValues(alpha: 0.32),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? AppTheme.white : AppTheme.colorFF233244,
                       ),
                     ),
-                    child: const Text(
-                      'MOCK ZONE - UPDATE WITH ACTUAL BOUNDARY',
+                    const SizedBox(height: 3),
+                    Text(
+                      managed ? 'PioneerPath managed' : 'GeoTab geofence',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: AppTheme.warningOrange,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                       ),
                     ),
-                  ),
-                if ((zone['syncError'] ?? '').toString().isNotEmpty)
-                  Text(
-                    (zone['syncError'] ?? '').toString(),
-                    style: const TextStyle(color: AppTheme.errorRed),
-                  ),
-              ],
+                  ],
+                ),
+              ),
+              GeoTabSyncStatusBadge.fromEntity({
+                ...zone,
+                'syncStatus': syncStatus,
+              }, compact: true),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ZoneFactPill(Icons.category_rounded, zoneType),
+              _ZoneFactPill(
+                Icons.business_rounded,
+                (zone['clientName'] ?? 'No client').toString(),
+              ),
+              _ZoneFactPill(Icons.polyline_rounded, '$pointCount points'),
+            ],
+          ),
+          if (notes.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              notes,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+              ),
             ),
-          ),
-          GeoTabSyncStatusBadge.fromEntity({
-            ...zone,
-            'syncStatus': syncStatus,
-          }, compact: true),
-          IconButton(
-            tooltip: 'View map',
-            onPressed: onView,
-            icon: const Icon(Icons.map_rounded),
-          ),
-          IconButton(
-            tooltip: 'Edit zone',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_rounded),
-          ),
-          IconButton(
-            tooltip: onPush == null
-                ? 'GeoTab is already up to date.'
-                : 'Push to GeoTab',
-            onPressed: onPush,
-            icon: const Icon(Icons.cloud_upload_outlined),
-          ),
-          IconButton(
-            tooltip: 'Soft delete zone',
-            onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline_rounded),
+          ],
+          if (isMockZone) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.warningOrange.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: AppTheme.warningOrange.withValues(alpha: 0.32),
+                ),
+              ),
+              child: const Text(
+                'MOCK ZONE - UPDATE WITH ACTUAL BOUNDARY',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.warningOrange,
+                ),
+              ),
+            ),
+          ],
+          if ((zone['syncError'] ?? '').toString().isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              (zone['syncError'] ?? '').toString(),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppTheme.errorRed, fontSize: 12),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _ZoneActionButton(
+                tooltip: 'View map',
+                icon: Icons.map_rounded,
+                onPressed: onView,
+              ),
+              _ZoneActionButton(
+                tooltip: onEdit == null
+                    ? 'Only PioneerPath-managed zones can be edited.'
+                    : 'Edit zone',
+                icon: Icons.edit_rounded,
+                onPressed: onEdit,
+              ),
+              _ZoneActionButton(
+                tooltip: onPush == null
+                    ? 'GeoTab is already up to date.'
+                    : 'Push to GeoTab',
+                icon: Icons.cloud_upload_outlined,
+                onPressed: onPush,
+              ),
+              _ZoneActionButton(
+                tooltip: onDelete == null
+                    ? 'Only local zones can be deleted.'
+                    : 'Soft delete zone',
+                icon: Icons.delete_outline_rounded,
+                onPressed: onDelete,
+                danger: true,
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 }
+
+class _ZoneFactPill extends StatelessWidget {
+  const _ZoneFactPill(this.icon, this.label);
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF11161F : AppTheme.colorFFF7F9FC,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.06)
+              : AppTheme.black.withValues(alpha: 0.06),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: AppTheme.getMutedTextColor(context)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ZoneActionButton extends StatelessWidget {
+  const _ZoneActionButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.danger = false,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? AppTheme.colorFFE74C3C : AppTheme.colorFF4B7BE5;
+    return Tooltip(
+      message: tooltip,
+      child: IconButton.filledTonal(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18),
+        style: IconButton.styleFrom(
+          foregroundColor: onPressed == null ? AppTheme.gray500 : color,
+          backgroundColor: color.withValues(alpha: 0.12),
+          disabledBackgroundColor: AppTheme.gray500.withValues(alpha: 0.08),
+          minimumSize: const Size(38, 38),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+    );
+  }
+}
+
 
 class _ZoneEditorDialog extends StatefulWidget {
   const _ZoneEditorDialog({this.zone});
@@ -690,31 +1412,60 @@ class _ZoneEditorDialogState extends State<_ZoneEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 920, maxHeight: 760),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.getBorderColor(context)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
+                  ),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
                   children: [
+                    const Icon(Icons.hexagon_rounded, color: AppTheme.white),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        _editing ? 'Edit zone' : 'New zone',
-                        style: AppTheme.getHeadingStyle(context, fontSize: 20),
+                        _editing ? 'Edit Zone' : 'New Zone',
+                        style: const TextStyle(
+                          color: AppTheme.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
                       ),
                     ),
                     IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close_rounded),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+              ),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                 Row(
                   children: [
                     Expanded(
@@ -872,8 +1623,12 @@ class _ZoneEditorDialogState extends State<_ZoneEditorDialog> {
                     ),
                   ],
                 ),
-              ],
-            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

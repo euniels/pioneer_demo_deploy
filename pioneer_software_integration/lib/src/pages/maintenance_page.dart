@@ -29,6 +29,7 @@ enum _MaintenanceHistoryAction { edit, voidRecord, pushToGeotab }
 class _MaintenancePageState extends State<MaintenancePage> {
   late Future<Map<String, dynamic>> _future;
   String _section = 'alerts';
+  String _searchQuery = '';
   String _vehicleFilter = 'All Vehicles';
   String _typeFilter = 'All Types';
   String _sortMode = 'Date Newest';
@@ -138,19 +139,6 @@ class _MaintenancePageState extends State<MaintenancePage> {
       title: 'Maintenance',
       subtitle: 'Service due, faults, DVIR, work orders, and live measurements',
       titleTextStyle: AppTheme.getDashboardPageTitleStyle(context),
-      actions: [
-        IconButton(
-          tooltip: 'Refresh maintenance',
-          onPressed: _reload,
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-        if (CrudPermissions.canCreate(CrudEntity.maintenance))
-          FilledButton.icon(
-            onPressed: () => _openMaintenanceForm(),
-            icon: const Icon(Icons.add_task_rounded, size: 18),
-            label: const Text('Add Log'),
-          ),
-      ],
       child: FutureBuilder<Map<String, dynamic>>(
         future: _future,
         initialData: BackendApiService.peekCachedDataMap(
@@ -208,7 +196,7 @@ class _MaintenancePageState extends State<MaintenancePage> {
             'measurements' => measurements,
             'predictive' => predictive,
             _ => serviceDueRows,
-          };
+          }.where(_matchesMaintenanceSearch).toList();
           final cardSection =
               _section == 'alerts' &&
                   alerts.isEmpty &&
@@ -238,66 +226,73 @@ class _MaintenancePageState extends State<MaintenancePage> {
 
           return RefreshIndicator(
             onRefresh: () async => _reload(),
-            child: ListView(
-              padding: const EdgeInsets.all(AppTheme.space24),
+            child: Column(
               children: [
-                const _MaintenanceSectionHeading(
-                  title: 'Fleet Maintenance Readiness',
-                  subtitle:
-                      'Service risk, workshop activity, and compliance visibility.',
-                ),
-                const SizedBox(height: AppTheme.space20),
-                _buildOverview(isDark, overview),
-                const SizedBox(height: AppTheme.dashboardSectionSpacing),
+                _buildMaintenanceToolbar(isDark),
                 _buildSectionSwitcher(isDark),
-                if (_section == 'history') ...[
-                  const SizedBox(height: AppTheme.space20),
-                  _buildHistoryFilters(isDark, history),
-                ],
-                const SizedBox(height: AppTheme.dashboardSectionSpacing),
-                _MaintenanceSectionHeading(
-                  title: sectionHeading,
-                  subtitle: sectionSubtitle,
-                ),
-                const SizedBox(height: AppTheme.space20),
-                if (usingSampleMaintenance &&
-                    (_section == 'alerts' ||
-                        _section == 'history' ||
-                        _section == 'predictive')) ...[
-                  const _MaintenanceSampleDataBanner(),
-                  const SizedBox(height: AppTheme.space16),
-                ],
-                if (_section == 'predictive' && predictive.isNotEmpty)
-                  _buildPredictiveRiskMatrix(isDark, predictive)
-                else if (_section == 'history' && sectionRows.isNotEmpty)
-                  _buildHistoryTable(isDark, sectionRows)
-                else if (sectionRows.isEmpty)
-                  _emptyStateForSection(isDark, history)
-                else
-                  ...sectionRows.map(
-                    (row) => _MaintenanceCard(
-                      data: row,
-                      section: cardSection,
-                      isDark: isDark,
-                      onTap: _section == 'faults'
-                          ? () => _showFaultDetails(row)
-                          : null,
-                      onEdit:
-                          CrudPermissions.canEdit(CrudEntity.maintenance) &&
-                              _section == 'history'
-                          ? () => _openMaintenanceForm(record: row)
-                          : null,
-                      onVoid:
-                          CrudPermissions.canDelete(CrudEntity.maintenance) &&
-                              _section == 'history' &&
-                              (row['voided'] == true) == false
-                          ? () => _confirmVoid(row)
-                          : null,
-                      onPush: _section == 'history' && canPushToGeotab(row)
-                          ? () => _pushMaintenanceToGeotab(row)
-                          : null,
+                if (_section == 'history') _buildHistoryFilters(isDark, history),
+                Expanded(
+                  child: Container(
+                    color: isDark
+                        ? AppTheme.colorFF0A0E1A
+                        : AppTheme.colorFFF5F6F8,
+                    child: ListView(
+                      padding: const EdgeInsets.all(AppTheme.space24),
+                      children: [
+                        _buildOverview(isDark, overview),
+                        const SizedBox(height: AppTheme.dashboardSectionSpacing),
+                        _MaintenanceSectionHeading(
+                          title: sectionHeading,
+                          subtitle: sectionSubtitle,
+                        ),
+                        const SizedBox(height: AppTheme.space20),
+                        if (usingSampleMaintenance &&
+                            (_section == 'alerts' ||
+                                _section == 'history' ||
+                                _section == 'predictive')) ...[
+                          const _MaintenanceSampleDataBanner(),
+                          const SizedBox(height: AppTheme.space16),
+                        ],
+                        if (_section == 'predictive' && predictive.isNotEmpty)
+                          _buildPredictiveRiskMatrix(isDark, predictive)
+                        else if (_section == 'history' && sectionRows.isNotEmpty)
+                          _buildHistoryTable(isDark, sectionRows)
+                        else if (sectionRows.isEmpty)
+                          _emptyStateForSection(isDark, history)
+                        else
+                          ...sectionRows.map(
+                            (row) => _MaintenanceCard(
+                              data: row,
+                              section: cardSection,
+                              isDark: isDark,
+                              onTap: _section == 'faults'
+                                  ? () => _showFaultDetails(row)
+                                  : null,
+                              onEdit:
+                                  CrudPermissions.canEdit(
+                                        CrudEntity.maintenance,
+                                      ) &&
+                                      _section == 'history'
+                                  ? () => _openMaintenanceForm(record: row)
+                                  : null,
+                              onVoid:
+                                  CrudPermissions.canDelete(
+                                        CrudEntity.maintenance,
+                                      ) &&
+                                      _section == 'history' &&
+                                      (row['voided'] == true) == false
+                                  ? () => _confirmVoid(row)
+                                  : null,
+                              onPush:
+                                  _section == 'history' && canPushToGeotab(row)
+                                  ? () => _pushMaintenanceToGeotab(row)
+                                  : null,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
+                ),
               ],
             ),
           );
@@ -555,29 +550,96 @@ class _MaintenancePageState extends State<MaintenancePage> {
     );
   }
 
+  Widget _buildMaintenanceToolbar(bool isDark) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final search = _MaintenanceSearchField(
+            value: _searchQuery,
+            isDark: isDark,
+            onChanged: (value) => setState(() => _searchQuery = value),
+            onClear: () => setState(() => _searchQuery = ''),
+          );
+          final canAdd = CrudPermissions.canCreate(CrudEntity.maintenance);
+          final addButton = _MaintenanceToolbarButton(
+            label: compact ? 'Add' : 'Add Log',
+            icon: Icons.add_task_rounded,
+            color: AppTheme.successGreen,
+            filled: true,
+            onTap: () => _openMaintenanceForm(),
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                search,
+                if (canAdd) ...[
+                  const SizedBox(height: 10),
+                  addButton,
+                ],
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              if (canAdd) ...[
+                const SizedBox(width: 14),
+                addButton,
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildOverview(bool isDark, Map<String, dynamic> overview) {
     final cards = [
       _OverviewCard(
         label: 'Alerts',
         value: '${overview['activeAlerts'] ?? 0}',
+        subtitle: 'need scheduling',
+        icon: Icons.warning_amber_rounded,
         accent: AppTheme.colorFFF59E0B,
         isDark: isDark,
       ),
       _OverviewCard(
         label: 'Faults',
         value: '${overview['faults'] ?? 0}',
+        subtitle: 'diagnostic events',
+        icon: Icons.report_problem_rounded,
         accent: AppTheme.colorFFEF4444,
         isDark: isDark,
       ),
       _OverviewCard(
         label: 'DVIR',
         value: '${overview['dvirReports'] ?? 0}',
+        subtitle: 'inspection reports',
+        icon: Icons.fact_check_rounded,
         accent: AppTheme.colorFF4B7BE5,
         isDark: isDark,
       ),
       _OverviewCard(
         label: 'Work Orders',
         value: '${overview['workOrders'] ?? 0}',
+        subtitle: 'shop activity',
+        icon: Icons.handyman_rounded,
         accent: AppTheme.colorFF10B981,
         isDark: isDark,
       ),
@@ -634,52 +696,64 @@ class _MaintenancePageState extends State<MaintenancePage> {
     };
 
     return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 12),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: sections.entries.map((entry) {
-            final selected = _section == entry.key;
-            return InkWell(
-              onTap: () => setState(() => _section = entry.key),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppTheme.space20,
-                  vertical: AppTheme.space16,
-                ),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: sections.entries.map((entry) {
+              final selected = _section == entry.key;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: InkWell(
+                  onTap: () => setState(() => _section = entry.key),
+                  borderRadius: BorderRadius.circular(10),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    height: 38,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
                       color: selected
-                          ? AppTheme.primaryBlue
-                          : AppTheme.transparent,
-                      width: 3,
+                          ? AppTheme.successGreen.withValues(alpha: 0.14)
+                          : AppTheme.white.withAlpha(8),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: selected
+                            ? AppTheme.successGreen.withValues(alpha: 0.34)
+                            : AppTheme.white.withAlpha(18),
+                      ),
+                    ),
+                    child: Text(
+                      entry.value,
+                      style:
+                          AppTheme.getBodyStyle(
+                            context,
+                            fontSize: 12,
+                          ).copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: selected
+                                ? AppTheme.successGreen
+                                : AppTheme.gray300,
+                          ),
                     ),
                   ),
                 ),
-                child: Text(
-                  entry.value,
-                  style:
-                      AppTheme.getBodyStyle(
-                        context,
-                        fontSize: AppTheme.dashboardBodySize,
-                      ).copyWith(
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                        color: selected
-                            ? AppTheme.primaryBlue
-                            : AppTheme.getSubtleTextColor(context),
-                      ),
-                ),
-              ),
-            );
-          }).toList(),
+              );
+            }).toList(),
+          ),
         ),
       ),
     );
@@ -1026,25 +1100,28 @@ class _MaintenancePageState extends State<MaintenancePage> {
     }.toList();
     final types = {'All Types', ..._maintenanceTypes}.toList();
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final narrow = constraints.maxWidth < 720;
-        final fieldWidth = narrow ? constraints.maxWidth : 220.0;
-        final typeWidth = narrow ? constraints.maxWidth : 340.0;
-        return Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark
-                  ? AppTheme.white.withValues(alpha: 0.06)
-                  : AppTheme.black.withValues(alpha: 0.06),
-            ),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
-          child: Wrap(
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 720;
+          final fieldWidth = narrow ? constraints.maxWidth : 220.0;
+          final typeWidth = narrow ? constraints.maxWidth : 320.0;
+          return Wrap(
             spacing: 12,
             runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               SizedBox(
                 width: fieldWidth,
@@ -1142,9 +1219,9 @@ class _MaintenancePageState extends State<MaintenancePage> {
                 label: const Text('Clear'),
               ),
             ],
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -1187,6 +1264,29 @@ class _MaintenancePageState extends State<MaintenancePage> {
       };
     });
     return filtered;
+  }
+
+  bool _matchesMaintenanceSearch(Map<String, dynamic> row) {
+    final query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return true;
+    }
+    final searchable = [
+      row['vehiclePlate'],
+      row['vehicle'],
+      row['plate'],
+      row['type'],
+      row['priority'],
+      row['status'],
+      row['description'],
+      row['notes'],
+      row['provider'],
+      row['faultCode'],
+      row['diagnosticName'],
+      row['workOrderNumber'],
+      row['source'],
+    ].map((value) => value?.toString().toLowerCase() ?? '').join(' ');
+    return searchable.contains(query);
   }
 
   int _compareMaintenanceDates(
@@ -1356,12 +1456,16 @@ class _MaintenanceSectionHeading extends StatelessWidget {
 class _OverviewCard extends StatelessWidget {
   final String label;
   final String value;
+  final String subtitle;
+  final IconData icon;
   final Color accent;
   final bool isDark;
 
   const _OverviewCard({
     required this.label,
     required this.value,
+    required this.subtitle,
+    required this.icon,
     required this.accent,
     required this.isDark,
   });
@@ -1369,26 +1473,189 @@ class _OverviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppTheme.dashboardKpiPadding),
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-        borderRadius: BorderRadius.circular(AppTheme.radiusXl),
-        border: Border.all(color: accent.withValues(alpha: 0.22)),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: isDark ? 0.34 : 0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
+          ),
+        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: AppTheme.dashboardKpiLabelSize,
-              fontWeight: FontWeight.w800,
-              color: accent,
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: accent, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: AppTheme.space8),
-          Text(value, style: AppTheme.getDashboardKpiValueStyle(context)),
         ],
+      ),
+    );
+  }
+}
+
+class _MaintenanceToolbarButton extends StatelessWidget {
+  const _MaintenanceToolbarButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.filled = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          constraints: const BoxConstraints(minWidth: 144),
+          decoration: BoxDecoration(
+            color: filled ? color : color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withValues(alpha: filled ? 0 : 0.28)),
+            boxShadow: filled
+                ? [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.22),
+                      blurRadius: 16,
+                      spreadRadius: -10,
+                      offset: const Offset(0, 10),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: filled ? AppTheme.white : color, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: filled ? AppTheme.white : color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MaintenanceSearchField extends StatelessWidget {
+  const _MaintenanceSearchField({
+    required this.value,
+    required this.isDark,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final String value;
+  final bool isDark;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        hintText: 'Search by vehicle, service type, fault, provider, or notes...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: value.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+      ),
+      style: TextStyle(
+        fontSize: 14,
+        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
       ),
     );
   }
@@ -2037,33 +2304,77 @@ class _MaintenanceLogDialogState extends State<_MaintenanceLogDialog> {
     return Dialog(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: mobile ? width - 24 : 760),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _editing
-                      ? (_readOnlySource
-                            ? 'Supplement GeoTab Maintenance'
-                            : 'Edit Maintenance Log')
-                      : 'Add Maintenance Log',
-                  style: const TextStyle(
-                    fontSize: AppTheme.dashboardSectionHeaderSize,
-                    fontWeight: FontWeight.w900,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? AppTheme.colorFF111827
+                : AppTheme.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.getBorderColor(context)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
+                  ),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(20),
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  _readOnlySource
-                      ? 'GeoTab-sourced fields are read-only; add local remarks or proof only.'
-                      : 'Manual C3-04/C3-05 service record for compliance and prediction.',
-                  style: const TextStyle(color: AppTheme.colorFF64748B),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.build_circle_rounded,
+                      color: AppTheme.white,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _editing
+                            ? (_readOnlySource
+                                  ? 'Supplement GeoTab Maintenance'
+                                  : 'Edit Maintenance Log')
+                            : 'Add Maintenance Log',
+                        style: const TextStyle(
+                          color: AppTheme.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _readOnlySource
+                              ? 'GeoTab-sourced fields are read-only; add local remarks or proof only.'
+                              : 'Manual C3-04/C3-05 service record for compliance and prediction.',
+                          style: const TextStyle(
+                            color: AppTheme.colorFF64748B,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
                 _row(mobile, [
                   DropdownButtonFormField<String>(
                     initialValue:
@@ -2200,8 +2511,12 @@ class _MaintenanceLogDialogState extends State<_MaintenanceLogDialog> {
                     ),
                   ],
                 ),
-              ],
-            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import '../widgets/dashboard_layout.dart';
 import '../services/backend_api.dart';
@@ -35,6 +36,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   DateTime? _routesLoadedAt;
   bool _routePlansExpanded = false;
   bool _optimizingOrder = false;
+  bool _topSectionCollapsed = false;
   String? _optimizeOrderMessage;
   List<Map<String, dynamic>> _optimizedStops = const [];
   final Set<String> _collapsedWorkflowGroups = {};
@@ -408,31 +410,41 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
     return Column(
       children: [
-        Container(
-          padding: EdgeInsets.all(isMobile ? 16 : 24),
-          color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-          child: Column(
-            children: [
-              _buildStatsCards(isDark, isMobile)
-                  .animate()
-                  .fadeIn(duration: 500.ms)
-                  .slideY(
-                    begin: 0.2,
-                    end: 0,
-                    duration: 500.ms,
-                    curve: Curves.easeOut,
-                  ),
-              SizedBox(height: isMobile ? 14 : 18),
-              _buildGeotabRoutesPanel(isDark, isMobile)
-                  .animate()
-                  .fadeIn(duration: 550.ms)
-                  .slideY(
-                    begin: 0.15,
-                    end: 0,
-                    duration: 450.ms,
-                    curve: Curves.easeOut,
-                  ),
-            ],
+        AnimatedSize(
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.all(
+              _topSectionCollapsed
+                  ? 0
+                  : (isMobile ? 14 : 18),
+            ),
+            color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 240),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) {
+                return SizeTransition(
+                  sizeFactor: animation,
+                  axisAlignment: -1,
+                  child: FadeTransition(opacity: animation, child: child),
+                );
+              },
+              child: _topSectionCollapsed
+                  ? const SizedBox.shrink(key: ValueKey('dispatchTopHidden'))
+                  : Column(
+                      key: const ValueKey('dispatchTopVisible'),
+                      children: [
+                        _buildStatsCards(isDark, isMobile),
+                        SizedBox(height: isMobile ? 10 : 12),
+                        _buildGeotabRoutesPanel(isDark, isMobile),
+                      ],
+                    ),
+            ),
           ),
         ),
         Expanded(
@@ -451,7 +463,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                       ? AppTheme.gray500
                       : AppTheme.gray600,
                   labelStyle: TextStyle(
-                    fontSize: isMobile ? 14 : 16,
+                    fontSize: isMobile ? 12 : 13,
                     fontWeight: FontWeight.w700,
                   ),
                   dividerColor: AppTheme.transparent,
@@ -463,39 +475,42 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                 ),
               ),
               Expanded(
-                child: RefreshIndicator(
-                  onRefresh: _refreshDispatch,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildDispatchQueue(isDark, isMobile)
-                          .animate()
-                          .fadeIn(duration: 550.ms)
-                          .slideY(
-                            begin: 0.2,
-                            end: 0,
-                            duration: 500.ms,
-                            curve: Curves.easeOut,
-                          ),
-                      _buildAvailableVehicles(isDark, isMobile)
-                          .animate()
-                          .fadeIn(duration: 600.ms)
-                          .slideY(
-                            begin: 0.2,
-                            end: 0,
-                            duration: 500.ms,
-                            curve: Curves.easeOut,
-                          ),
-                      _buildActiveDispatches(isDark, isMobile)
-                          .animate()
-                          .fadeIn(duration: 700.ms)
-                          .slideY(
-                            begin: 0.2,
-                            end: 0,
-                            duration: 500.ms,
-                            curve: Curves.easeOut,
-                          ),
-                    ],
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: _handleDispatchScroll,
+                  child: RefreshIndicator(
+                    onRefresh: _refreshDispatch,
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
+                        _buildDispatchQueue(isDark, isMobile)
+                            .animate()
+                            .fadeIn(duration: 550.ms)
+                            .slideY(
+                              begin: 0.2,
+                              end: 0,
+                              duration: 500.ms,
+                              curve: Curves.easeOut,
+                            ),
+                        _buildAvailableVehicles(isDark, isMobile)
+                            .animate()
+                            .fadeIn(duration: 600.ms)
+                            .slideY(
+                              begin: 0.2,
+                              end: 0,
+                              duration: 500.ms,
+                              curve: Curves.easeOut,
+                            ),
+                        _buildActiveDispatches(isDark, isMobile)
+                            .animate()
+                            .fadeIn(duration: 700.ms)
+                            .slideY(
+                              begin: 0.2,
+                              end: 0,
+                              duration: 500.ms,
+                              curve: Curves.easeOut,
+                            ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -506,7 +521,32 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     );
   }
 
-  Widget _buildStatsCards(bool isDark, bool isMobile) {
+  bool _handleDispatchScroll(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+
+    if (notification.metrics.pixels <= 8 && _topSectionCollapsed) {
+      setState(() => _topSectionCollapsed = false);
+      return false;
+    }
+
+    if (notification is UserScrollNotification) {
+      if (notification.direction == ScrollDirection.reverse &&
+          notification.metrics.pixels > 24 &&
+          !_topSectionCollapsed) {
+        setState(() => _topSectionCollapsed = true);
+      }
+    }
+
+    return false;
+  }
+
+  Widget _buildStatsCards(
+    bool isDark,
+    bool isMobile, {
+    bool compact = false,
+  }) {
     final stats = [
       {
         'value': '${_pendingTrips.length}',
@@ -537,15 +577,21 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 600) {
-          return Column(
+          final gap = compact ? 8.0 : 10.0;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
             children: stats.map((stat) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+              return SizedBox(
+                width: compact
+                    ? (constraints.maxWidth - gap) / 2
+                    : constraints.maxWidth,
                 child: _buildStatCard(
                   stat,
                   isDark,
                   isMobile,
                   isFullWidth: true,
+                  compact: compact,
                 ),
               );
             }).toList(),
@@ -557,8 +603,13 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
             final isLast = stat == stats.last;
             return Expanded(
               child: Padding(
-                padding: EdgeInsets.only(right: isLast ? 0 : 16),
-                child: _buildStatCard(stat, isDark, false),
+                padding: EdgeInsets.only(right: isLast ? 0 : 12),
+                child: _buildStatCard(
+                  stat,
+                  isDark,
+                  false,
+                  compact: compact,
+                ),
               ),
             );
           }).toList(),
@@ -572,79 +623,101 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     bool isDark,
     bool isMobile, {
     bool isFullWidth = false,
+    bool compact = false,
   }) {
     final color = stat['color'] as Color;
-    return Container(
-      padding: EdgeInsets.all(isMobile ? 16 : 20),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+      constraints: BoxConstraints(minHeight: compact ? 58 : 86),
+      padding: EdgeInsets.all(
+        compact ? (isMobile ? 8 : 10) : (isMobile ? 12 : 14),
+      ),
       decoration: BoxDecoration(
-        gradient: isDark
-            ? LinearGradient(
-                colors: [
-                  color.withValues(alpha: 0.3),
-                  color.withValues(alpha: 0.1),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              )
-            : null,
-        color: isDark ? null : color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(16),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDark
-              ? color.withValues(alpha: 0.3)
-              : color.withValues(alpha: 0.2),
-          width: 1,
+          color: color.withValues(alpha: isDark ? 0.34 : 0.20),
         ),
         boxShadow: [
           BoxShadow(
-            color: color.withValues(alpha: isDark ? 0.10 : 0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: color.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            width: compact ? 32 : 40,
+            height: compact ? 32 : 40,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
+              color: color.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
               stat['icon'] as IconData,
               color: color,
-              size: isMobile ? 24 : 28,
+              size: compact ? 16 : 20,
             ),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: compact ? 8 : 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  stat['value'],
-                  style: TextStyle(
-                    fontSize: isMobile ? 28 : 32,
-                    fontWeight: FontWeight.w900,
-                    color: isDark ? AppTheme.white : color,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
                   stat['label'],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: isMobile ? 12 : 14,
-                    fontWeight: FontWeight.w600,
-                    color: isDark ? AppTheme.gray400 : AppTheme.gray700,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
                   ),
                 ),
+                SizedBox(height: compact ? 1 : 3),
+                Text(
+                  stat['value'],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: compact ? 18 : (isMobile ? 20 : 22),
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                if (!compact) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    _dispatchStatSubtitle(stat['label'] as String),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  String _dispatchStatSubtitle(String label) {
+    return switch (label) {
+      'Pending Dispatch' => 'waiting for assignment',
+      'Active Dispatches' => 'currently moving',
+      'Vehicles Available' => 'ready to assign',
+      'GeoTab Routes' => 'available route plans',
+      _ => 'dispatch metric',
+    };
   }
 
   Widget _buildAvailableVehicles(bool isDark, bool isMobile) {
@@ -678,7 +751,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         Text(
                           'Available Fleet',
                           style: TextStyle(
-                            fontSize: isMobile ? 18 : 20,
+                            fontSize: isMobile ? 16 : 18,
                             fontWeight: FontWeight.w700,
                             color: isDark
                                 ? AppTheme.white
@@ -689,7 +762,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         Text(
                           'Dispatch-ready trucks sourced from the live fleet lane',
                           style: TextStyle(
-                            fontSize: isMobile ? 12 : 14,
+                            fontSize: isMobile ? 11 : 12,
                             color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                           ),
                         ),
@@ -719,19 +792,19 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     return Container(
       color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
       child: SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 16 : 24),
+        padding: EdgeInsets.all(isMobile ? 14 : 18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              padding: EdgeInsets.all(isMobile ? 16 : 20),
+              padding: EdgeInsets.all(isMobile ? 12 : 14),
               decoration: BoxDecoration(
-                color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-                borderRadius: BorderRadius.circular(16),
+                color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: isDark
-                      ? AppTheme.white.withValues(alpha: 0.08)
-                      : AppTheme.black.withValues(alpha: 0.08),
+                      ? AppTheme.white.withValues(alpha: 0.07)
+                      : AppTheme.black.withValues(alpha: 0.07),
                 ),
               ),
               child: Column(
@@ -743,7 +816,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         child: Text(
                           'Operations Order Board',
                           style: TextStyle(
-                            fontSize: isMobile ? 18 : 20,
+                            fontSize: isMobile ? 16 : 18,
                             fontWeight: FontWeight.w700,
                             color: isDark
                                 ? AppTheme.white
@@ -770,6 +843,10 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         style: FilledButton.styleFrom(
                           backgroundColor: AppTheme.colorFF1A3A6B,
                           foregroundColor: AppTheme.white,
+                          textStyle: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                     ],
@@ -778,7 +855,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                   Text(
                     'Track each delivery from assignment to completion. Route optimization remains advisory and never auto-dispatches.',
                     style: TextStyle(
-                      fontSize: isMobile ? 12 : 14,
+                      fontSize: isMobile ? 11 : 12,
                       color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                     ),
                   ),
@@ -792,7 +869,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
               const SizedBox(height: 16),
               _buildPendingEmptyState(isDark, isMobile),
             ],
-            const SizedBox(height: 20),
+            const SizedBox(height: 14),
             ...groups.entries.map(
               (entry) => _buildWorkflowGroupSection(
                 entry.key,
@@ -853,7 +930,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         Text(
                           title,
                           style: TextStyle(
-                            fontSize: isMobile ? 15 : 16,
+                            fontSize: isMobile ? 14 : 15,
                             fontWeight: FontWeight.w900,
                             color: isDark
                                 ? AppTheme.white
@@ -864,7 +941,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         Text(
                           _workflowGroupDescription(title),
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: 11,
                             color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                           ),
                         ),
@@ -962,8 +1039,8 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
               children: [
                 Text(
                   'No delivery orders in the board',
-                  style: TextStyle(
-                    fontSize: isMobile ? 15 : 16,
+                    style: TextStyle(
+                    fontSize: isMobile ? 14 : 15,
                     fontWeight: FontWeight.w800,
                     color: isDark ? AppTheme.white : AppTheme.colorFF1A1D23,
                   ),
@@ -972,7 +1049,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                 Text(
                   routeMessage,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 12,
                     height: 1.4,
                     color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                   ),
@@ -1105,17 +1182,27 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final scale = (constraints.maxWidth / 800).clamp(0.85, 1.15);
+        final scale = (constraints.maxWidth / 800).clamp(0.82, 1.04);
         return Container(
-          padding: EdgeInsets.all(16 * scale),
+          padding: EdgeInsets.all(14 * scale),
           decoration: BoxDecoration(
-            color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-            borderRadius: BorderRadius.circular(16),
+            color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: _workflowGroupColor(
                 _workflowGroupForTrip(trip),
               ).withValues(alpha: 0.34),
             ),
+            boxShadow: [
+              BoxShadow(
+                color: _workflowGroupColor(
+                  _workflowGroupForTrip(trip),
+                ).withValues(alpha: isDark ? 0.10 : 0.06),
+                blurRadius: 18,
+                spreadRadius: -14,
+                offset: const Offset(0, 12),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1130,7 +1217,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         Text(
                           assignedVehicle.toUpperCase(),
                           style: TextStyle(
-                            fontSize: 21 * scale,
+                            fontSize: 18 * scale,
                             fontWeight: FontWeight.w900,
                             color: isDark
                                 ? AppTheme.white
@@ -1141,7 +1228,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                         Text(
                           driverName,
                           style: TextStyle(
-                            fontSize: 14 * scale,
+                            fontSize: 12.5 * scale,
                             fontWeight: FontWeight.w600,
                             color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                           ),
@@ -1168,7 +1255,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                           child: Text(
                             statusPresentation.label.toUpperCase(),
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 11,
                               fontWeight: FontWeight.w800,
                               color: statusColor,
                             ),
@@ -1189,7 +1276,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                             child: Text(
                               'GEOTAB ROUTE PLAN',
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: FontWeight.w900,
                                 color: AppTheme.colorFF00A8E8,
                               ),
@@ -1204,9 +1291,9 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
               Row(
                 children: [
                   Text(
-                    _dispatchValue(trip['tripId'], 'Trip'),
-                    style: TextStyle(
-                      fontSize: 12 * scale,
+                      _dispatchValue(trip['tripId'], 'Trip'),
+                      style: TextStyle(
+                      fontSize: 11.5 * scale,
                       fontWeight: FontWeight.w800,
                       color: AppTheme.colorFF4B7BE5,
                     ),
@@ -1216,7 +1303,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                     child: Text(
                       customer,
                       style: TextStyle(
-                        fontSize: 16 * scale,
+                        fontSize: 14.5 * scale,
                         fontWeight: FontWeight.w800,
                         color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
                       ),
@@ -1239,7 +1326,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                     child: Text(
                       '$destination  |  From $origin',
                       style: TextStyle(
-                        fontSize: 14 * scale,
+                        fontSize: 12.5 * scale,
                         height: 1.35,
                         color: isDark ? AppTheme.gray300 : AppTheme.gray700,
                       ),
@@ -1320,7 +1407,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                   child: Text(
                     'FREE DELIVERY CANDIDATE - PHP 100,000+ ORDER',
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w800,
                       color: AppTheme.colorFF27AE60,
                     ),
@@ -2021,13 +2108,23 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: isMobile ? 14 : 16,
-        vertical: isMobile ? 12 : 14,
+        horizontal: isMobile ? 12 : 14,
+        vertical: isMobile ? 10 : 12,
       ),
       decoration: BoxDecoration(
-        color: AppTheme.primaryBlue.withValues(alpha: isDark ? 0.14 : 0.07),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.22)),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.colorFF4B7BE5.withValues(alpha: isDark ? 0.26 : 0.18),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.colorFF4B7BE5.withValues(alpha: isDark ? 0.10 : 0.06),
+            blurRadius: 22,
+            spreadRadius: -16,
+            offset: const Offset(0, 14),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2035,32 +2132,32 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
           Row(
             children: [
               Container(
-                width: 38,
-                height: 38,
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryBlue.withValues(alpha: 0.18),
+                  color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
                   Icons.alt_route_rounded,
                   color: AppTheme.colorFF4B7BE5,
-                  size: 21,
+                  size: 18,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'GeoTab route plans',
+                      'Route plan readiness',
                       style: TextStyle(
-                        fontSize: isMobile ? 14 : 15,
+                        fontSize: isMobile ? 13 : 14,
                         fontWeight: FontWeight.w900,
                         color: isDark ? AppTheme.white : AppTheme.colorFF1A1D23,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       _routesLoading && !hasRoutes
                           ? 'Fetching route plans...'
@@ -2072,7 +2169,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11.5,
                         fontWeight: FontWeight.w600,
                         color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                       ),
@@ -2096,6 +2193,14 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                 ),
               if (hasRoutes)
                 TextButton.icon(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    textStyle: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                   onPressed: () {
                     setState(() {
                       _routePlansExpanded = !_routePlansExpanded;
@@ -2189,6 +2294,31 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
           ],
           if (hasRoutes && _routePlansExpanded) ...[
             const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _routeMetricPill(
+                  isDark,
+                  Icons.route_outlined,
+                  '${_geotabRoutes.length} plans',
+                  AppTheme.colorFF4B7BE5,
+                ),
+                _routeMetricPill(
+                  isDark,
+                  Icons.local_shipping_outlined,
+                  '$assigned assigned',
+                  assigned > 0 ? AppTheme.colorFF27AE60 : AppTheme.colorFFF39C12,
+                ),
+                _routeMetricPill(
+                  isDark,
+                  Icons.pin_drop_outlined,
+                  '$plannedStops stops',
+                  AppTheme.colorFF00A8E8,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             Text(
               assigned == 0
                   ? 'Route plans are visible here, but none are assigned to assets yet.'
@@ -2233,6 +2363,37 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
               }).toList(),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _routeMetricPill(
+    bool isDark,
+    IconData icon,
+    String label,
+    Color color,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.13 : 0.09),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.20)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 14),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.gray200 : color,
+            ),
+          ),
         ],
       ),
     );

@@ -105,13 +105,6 @@ class _AuditLogPageState extends State<AuditLogPage> {
       currentRoute: '/audit-logs',
       title: 'Audit Logs',
       subtitle: 'Read-only history of administrative and operational changes',
-      actions: [
-        IconButton(
-          tooltip: 'Refresh',
-          onPressed: () => _reload(),
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
       child: FutureBuilder<PaginatedBackendList>(
         future: _future,
         builder: (context, snapshot) {
@@ -136,33 +129,50 @@ class _AuditLogPageState extends State<AuditLogPage> {
           );
           return RefreshIndicator(
             onRefresh: () async => _reload(),
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                _buildFilterPanel(isDark),
-                const SizedBox(height: 16),
-                if (page != null) ...[
-                  _buildAuditSummary(page, entries, isDark),
-                  const SizedBox(height: 16),
-                ],
-                if (entries.isEmpty)
-                  _AuditEmptyState(
-                    isDark: isDark,
-                    title: 'No audit entries found',
-                    message: 'Try widening the date range or clearing filters.',
-                  )
-                else
-                  ...entries.asMap().entries.map(
-                    (indexed) => _AuditLogCard(
-                      entry: indexed.value,
-                      alternate: indexed.key.isOdd,
+            child: Container(
+              color: isDark ? AppTheme.colorFF0A0E1A : AppTheme.colorFFF5F6F8,
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  _buildFilterPanel(isDark),
+                  const SizedBox(height: 18),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1220),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          children: [
+                            if (page != null) ...[
+                              _buildAuditSummary(page, entries, isDark),
+                              const SizedBox(height: 16),
+                            ],
+                            if (entries.isEmpty)
+                              _AuditEmptyState(
+                                isDark: isDark,
+                                title: 'No audit entries found',
+                                message:
+                                    'Try widening the date range or clearing filters.',
+                              )
+                            else
+                              ...entries.asMap().entries.map(
+                                (indexed) => _AuditLogCard(
+                                  entry: indexed.value,
+                                  alternate: indexed.key.isOdd,
+                                ),
+                              ),
+                            if (page != null && page.lastPage > 1) ...[
+                              const SizedBox(height: 12),
+                              _buildPagination(page, isDark),
+                            ],
+                            const SizedBox(height: 24),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                if (page != null && page.lastPage > 1) ...[
-                  const SizedBox(height: 12),
-                  _buildPagination(page, isDark),
                 ],
-              ],
+              ),
             ),
           );
         },
@@ -172,77 +182,172 @@ class _AuditLogPageState extends State<AuditLogPage> {
 
   Widget _buildFilterPanel(bool isDark) {
     return Container(
-      padding: const EdgeInsets.all(AppTheme.space16),
+      padding: const EdgeInsets.fromLTRB(28, 20, 28, 16),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg,
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-        border: Border.all(
-          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withValues(alpha: 0.08)
+                : AppTheme.black.withValues(alpha: 0.08),
+          ),
         ),
-        boxShadow: AppTheme.getCardShadow(context),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1220),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              OutlinedButton.icon(
-                onPressed: () =>
-                    setState(() => _filtersExpanded = !_filtersExpanded),
-                icon: Icon(
-                  _filtersExpanded
-                      ? Icons.filter_alt_off_rounded
-                      : Icons.filter_alt_rounded,
-                ),
-                label: const Text('Filters'),
-              ),
-              if (_activeFilterCount > 0) ...[
-                const SizedBox(width: AppTheme.space8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppTheme.space8,
-                    vertical: AppTheme.space4,
-                  ),
-                  decoration: BoxDecoration(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 760;
+                  final actorSearch = _AuditSearchField(
+                    controller: _actorController,
+                    isDark: isDark,
+                    onChanged: (_) => _reload(resetPage: true),
+                    onClear: () {
+                      _actorController.clear();
+                      _reload(resetPage: true);
+                    },
+                  );
+                  final filterButton = _AuditActionButton(
+                    icon: _filtersExpanded
+                        ? Icons.filter_alt_off_rounded
+                        : Icons.tune_rounded,
+                    label: _filtersExpanded ? 'Hide filters' : 'Filters',
                     color: AppTheme.primaryBlue,
-                    borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                    onTap: () =>
+                        setState(() => _filtersExpanded = !_filtersExpanded),
+                  );
+
+                  if (compact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        actorSearch,
+                        const SizedBox(height: 12),
+                        filterButton,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      Expanded(child: actorSearch),
+                      const SizedBox(width: 14),
+                      filterButton,
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _AuditResultCount(activeCount: _activeFilterCount),
+                      const SizedBox(width: 10),
+                      _AuditFilterChip(
+                        label: 'Entity',
+                        value: _entityType,
+                        activeWhen: 'all',
+                        displayValue: _entityType == 'all'
+                            ? 'All entities'
+                            : _label(_entityType),
+                        options: {
+                          for (final value in _entityTypes)
+                            value: value == 'all'
+                                ? 'All entities'
+                                : _label(value),
+                        },
+                        onSelected: (value) {
+                          _entityType = value;
+                          _reload(resetPage: true);
+                        },
+                        onClear: () {
+                          _entityType = 'all';
+                          _reload(resetPage: true);
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      _AuditFilterChip(
+                        label: 'Action',
+                        value: _actionType,
+                        activeWhen: 'all',
+                        displayValue: _actionType == 'all'
+                            ? 'All actions'
+                            : _label(_actionType),
+                        options: {
+                          for (final value in _actionTypes)
+                            value: value == 'all'
+                                ? 'All actions'
+                                : _label(value),
+                        },
+                        onSelected: (value) {
+                          _actionType = value;
+                          _reload(resetPage: true);
+                        },
+                        onClear: () {
+                          _actionType = 'all';
+                          _reload(resetPage: true);
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      _AuditFilterChip(
+                        label: 'Sort',
+                        value: _sortMode,
+                        activeWhen: 'Date Newest',
+                        displayValue: _sortMode,
+                        options: const {
+                          'Date Newest': 'Date Newest',
+                          'Date Oldest': 'Date Oldest',
+                          'Entity A-Z': 'Entity A-Z',
+                          'Entity Z-A': 'Entity Z-A',
+                          'Actor A-Z': 'Actor A-Z',
+                          'Actor Z-A': 'Actor Z-A',
+                        },
+                        onSelected: (value) {
+                          _sortMode = value;
+                          _reload(resetPage: true);
+                        },
+                        onClear: () {
+                          _sortMode = 'Date Newest';
+                          _reload(resetPage: true);
+                        },
+                      ),
+                      if (_hasActiveFilters) ...[
+                        const SizedBox(width: 8),
+                        _AuditActionButton(
+                          icon: Icons.close_rounded,
+                          label: 'Clear All',
+                          color: AppTheme.errorRed,
+                          onTap: _clearFilters,
+                        ),
+                      ],
+                    ],
                   ),
-                  child: Text(
-                    '$_activeFilterCount active',
-                    style: const TextStyle(
-                      color: AppTheme.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-              const Spacer(),
-              Text(
-                'Read-only audit trail',
-                style: TextStyle(
-                  color: isDark
-                      ? AppTheme.darkSubtleText
-                      : AppTheme.lightSubtleText,
-                  fontWeight: FontWeight.w600,
                 ),
               ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 180),
+                alignment: Alignment.topCenter,
+                child: !_filtersExpanded
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: _buildFilters(isDark),
+                      ),
+              ),
+              if (_hasActiveFilters) ...[
+                const SizedBox(height: AppTheme.space10),
+                _buildActiveFilterBar(isDark),
+              ],
             ],
           ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            alignment: Alignment.topCenter,
-            child: !_filtersExpanded
-                ? const SizedBox.shrink()
-                : Padding(
-                    padding: const EdgeInsets.only(top: AppTheme.space16),
-                    child: _buildFilters(isDark),
-                  ),
-          ),
-          if (_hasActiveFilters) ...[
-            const SizedBox(height: AppTheme.space12),
-            _buildActiveFilterBar(isDark),
-          ],
-        ],
+        ),
       ),
     );
   }
@@ -254,13 +359,16 @@ class _AuditLogPageState extends State<AuditLogPage> {
   ) {
     final securityEvents = entries.where(_isSecurityEvent).length;
     return Container(
-      padding: const EdgeInsets.all(AppTheme.space12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg,
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
         ),
+        boxShadow: AppTheme.getCardShadow(context),
       ),
       child: Wrap(
         spacing: AppTheme.space8,
@@ -398,9 +506,10 @@ class _AuditLogPageState extends State<AuditLogPage> {
           ),
         ),
         _filterField(
-          width: 210,
+          width: 240,
           child: DropdownButtonFormField<String>(
             initialValue: _entityType,
+            isExpanded: true,
             decoration: _decoration(
               isDark,
               const Icon(Icons.category_rounded),
@@ -410,7 +519,11 @@ class _AuditLogPageState extends State<AuditLogPage> {
                 .map(
                   (value) => DropdownMenuItem(
                     value: value,
-                    child: Text(_label(value)),
+                    child: Text(
+                      _label(value),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 )
                 .toList(),
@@ -421,9 +534,10 @@ class _AuditLogPageState extends State<AuditLogPage> {
           ),
         ),
         _filterField(
-          width: 210,
+          width: 260,
           child: DropdownButtonFormField<String>(
             initialValue: _actionType,
+            isExpanded: true,
             decoration: _decoration(
               isDark,
               const Icon(Icons.rule_rounded),
@@ -433,7 +547,11 @@ class _AuditLogPageState extends State<AuditLogPage> {
                 .map(
                   (value) => DropdownMenuItem(
                     value: value,
-                    child: Text(_label(value)),
+                    child: Text(
+                      _label(value),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 )
                 .toList(),
@@ -444,9 +562,10 @@ class _AuditLogPageState extends State<AuditLogPage> {
           ),
         ),
         _filterField(
-          width: 190,
+          width: 240,
           child: DropdownButtonFormField<String>(
             initialValue: _sortMode,
+            isExpanded: true,
             decoration: _decoration(
               isDark,
               const Icon(Icons.sort_rounded),
@@ -455,27 +574,58 @@ class _AuditLogPageState extends State<AuditLogPage> {
             items: const [
               DropdownMenuItem(
                 value: 'Date Newest',
-                child: Text('Date Newest'),
+                child: Text(
+                  'Date Newest',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               DropdownMenuItem(
                 value: 'Date Oldest',
-                child: Text('Date Oldest'),
+                child: Text(
+                  'Date Oldest',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              DropdownMenuItem(value: 'Entity A-Z', child: Text('Entity A-Z')),
-              DropdownMenuItem(value: 'Entity Z-A', child: Text('Entity Z-A')),
-              DropdownMenuItem(value: 'Actor A-Z', child: Text('Actor A-Z')),
-              DropdownMenuItem(value: 'Actor Z-A', child: Text('Actor Z-A')),
+              DropdownMenuItem(
+                value: 'Entity A-Z',
+                child: Text(
+                  'Entity A-Z',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              DropdownMenuItem(
+                value: 'Entity Z-A',
+                child: Text(
+                  'Entity Z-A',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              DropdownMenuItem(
+                value: 'Actor A-Z',
+                child: Text(
+                  'Actor A-Z',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              DropdownMenuItem(
+                value: 'Actor Z-A',
+                child: Text(
+                  'Actor Z-A',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
             onChanged: (value) {
               _sortMode = value ?? 'Date Newest';
               _reload(resetPage: true);
             },
           ),
-        ),
-        OutlinedButton.icon(
-          onPressed: _clearFilters,
-          icon: const Icon(Icons.filter_alt_off_rounded),
-          label: const Text('Clear All'),
         ),
       ],
     );
@@ -674,6 +824,251 @@ class _AuditLogPageState extends State<AuditLogPage> {
   }
 }
 
+class _AuditSearchField extends StatelessWidget {
+  const _AuditSearchField({
+    required this.controller,
+    required this.isDark,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final bool isDark;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      onSubmitted: onChanged,
+      style: TextStyle(
+        fontWeight: FontWeight.w700,
+        color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
+      ),
+      decoration: InputDecoration(
+        hintText: 'Search by actor, role, or email...',
+        prefixIcon: Icon(
+          Icons.manage_search_rounded,
+          color: isDark ? AppTheme.white70 : AppTheme.colorFF64748B,
+        ),
+        suffixIcon: controller.text.trim().isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark
+            ? const Color(0xFF20242B)
+            : const Color(0xFFF1F5F9),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withValues(alpha: 0.08)
+                : AppTheme.black.withValues(alpha: 0.08),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withValues(alpha: 0.08)
+                : AppTheme.black.withValues(alpha: 0.08),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: AppTheme.primaryBlue.withValues(alpha: 0.55),
+            width: 1.4,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AuditResultCount extends StatelessWidget {
+  const _AuditResultCount({required this.activeCount});
+
+  final int activeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final label = activeCount == 0
+        ? 'Audit trail'
+        : '$activeCount active filter${activeCount == 1 ? '' : 's'}';
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue.withValues(alpha: isDark ? 0.18 : 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.36)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppTheme.primaryBlue,
+          fontWeight: FontWeight.w900,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+}
+
+class _AuditActionButton extends StatelessWidget {
+  const _AuditActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: FilledButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        style: FilledButton.styleFrom(
+          backgroundColor: color.withValues(alpha: 0.16),
+          foregroundColor: color,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(color: color.withValues(alpha: 0.32)),
+          ),
+          textStyle: const TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AuditFilterChip extends StatelessWidget {
+  const _AuditFilterChip({
+    required this.label,
+    required this.value,
+    required this.activeWhen,
+    required this.displayValue,
+    required this.options,
+    required this.onSelected,
+    required this.onClear,
+  });
+
+  final String label;
+  final String value;
+  final String activeWhen;
+  final String displayValue;
+  final Map<String, String> options;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onClear;
+
+  bool get _active => value != activeWhen;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final background = _active
+        ? AppTheme.successGreen.withValues(alpha: isDark ? 0.18 : 0.1)
+        : (isDark ? const Color(0xFF20242B) : const Color(0xFFF1F5F9));
+    final border = _active
+        ? AppTheme.successGreen.withValues(alpha: 0.35)
+        : (isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08));
+    final textColor = _active
+        ? AppTheme.successGreen
+        : (isDark ? AppTheme.white : AppTheme.colorFF18212F);
+
+    return PopupMenuButton<String>(
+      tooltip: label,
+      onSelected: (selected) {
+        if (selected == '__clear__') {
+          onClear();
+        } else {
+          onSelected(selected);
+        }
+      },
+      itemBuilder: (context) => [
+        ...options.entries.map(
+          (entry) => PopupMenuItem(
+            value: entry.key,
+            child: Row(
+              children: [
+                Icon(
+                  entry.key == value
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 18,
+                  color: entry.key == value
+                      ? AppTheme.successGreen
+                      : AppTheme.neutralGray,
+                ),
+                const SizedBox(width: 8),
+                Text(entry.value),
+              ],
+            ),
+          ),
+        ),
+        if (_active)
+          const PopupMenuItem(
+            value: '__clear__',
+            child: Row(
+              children: [
+                Icon(Icons.close_rounded, size: 18, color: AppTheme.errorRed),
+                SizedBox(width: 8),
+                Text('Clear'),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              displayValue,
+              style: TextStyle(
+                color: textColor,
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: textColor),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AuditLogCard extends StatelessWidget {
   const _AuditLogCard({required this.entry, required this.alternate});
 
@@ -695,49 +1090,36 @@ class _AuditLogCard extends StatelessWidget {
     final timestamp = _timestampText(entry);
     final diff = _changedDiff(allBefore, allAfter, actionType);
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(AppTheme.space16),
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: isDark
-            ? (alternate ? AppTheme.darkPanelAlt : AppTheme.darkCardBg)
+            ? (alternate ? AppTheme.colorFF111827 : AppTheme.colorFF171B23)
             : (alternate ? AppTheme.colorFFF8FBFF : AppTheme.lightCardBg),
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isDark ? AppTheme.darkBorder : AppTheme.lightBorder,
+          color: _actionColor(
+            actionType,
+          ).withValues(alpha: isDark ? 0.24 : 0.18),
         ),
         boxShadow: AppTheme.getCardShadow(context),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: AppTheme.space8,
+            runSpacing: AppTheme.space8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Flexible(
-                child: _ActionChip(
-                  icon: _actionIcon(actionType),
-                  label: actionLabel,
-                  color: _actionColor(actionType),
-                ),
+              _ActionChip(
+                icon: _actionIcon(actionType),
+                label: actionLabel,
+                color: _actionColor(actionType),
               ),
-              if (securityLabel != null) ...[
-                const SizedBox(width: AppTheme.space8),
+              if (securityLabel != null)
                 _SecurityEventChip(label: securityLabel),
-              ],
-              const SizedBox(width: AppTheme.space12),
-              Expanded(
-                child: Text(
-                  timestamp,
-                  textAlign: TextAlign.right,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark
-                        ? AppTheme.darkSubtleText
-                        : AppTheme.lightSubtleText,
-                  ),
-                ),
-              ),
+              _TimestampChip(timestamp: timestamp),
             ],
           ),
           const SizedBox(height: AppTheme.space8),
@@ -1196,6 +1578,53 @@ class _SecurityEventChip extends StatelessWidget {
               fontSize: 12,
               fontWeight: FontWeight.w800,
               color: AppTheme.warningOrange,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimestampChip extends StatelessWidget {
+  const _TimestampChip({required this.timestamp});
+
+  final String timestamp;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.space10,
+        vertical: AppTheme.space6,
+      ),
+      decoration: BoxDecoration(
+        color: isDark
+            ? AppTheme.white.withValues(alpha: 0.05)
+            : AppTheme.black.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.schedule_rounded,
+            size: 15,
+            color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
+          ),
+          const SizedBox(width: AppTheme.space6),
+          Text(
+            timestamp,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.white70 : AppTheme.colorFF64748B,
             ),
           ),
         ],

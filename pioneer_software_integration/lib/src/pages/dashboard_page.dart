@@ -28,6 +28,8 @@ class _DashboardPageState extends State<DashboardPage>
   late AnimationController _chartAnimationController;
   late final DateTime _openedAt;
   Map<String, dynamic> _dashboardSummary = {};
+  String? _hoveredTopStatCard;
+  int _fleetPieTouchedIndex = -1;
 
   @override
   void initState() {
@@ -405,35 +407,16 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Widget _dashboardSectionHeading(String title, String subtitle) {
-    return Row(
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: AppTheme.space4,
-          height: 52,
-          decoration: BoxDecoration(
-            color: AppTheme.pioneerRed,
-            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-          ),
-        ),
-        const SizedBox(width: AppTheme.space12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: AppTheme.getDashboardSectionHeaderStyle(context),
-              ),
-              const SizedBox(height: AppTheme.space4),
-              Text(
-                subtitle,
-                style: AppTheme.getDashboardBodyStyle(
-                  context,
-                ).copyWith(color: AppTheme.getSubtleTextColor(context)),
-              ),
-            ],
-          ),
+        Text(title, style: AppTheme.getDashboardSectionHeaderStyle(context)),
+        const SizedBox(height: AppTheme.space4),
+        Text(
+          subtitle,
+          style: AppTheme.getDashboardBodyStyle(
+            context,
+          ).copyWith(color: AppTheme.getSubtleTextColor(context)),
         ),
       ],
     );
@@ -964,20 +947,20 @@ class _DashboardPageState extends State<DashboardPage>
             (revenue['thisWeekLabel']?.toString().trim().isNotEmpty ?? false)
         ? revenue['thisWeekLabel'].toString()
         : correctedTotalRevenue >= 1000000
-        ? 'PHP ${(correctedTotalRevenue / 1000000).toStringAsFixed(1)}M'
+        ? '₱${(correctedTotalRevenue / 1000000).toStringAsFixed(1)}M'
         : correctedTotalRevenue >= 1000
-        ? 'PHP ${(correctedTotalRevenue / 1000).toStringAsFixed(0)}K'
-        : 'PHP ${correctedTotalRevenue.toStringAsFixed(0)}';
+        ? '₱${(correctedTotalRevenue / 1000).toStringAsFixed(0)}K'
+        : '₱${correctedTotalRevenue.toStringAsFixed(0)}';
     final correctedNetProfit =
         (allBillings.isEmpty
             ? _parseMoney(revenue['thisWeekLabel'])
             : correctedTotalRevenue) *
         0.60;
     final displayProfitLabel = correctedNetProfit >= 1000000
-        ? 'PHP ${(correctedNetProfit / 1000000).toStringAsFixed(1)}M'
+        ? '₱${(correctedNetProfit / 1000000).toStringAsFixed(1)}M'
         : correctedNetProfit >= 1000
-        ? 'PHP ${(correctedNetProfit / 1000).toStringAsFixed(0)}K'
-        : 'PHP ${correctedNetProfit.toStringAsFixed(0)}';
+        ? '₱${(correctedNetProfit / 1000).toStringAsFixed(0)}K'
+        : '₱${correctedNetProfit.toStringAsFixed(0)}';
     final revenueTrend = '${revenue['trend']}'.toLowerCase();
     final revenueTrendLabel = revenueTrend == 'up'
         ? 'Higher than the previous week'
@@ -995,6 +978,7 @@ class _DashboardPageState extends State<DashboardPage>
         color: AppTheme.colorFF27AE60,
         trend: revenueTrend,
         trendLabel: revenueTrendLabel,
+        routeName: '/billing',
         isDark: isDark,
       ),
       _buildTopStatCard(
@@ -1005,6 +989,7 @@ class _DashboardPageState extends State<DashboardPage>
         color: AppTheme.colorFF4B7BE5,
         trend: revenueTrend,
         trendLabel: revenueTrendLabel,
+        routeName: '/billing',
         isDark: isDark,
       ),
       _buildTopStatCard(
@@ -1013,6 +998,7 @@ class _DashboardPageState extends State<DashboardPage>
         subtitle: 'of $totalTrucks fleet assets',
         icon: Icons.local_shipping_rounded,
         color: AppTheme.colorFF4B7BE5,
+        routeName: '/vehicles',
         isDark: isDark,
       ),
       _buildTopStatCard(
@@ -1022,6 +1008,7 @@ class _DashboardPageState extends State<DashboardPage>
             '${allTrips.where((t) => t['status'] == 'completed').length} completed',
         icon: Icons.airport_shuttle_rounded,
         color: AppTheme.colorFFF39C12,
+        routeName: '/trips',
         isDark: isDark,
       ),
       _buildTopStatCard(
@@ -1030,6 +1017,7 @@ class _DashboardPageState extends State<DashboardPage>
         subtitle: 'need attention',
         icon: Icons.warning_rounded,
         color: AppTheme.colorFFE74C3C,
+        routeName: '/trips',
         isDark: isDark,
       ),
       _buildTopStatCard(
@@ -1038,15 +1026,18 @@ class _DashboardPageState extends State<DashboardPage>
         subtitle: 'pending',
         icon: Icons.send_rounded,
         color: AppTheme.colorFF8E2DE2,
+        routeName: '/dispatch-queue',
         isDark: isDark,
       ),
     ];
 
-    final columns = screenWidth > 1200
-        ? 4
+    final columns = screenWidth >= 1800
+        ? 6
         : screenWidth >= 900
         ? 3
-        : 2;
+        : screenWidth >= 620
+        ? 2
+        : 1;
     return _buildKpiGrid(cards, columns);
   }
 
@@ -1088,104 +1079,166 @@ class _DashboardPageState extends State<DashboardPage>
     required bool isDark,
     String? trend,
     String? trendLabel,
+    String? routeName,
   }) {
     final trendColor = trend == 'up'
         ? AppTheme.successGreen
         : trend == 'down'
         ? AppTheme.errorRed
         : AppTheme.neutralGray;
+    final surfaceColor = isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg;
+    final gradientEnd = Color.lerp(
+      surfaceColor,
+      color,
+      isDark ? 0.22 : 0.09,
+    )!;
+    final isHovered = _hoveredTopStatCard == title;
+    final cardRadius = AppTheme.getCardRadius();
+    final borderColor = isHovered
+        ? color.withValues(alpha: isDark ? 0.48 : 0.3)
+        : isDark
+        ? AppTheme.darkBorder.withValues(alpha: 0.82)
+        : AppTheme.lightBorder;
+    final titleStyle = AppTheme.getDashboardKpiLabelStyle(context).copyWith(
+      color: isDark ? AppTheme.darkSubtleText : AppTheme.lightSubtleText,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0,
+    );
 
-    return Container(
-      padding: const EdgeInsets.all(AppTheme.dashboardKpiPadding),
-      decoration: BoxDecoration(
-        gradient: isDark
-            ? LinearGradient(
-                colors: [
-                  color.withValues(alpha: 0.3),
-                  color.withValues(alpha: 0.1),
-                ],
+    return MouseRegion(
+      cursor: routeName == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hoveredTopStatCard = title),
+      onExit: (_) => setState(() {
+        if (_hoveredTopStatCard == title) {
+          _hoveredTopStatCard = null;
+        }
+      }),
+      child: AnimatedScale(
+        scale: isHovered ? 1.006 : 1,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        child: InkWell(
+          onTap: routeName == null
+              ? null
+              : () => Navigator.pushNamed(context, routeName),
+          borderRadius: cardRadius,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.all(AppTheme.dashboardKpiPadding),
+            constraints: const BoxConstraints(minHeight: 168),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [surfaceColor, gradientEnd],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-              )
-            : null,
-        color: isDark ? null : color.withValues(alpha: 0.1),
-        borderRadius: AppTheme.getCardRadius(),
-        border: Border.all(
-          color: isDark
-              ? color.withValues(alpha: 0.3)
-              : color.withValues(alpha: 0.2),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    value,
-                    style: AppTheme.getDashboardKpiValueStyle(context),
-                  ),
-                ),
               ),
-              const SizedBox(width: AppTheme.space12),
-              Container(
-                padding: const EdgeInsets.all(AppTheme.space10),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                ),
-                child: Icon(
-                  icon,
-                  color: color,
-                  size: AppTheme.dashboardKpiIconSize,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppTheme.space10),
-          Text(
-            title,
-            style: AppTheme.getDashboardKpiLabelStyle(
-              context,
-            ).copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: AppTheme.space4),
-          Text(subtitle, style: AppTheme.getDashboardSecondaryStyle(context)),
-          if (trendLabel != null) ...[
-            const SizedBox(height: AppTheme.space10),
-            Row(
-              children: [
-                Icon(
-                  trend == 'up'
-                      ? Icons.trending_up_rounded
-                      : trend == 'down'
-                      ? Icons.trending_down_rounded
-                      : Icons.trending_flat_rounded,
-                  size: 20,
-                  color: trendColor,
-                ),
-                const SizedBox(width: AppTheme.space6),
-                Expanded(
-                  child: Text(
-                    trendLabel,
-                    style: AppTheme.getDashboardSecondaryStyle(
-                      context,
-                    ).copyWith(color: trendColor, fontWeight: FontWeight.w700),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+              borderRadius: cardRadius,
+              border: Border.all(color: borderColor, width: 1),
+              boxShadow: [
+                ...AppTheme.getCardShadow(context),
+                BoxShadow(
+                  color: color.withValues(alpha: isHovered ? 0.16 : 0.08),
+                  blurRadius: isHovered ? 22 : 14,
+                  spreadRadius: -6,
+                  offset: Offset(0, isHovered ? 8 : 5),
                 ),
               ],
             ),
-          ],
-        ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          value,
+                          style: AppTheme.getDashboardKpiValueStyle(
+                            context,
+                          ).copyWith(fontWeight: FontWeight.w900, height: 1),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: AppTheme.space12),
+                    Container(
+                      padding: const EdgeInsets.all(AppTheme.space10),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: isDark ? 0.16 : 0.1),
+                        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+                        border: Border.all(
+                          color: color.withValues(
+                            alpha: isHovered
+                                ? isDark
+                                      ? 0.42
+                                      : 0.3
+                                : isDark
+                                ? 0.26
+                                : 0.18,
+                          ),
+                        ),
+                      ),
+                      child: Icon(
+                        icon,
+                        color: color,
+                        size: AppTheme.dashboardKpiIconSize,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppTheme.space10),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: titleStyle,
+                ),
+                const SizedBox(height: AppTheme.space4),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.getDashboardSecondaryStyle(context),
+                ),
+                if (trendLabel != null) ...[
+                  const SizedBox(height: AppTheme.space10),
+                  Row(
+                    children: [
+                      Icon(
+                        trend == 'up'
+                            ? Icons.trending_up_rounded
+                            : trend == 'down'
+                            ? Icons.trending_down_rounded
+                            : Icons.trending_flat_rounded,
+                        size: 20,
+                        color: trendColor,
+                      ),
+                      const SizedBox(width: AppTheme.space6),
+                      Expanded(
+                        child: Text(
+                          trendLabel,
+                          style: AppTheme.getDashboardSecondaryStyle(context)
+                              .copyWith(
+                                color: trendColor,
+                                fontWeight: FontWeight.w700,
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1215,24 +1268,41 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  BoxDecoration _dashboardCardDecoration(
+    bool isDark, {
+    double radius = 20,
+    Color accent = AppTheme.primaryBlue,
+  }) {
+    final surfaceColor = isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg;
+    final gradientEnd = Color.lerp(
+      surfaceColor,
+      accent,
+      isDark ? 0.08 : 0.035,
+    )!;
+
+    return BoxDecoration(
+      gradient: LinearGradient(
+        colors: [surfaceColor, gradientEnd],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(
+        color: isDark
+            ? AppTheme.darkBorder.withValues(alpha: 0.72)
+            : AppTheme.lightBorder,
+      ),
+      boxShadow: AppTheme.getCardShadow(context),
+    );
+  }
+
   Widget _buildRevenueVsExpensesChart(bool isDark, bool isMobile) {
     return Container(
       padding: EdgeInsets.all(isMobile ? 16 : 24),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(isMobile ? 16 : 20),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.05),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.black.withValues(alpha: isDark ? 0.2 : 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+      decoration: _dashboardCardDecoration(
+        isDark,
+        radius: isMobile ? 16 : 20,
+        accent: AppTheme.infoBlue,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1256,7 +1326,9 @@ class _DashboardPageState extends State<DashboardPage>
                   drawVerticalLine: false,
                   horizontalInterval: 25,
                   getDrawingHorizontalLine: (value) => FlLine(
-                    color: isDark ? AppTheme.gray800 : AppTheme.gray300,
+                    color: isDark
+                        ? AppTheme.white.withValues(alpha: 0.09)
+                        : AppTheme.colorFFE5E7EB,
                     strokeWidth: 1,
                   ),
                 ),
@@ -1291,8 +1363,9 @@ class _DashboardPageState extends State<DashboardPage>
                               style: TextStyle(
                                 fontSize: AppTheme.dashboardSecondarySize,
                                 color: isDark
-                                    ? AppTheme.gray400
+                                    ? AppTheme.darkSubtleText
                                     : AppTheme.gray600,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           );
@@ -1307,10 +1380,13 @@ class _DashboardPageState extends State<DashboardPage>
                       interval: 25,
                       reservedSize: isMobile ? 40 : 50,
                       getTitlesWidget: (value, meta) => Text(
-                        'PHP ${value.toInt()}M',
+                        '₱${value.toInt()}M',
                         style: TextStyle(
                           fontSize: AppTheme.dashboardSecondarySize,
-                          color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+                          color: isDark
+                              ? AppTheme.darkMutedText
+                              : AppTheme.gray600,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
@@ -1345,14 +1421,14 @@ class _DashboardPageState extends State<DashboardPage>
                     ],
                     isCurved: true,
                     color: AppTheme.colorFF27AE60,
-                    barWidth: 3,
+                    barWidth: 4,
                     isStrokeCapRound: true,
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
                       gradient: LinearGradient(
                         colors: [
-                          AppTheme.colorFF27AE60.withValues(alpha: 0.3),
+                          AppTheme.colorFF27AE60.withValues(alpha: 0.24),
                           AppTheme.colorFF27AE60.withValues(alpha: 0.0),
                         ],
                         begin: Alignment.topCenter,
@@ -1377,14 +1453,14 @@ class _DashboardPageState extends State<DashboardPage>
                     ],
                     isCurved: true,
                     color: AppTheme.colorFFF39C12,
-                    barWidth: 3,
+                    barWidth: 4,
                     isStrokeCapRound: true,
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
                       gradient: LinearGradient(
                         colors: [
-                          AppTheme.colorFFF39C12.withValues(alpha: 0.3),
+                          AppTheme.colorFFF39C12.withValues(alpha: 0.22),
                           AppTheme.colorFFF39C12.withValues(alpha: 0.0),
                         ],
                         begin: Alignment.topCenter,
@@ -1429,71 +1505,58 @@ class _DashboardPageState extends State<DashboardPage>
     double centerRadius;
 
     if (screenWidth < 380) {
-      pieRadius = 38.0;
-      centerRadius = 32.0;
+      pieRadius = 42.0;
+      centerRadius = 28.0;
     } else if (isMobile) {
-      pieRadius = 44.0;
-      centerRadius = 42.0;
-    } else if (screenWidth < 900) {
-      pieRadius = 55.0;
-      centerRadius = 46.0;
-    } else if (screenWidth < 1200) {
-      pieRadius = 55.0;
-      centerRadius = 46.0;
-    } else {
       pieRadius = 50.0;
-      centerRadius = 41.0;
+      centerRadius = 34.0;
+    } else if (screenWidth < 900) {
+      pieRadius = 62.0;
+      centerRadius = 42.0;
+    } else if (screenWidth < 1200) {
+      pieRadius = 64.0;
+      centerRadius = 44.0;
+    } else {
+      pieRadius = 66.0;
+      centerRadius = 44.0;
     }
 
-    final sections = <PieChartSectionData>[
-      if (available > 0)
+    final sections = <PieChartSectionData>[];
+    void addSection(int count, Color color) {
+      if (count <= 0) {
+        return;
+      }
+      final sectionIndex = sections.length;
+      final isTouched = _fleetPieTouchedIndex == sectionIndex;
+      sections.add(
         PieChartSectionData(
-          value: available.toDouble(),
-          color: AppTheme.colorFF27AE60,
-          title: '',
-          radius: pieRadius,
+          value: count.toDouble(),
+          color: color,
+          title: isTouched ? '$count' : '',
+          titleStyle: TextStyle(
+            color: AppTheme.white,
+            fontWeight: FontWeight.w900,
+            fontSize: isMobile ? 12 : 14,
+          ),
+          titlePositionPercentageOffset: 0.6,
+          radius: isTouched ? pieRadius + 8 : pieRadius,
         ),
-      if (onTrip > 0)
-        PieChartSectionData(
-          value: onTrip.toDouble(),
-          color: AppTheme.colorFF4B7BE5,
-          title: '',
-          radius: pieRadius,
-        ),
-      if (maintenance > 0)
-        PieChartSectionData(
-          value: maintenance.toDouble(),
-          color: AppTheme.colorFFF39C12,
-          title: '',
-          radius: pieRadius,
-        ),
-      // Fallback if all zero
-      if (available == 0 && onTrip == 0 && maintenance == 0)
-        PieChartSectionData(
-          value: 1,
-          color: AppTheme.colorFF6B7280,
-          title: '',
-          radius: pieRadius,
-        ),
-    ];
+      );
+    }
+
+    addSection(available, AppTheme.colorFF27AE60);
+    addSection(onTrip, AppTheme.colorFF4B7BE5);
+    addSection(maintenance, AppTheme.colorFFF39C12);
+    if (sections.isEmpty) {
+      addSection(1, AppTheme.colorFF6B7280);
+    }
 
     return Container(
       padding: EdgeInsets.all(isMobile ? 16 : 24),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(isMobile ? 16 : 20),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.05),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.black.withValues(alpha: isDark ? 0.2 : 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+      decoration: _dashboardCardDecoration(
+        isDark,
+        radius: isMobile ? 16 : 20,
+        accent: AppTheme.tealAccent,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1514,12 +1577,60 @@ class _DashboardPageState extends State<DashboardPage>
               children: [
                 Expanded(
                   flex: 5,
-                  child: PieChart(
-                    PieChartData(
-                      centerSpaceRadius: centerRadius,
-                      sectionsSpace: 2,
-                      sections: sections,
-                    ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      PieChart(
+                        PieChartData(
+                          startDegreeOffset: -90,
+                          centerSpaceRadius: centerRadius,
+                          sectionsSpace: 4,
+                          sections: sections,
+                          pieTouchData: PieTouchData(
+                            enabled: true,
+                            touchCallback: (event, response) {
+                              final nextIndex =
+                                  event.isInterestedForInteractions
+                                  ? response
+                                            ?.touchedSection
+                                            ?.touchedSectionIndex ??
+                                        -1
+                                  : -1;
+                              if (_fleetPieTouchedIndex != nextIndex) {
+                                setState(
+                                  () => _fleetPieTouchedIndex = nextIndex,
+                                );
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '$total',
+                            style: AppTheme.getDashboardKpiValueStyle(context)
+                                .copyWith(
+                                  fontSize: isMobile ? 18 : 22,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1,
+                                ),
+                          ),
+                          Text(
+                            'assets',
+                            style: AppTheme.getDashboardSecondaryStyle(context)
+                                .copyWith(
+                                  fontSize: isMobile ? 10 : 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark
+                                      ? AppTheme.darkMutedText
+                                      : AppTheme.gray600,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 20),
@@ -1573,9 +1684,19 @@ class _DashboardPageState extends State<DashboardPage>
     return Row(
       children: [
         Container(
-          width: isMobile ? 10 : 12,
-          height: isMobile ? 10 : 12,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          width: isMobile ? 18 : 22,
+          height: isMobile ? 8 : 9,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: isDark ? 0.24 : 0.12),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
         ),
         SizedBox(width: isMobile ? 8 : 12),
         Expanded(
@@ -1583,6 +1704,7 @@ class _DashboardPageState extends State<DashboardPage>
             label,
             style: AppTheme.getDashboardBodyStyle(context).copyWith(
               color: isDark ? AppTheme.gray300 : AppTheme.colorFF2C3E50,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
@@ -1701,7 +1823,11 @@ class _DashboardPageState extends State<DashboardPage>
         isDark,
         title: 'Top 5 Active Vehicles',
         child: topVehicles.isEmpty
-            ? _emptyPanelText(isDark, 'No active vehicles today')
+            ? _emptyPanelText(
+                isDark,
+                'No active vehicle data available',
+                icon: Icons.local_shipping_outlined,
+              )
             : Column(
                 children: topVehicles
                     .map(
@@ -1963,6 +2089,14 @@ class _DashboardPageState extends State<DashboardPage>
           : max,
     );
 
+    if (tripsThisWeek.isEmpty || maxCount <= 0) {
+      return _emptyPanelText(
+        isDark,
+        'No trip volume data available',
+        icon: Icons.route_outlined,
+      );
+    }
+
     return SizedBox(
       height: 150,
       child: BarChart(
@@ -2098,7 +2232,7 @@ class _DashboardPageState extends State<DashboardPage>
             (sum, billing) => sum + _parseMoney(billing['amount']),
           ),
         ),
-        'lastWeekLabel': 'PHP 0',
+        'lastWeekLabel': '₱0',
         'trend': 'flat',
         'trendLabel': 'No change',
       },
@@ -2126,12 +2260,29 @@ class _DashboardPageState extends State<DashboardPage>
     return labels[date.weekday - 1];
   }
 
-  Widget _emptyPanelText(bool isDark, String text) {
-    return Text(
-      text,
-      style: AppTheme.getDashboardBodyStyle(
-        context,
-      ).copyWith(color: isDark ? AppTheme.gray400 : AppTheme.gray600),
+  Widget _emptyPanelText(bool isDark, String text, {IconData? icon}) {
+    final textColor = isDark ? AppTheme.gray400 : AppTheme.gray600;
+    return SizedBox(
+      height: 150,
+      width: double.infinity,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 28, color: textColor.withValues(alpha: 0.72)),
+              const SizedBox(height: 10),
+            ],
+            Text(
+              text,
+              textAlign: TextAlign.center,
+              style: AppTheme.getDashboardBodyStyle(
+                context,
+              ).copyWith(color: textColor, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2142,21 +2293,43 @@ class _DashboardPageState extends State<DashboardPage>
   }) {
     return Container(
       padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.05),
-        ),
-      ),
+      decoration: _dashboardCardDecoration(isDark, radius: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title, style: AppTheme.getHeadingStyle(context, fontSize: 16)),
           const SizedBox(height: 12),
           child,
+        ],
+      ),
+    );
+  }
+
+  Widget _dashboardStatusChip(
+    bool isDark, {
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.1),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: color.withValues(alpha: isDark ? 0.28 : 0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: AppTheme.getDashboardSecondaryStyle(context).copyWith(
+              color: isDark ? AppTheme.darkSubtleText : AppTheme.lightText,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
         ],
       ),
     );
@@ -2211,12 +2384,12 @@ class _DashboardPageState extends State<DashboardPage>
 
   String _moneyShort(double value) {
     if (value >= 1000000) {
-      return 'PHP ${(value / 1000000).toStringAsFixed(1)}M';
+      return '₱${(value / 1000000).toStringAsFixed(1)}M';
     }
     if (value >= 1000) {
-      return 'PHP ${(value / 1000).toStringAsFixed(0)}K';
+      return '₱${(value / 1000).toStringAsFixed(0)}K';
     }
-    return 'PHP ${value.toStringAsFixed(0)}';
+    return '₱${value.toStringAsFixed(0)}';
   }
 
   Widget _buildBottomSection(bool isDark, bool isMobile, bool isTablet) {
@@ -2252,24 +2425,33 @@ class _DashboardPageState extends State<DashboardPage>
     final trips = summaryTrips.isNotEmpty
         ? summaryTrips
         : tripsNotifier.value.take(6).toList();
+    final allTrips = tripsNotifier.value;
+    final activeTrips = allTrips.where((trip) {
+      final status = '${trip['status']}'.toLowerCase();
+      return status.contains('progress') ||
+          status.contains('transit') ||
+          status.contains('dispatch');
+    }).length;
+    final readyToBillTrips = allTrips.where((trip) {
+      final status = '${trip['status']}'.toLowerCase();
+      final text = '${trip['tripId']} ${trip['id']} $status'.toLowerCase();
+      return status.contains('complete') && !text.contains('hold');
+    }).length;
+    final needsReviewTrips = allTrips.where((trip) {
+      final status = '${trip['status']}'.toLowerCase();
+      final text = '${trip['tripId']} ${trip['id']} $status'.toLowerCase();
+      return text.contains('pod') ||
+          text.contains('hold') ||
+          text.contains('delay') ||
+          status.contains('pending');
+    }).length;
 
     return Container(
       padding: EdgeInsets.all(isMobile ? 16 : 24),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(isMobile ? 16 : 20),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.05),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.black.withValues(alpha: isDark ? 0.2 : 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+      decoration: _dashboardCardDecoration(
+        isDark,
+        radius: isMobile ? 16 : 20,
+        accent: AppTheme.colorFF4B7BE5,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2309,7 +2491,34 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _dashboardStatusChip(
+                isDark,
+                icon: Icons.local_shipping_rounded,
+                label: '$activeTrips active',
+                color: AppTheme.colorFF4B7BE5,
+              ),
+              _dashboardStatusChip(
+                isDark,
+                icon: Icons.receipt_long_rounded,
+                label: '$readyToBillTrips ready to bill',
+                color: AppTheme.successGreen,
+              ),
+              _dashboardStatusChip(
+                isDark,
+                icon: Icons.fact_check_rounded,
+                label: '$needsReviewTrips need review',
+                color: needsReviewTrips == 0
+                    ? AppTheme.slateAccent
+                    : AppTheme.warningOrange,
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
           Flexible(
             child: SingleChildScrollView(
               scrollDirection: Axis.vertical,
@@ -2317,8 +2526,11 @@ class _DashboardPageState extends State<DashboardPage>
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
                   headingRowColor: WidgetStateProperty.all(
-                    isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFD,
+                    isDark
+                        ? AppTheme.primaryBlue.withValues(alpha: 0.18)
+                        : AppTheme.colorFFEAF2FF,
                   ),
+                  dividerThickness: 0.5,
                   columnSpacing: isMobile ? 12 : 20,
                   horizontalMargin: isMobile ? 12 : 20,
                   dataRowMinHeight: 56,
@@ -2553,24 +2765,19 @@ class _DashboardPageState extends State<DashboardPage>
         .take(6)
         .toList();
     final unread = NotificationService.instance.unreadCount;
+    final maintenanceAlerts = notifs
+        .where((item) => item.category == NotificationCategory.maintenance)
+        .length;
+    final billingAlerts = notifs
+        .where((item) => item.category == NotificationCategory.billing)
+        .length;
 
     return Container(
       padding: EdgeInsets.all(isMobile ? 16 : 24),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(isMobile ? 16 : 20),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.05),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.black.withValues(alpha: isDark ? 0.2 : 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+      decoration: _dashboardCardDecoration(
+        isDark,
+        radius: isMobile ? 16 : 20,
+        accent: unread > 0 ? AppTheme.warningOrange : AppTheme.tealAccent,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2610,7 +2817,36 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _dashboardStatusChip(
+                isDark,
+                icon: Icons.mark_email_unread_rounded,
+                label: '$unread unread',
+                color: unread == 0 ? AppTheme.slateAccent : AppTheme.errorRed,
+              ),
+              _dashboardStatusChip(
+                isDark,
+                icon: Icons.build_rounded,
+                label: '$maintenanceAlerts maintenance',
+                color: maintenanceAlerts == 0
+                    ? AppTheme.slateAccent
+                    : AppTheme.warningOrange,
+              ),
+              _dashboardStatusChip(
+                isDark,
+                icon: Icons.payment_rounded,
+                label: '$billingAlerts billing',
+                color: billingAlerts == 0
+                    ? AppTheme.slateAccent
+                    : AppTheme.purpleAccent,
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
           if (notifs.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
@@ -2699,78 +2935,94 @@ class _DashboardPageState extends State<DashboardPage>
     required bool isDark,
     required bool isMobile,
   }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Stack(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, color: iconColor, size: isMobile ? 16 : 18),
-            ),
-            if (isUnread)
-              Positioned(
-                right: 0,
-                top: 0,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    color: AppTheme.colorFFE74C3C,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-          ],
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isUnread
+            ? iconColor.withValues(alpha: isDark ? 0.12 : 0.08)
+            : (isDark ? AppTheme.white10 : AppTheme.colorFFF8FAFC),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(
+          color: isUnread
+              ? iconColor.withValues(alpha: isDark ? 0.24 : 0.16)
+              : (isDark ? AppTheme.white10 : AppTheme.lightBorder),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Stack(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: isMobile ? 12 : 13,
-                        fontWeight: isUnread
-                            ? FontWeight.w700
-                            : FontWeight.w600,
-                        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-                      ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: iconColor.withValues(alpha: isDark ? 0.18 : 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: iconColor, size: isMobile ? 16 : 18),
+              ),
+              if (isUnread)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: AppTheme.colorFFE74C3C,
+                      shape: BoxShape.circle,
                     ),
                   ),
-                  if (time != null)
-                    Text(
-                      time,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? AppTheme.gray500 : AppTheme.gray500,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: isMobile ? 11 : 12,
-                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                  height: 1.4,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
             ],
           ),
-        ),
-      ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: isMobile ? 12 : 13,
+                          fontWeight: isUnread
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                          color: isDark
+                              ? AppTheme.white
+                              : AppTheme.colorFF2C3E50,
+                        ),
+                      ),
+                    ),
+                    if (time != null)
+                      Text(
+                        time,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? AppTheme.gray500 : AppTheme.gray500,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: isMobile ? 11 : 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                    height: 1.4,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
