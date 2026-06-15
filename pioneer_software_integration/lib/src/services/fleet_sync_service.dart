@@ -247,7 +247,7 @@ void warmOperationalCachesSilently({bool forceRefresh = false}) {
 void _applyFleetSummaryData(Map<String, dynamic> summary) {
   vehiclesNotifier.value = _retainLastGoodList(
     current: vehiclesNotifier.value,
-    next: _mapVehicles(summary['vehicles']),
+    next: includeDemoLiveVehicles(_mapVehicles(summary['vehicles'])),
   );
   driversNotifier.value = _retainLastGoodList(
     current: driversNotifier.value,

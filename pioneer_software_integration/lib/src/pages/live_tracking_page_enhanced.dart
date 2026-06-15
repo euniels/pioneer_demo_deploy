@@ -2600,40 +2600,48 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           ),
         ],
       ),
-      child: Row(
+      child: Stack(
         children: [
-          Container(
-            width: isMobile ? 44 : 60,
-            height: isMobile ? 44 : 60,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: _motionStateGradient(vehicle)),
-              borderRadius: BorderRadius.circular(isMobile ? 12 : 16),
-            ),
-            child: Icon(
-              _motionStateIcon(vehicle),
-              color: AppTheme.white,
-              size: isMobile ? 22 : 32,
-            ),
-          ),
-          SizedBox(width: isMobile ? 10 : 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+          Padding(
+            padding: EdgeInsets.only(right: isMobile ? 24 : 28),
+            child: Row(
               children: [
-                Text(
-                  _plateOf(vehicle),
-                  style: TextStyle(
-                    fontSize: isMobile ? 15 : 20,
-                    fontWeight: FontWeight.w900,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+                Container(
+                  width: isMobile ? 44 : 60,
+                  height: isMobile ? 44 : 60,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: _motionStateGradient(vehicle),
+                    ),
+                    borderRadius: BorderRadius.circular(isMobile ? 12 : 16),
+                  ),
+                  child: Icon(
+                    _motionStateIcon(vehicle),
+                    color: AppTheme.white,
+                    size: isMobile ? 22 : 32,
                   ),
                 ),
-                SizedBox(height: isMobile ? 4 : 8),
-                Wrap(
-                  spacing: isMobile ? 8 : 16,
-                  runSpacing: 4,
-                  children: [
+                SizedBox(width: isMobile ? 10 : 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _plateOf(vehicle),
+                        style: TextStyle(
+                          fontSize: isMobile ? 15 : 20,
+                          fontWeight: FontWeight.w900,
+                          color: isDark
+                              ? AppTheme.white
+                              : AppTheme.colorFF2C3E50,
+                        ),
+                      ),
+                      SizedBox(height: isMobile ? 4 : 8),
+                      Wrap(
+                        spacing: isMobile ? 8 : 16,
+                        runSpacing: 4,
+                        children: [
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -2715,76 +2723,90 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                         ),
                       ],
                     ),
-                  ],
-                ),
-                _buildSelectedTemperaturePanel(vehicle),
-                if (_isFollowingSelected) ...[
-                  SizedBox(height: isMobile ? 6 : 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.35),
+                        ],
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.my_location_rounded,
-                          size: 14,
-                          color: AppTheme.colorFF4B7BE5,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Following ${_plateOf(vehicle)}',
-                          style: TextStyle(
-                            fontSize: isMobile ? 11 : 12,
-                            fontWeight: FontWeight.w700,
-                            color: isDark
-                                ? AppTheme.white
-                                : AppTheme.colorFF1F2937,
+                      _buildSelectedTemperaturePanel(vehicle),
+                      if (_isFollowingSelected) ...[
+                        SizedBox(height: isMobile ? 6 : 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.colorFF4B7BE5.withValues(
+                              alpha: 0.14,
+                            ),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: AppTheme.colorFF4B7BE5.withValues(
+                                alpha: 0.35,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.my_location_rounded,
+                                size: 14,
+                                color: AppTheme.colorFF4B7BE5,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Following ${_plateOf(vehicle)}',
+                                style: TextStyle(
+                                  fontSize: isMobile ? 11 : 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark
+                                      ? AppTheme.white
+                                      : AppTheme.colorFF1F2937,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
-                    ),
+                      SizedBox(height: isMobile ? 6 : 10),
+                      Text(
+                        _secondaryText(vehicle),
+                        style: TextStyle(
+                          fontSize: isMobile ? 11 : 13,
+                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
-                ],
-                SizedBox(height: isMobile ? 6 : 10),
-                Text(
-                  _secondaryText(vehicle),
-                  style: TextStyle(
-                    fontSize: isMobile ? 11 : 13,
-                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
-          IconButton(
-            onPressed: () {
-              if (mounted) {
-                setState(() {
-                  selectedPlate = '';
-                  _selectedTrail = const [];
-                  _isFollowingSelected = false;
-                });
-              }
-            },
-            icon: Icon(
-              Icons.close_rounded,
-              size: isMobile ? 20 : 24,
-              color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+          Positioned(
+            top: 0,
+            right: 0,
+            child: IconButton(
+              onPressed: () {
+                if (mounted) {
+                  setState(() {
+                    selectedPlate = '';
+                    _selectedTrail = const [];
+                    _isFollowingSelected = false;
+                  });
+                }
+              },
+              icon: Icon(
+                Icons.close_rounded,
+                size: isMobile ? 20 : 24,
+                color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints.tightFor(
+                width: isMobile ? 28 : 32,
+                height: isMobile ? 28 : 32,
+              ),
             ),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
           ),
         ],
       ),

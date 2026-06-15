@@ -12,6 +12,11 @@ final ValueNotifier<List<Map<String, dynamic>>> vehiclesNotifier =
 
 List<Map<String, dynamic>> _initialVehicles() => [];
 
+List<Map<String, dynamic>> includeDemoLiveVehicles(
+  List<Map<String, dynamic>> vehicles,
+) =>
+    _withDemoLiveVehicles(vehicles);
+
 void addVehicle(Map<String, dynamic> vehicle) {
   vehiclesNotifier.value = [...vehiclesNotifier.value, vehicle];
   _persistVehiclesMirror();

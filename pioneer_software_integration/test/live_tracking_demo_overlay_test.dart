@@ -56,4 +56,22 @@ void main() {
 
     expect(demoOneCount, 1);
   });
+
+  test('fleet summary vehicle lists can also preserve demo map vehicles', () {
+    final vehicles = includeDemoLiveVehicles([
+      {
+        'id': 'summary-real-device-001',
+        'plate': 'REAL-SUMMARY-01',
+        'latitude': 14.55,
+        'longitude': 121.01,
+      },
+    ]);
+
+    final plates = vehicles.map((vehicle) => vehicle['plate']).toSet();
+
+    expect(plates, contains('REAL-SUMMARY-01'));
+    expect(plates, contains('DEMO-TRK-01'));
+    expect(plates, contains('DEMO-TRK-02'));
+    expect(plates, contains('DEMO-TRK-03'));
+  });
 }
