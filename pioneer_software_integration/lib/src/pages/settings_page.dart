@@ -838,22 +838,15 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
               _buildSettingsOverview(isDark, role, roleColor),
               const SizedBox(height: 18),
               _responsiveSettingsLayout(
-                left: Column(
-                  children: [
-                    _buildAccountCard(isDark, user, role, roleColor),
-                    const SizedBox(height: 16),
-                    _buildNotificationCard(isDark, roleColor),
-                  ],
-                ),
-                right: Column(
-                  children: [
-                    _buildDisplayCard(isDark),
-                    const SizedBox(height: 16),
-                    _buildAppearanceCard(isDark),
-                    const SizedBox(height: 16),
-                    _buildAboutCard(isDark),
-                  ],
-                ),
+                leftCards: [
+                  _buildAccountCard(isDark, user, role, roleColor),
+                  _buildAppearanceCard(isDark),
+                  _buildAboutCard(isDark),
+                ],
+                rightCards: [
+                  _buildDisplayCard(isDark),
+                  _buildNotificationCard(isDark, roleColor),
+                ],
               ),
               const SizedBox(height: 18),
               if (_canEditSystemSettings || _canReviewWriteBack) ...[
@@ -873,17 +866,18 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
   }
 
   Widget _responsiveSettingsLayout({
-    required Widget left,
-    required Widget right,
+    required List<Widget> leftCards,
+    required List<Widget> rightCards,
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 980) {
           return Column(
             children: [
-              left,
-              const SizedBox(height: 16),
-              right,
+              ..._stackCards(leftCards),
+              if (leftCards.isNotEmpty && rightCards.isNotEmpty)
+                const SizedBox(height: 16),
+              ..._stackCards(rightCards),
             ],
           );
         }
@@ -891,12 +885,28 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(flex: 6, child: left),
+            Expanded(child: _stackedSettingsColumn(leftCards)),
             const SizedBox(width: 16),
-            Expanded(flex: 5, child: right),
+            Expanded(child: _stackedSettingsColumn(rightCards)),
           ],
         );
       },
+    );
+  }
+
+  List<Widget> _stackCards(List<Widget> cards) {
+    return [
+      for (var i = 0; i < cards.length; i++) ...[
+        if (i > 0) const SizedBox(height: 16),
+        cards[i],
+      ],
+    ];
+  }
+
+  Widget _stackedSettingsColumn(List<Widget> cards) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: _stackCards(cards),
     );
   }
 

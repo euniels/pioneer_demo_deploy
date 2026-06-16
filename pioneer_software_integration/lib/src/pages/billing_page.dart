@@ -146,18 +146,14 @@ class _BillingPageState extends State<BillingPage> {
           return RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ListView(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.fromLTRB(28, 22, 28, 32),
               children: [
                 _buildBillingScopeNotice(isDark, contextData),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _buildSummary(isDark, overview),
-                const SizedBox(height: 12),
-                _buildBillingCommandCenter(isDark, overview),
-                const SizedBox(height: 12),
-                _buildVehicleSubscriptionCoverage(isDark),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _buildFilters(isDark, invoices),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 if (filtered.isEmpty)
                   _BillingEmptyState(
                     isDark: isDark,
@@ -167,6 +163,10 @@ class _BillingPageState extends State<BillingPage> {
                   )
                 else
                   _buildInvoiceTable(isDark, filtered),
+                const SizedBox(height: 14),
+                _buildBillingCommandCenter(isDark, overview),
+                const SizedBox(height: 14),
+                _buildVehicleSubscriptionCoverage(isDark),
               ],
             ),
           );
@@ -1597,10 +1597,10 @@ class _BillingPageState extends State<BillingPage> {
     final thirdParty = overview['thirdPartyCandidateCount'] ?? 0;
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF101826 : AppTheme.colorFFF8FAFC,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: isDark
               ? AppTheme.white.withValues(alpha: 0.06)
@@ -1651,7 +1651,7 @@ class _BillingPageState extends State<BillingPage> {
               Text(
                 'Billing command center',
                 style: TextStyle(
-                  fontSize: 18,
+                  fontSize: 16,
                   fontWeight: FontWeight.w900,
                   color: isDark ? AppTheme.white : AppTheme.colorFF111827,
                 ),
@@ -1665,25 +1665,27 @@ class _BillingPageState extends State<BillingPage> {
                   color: isDark ? AppTheme.white70 : AppTheme.colorFF64748B,
                 ),
               ),
-              const SizedBox(height: 12),
-              _PolicyLine(
-                text:
-                    policy['freeDeliveryRule']?.toString() ??
-                    'Free-delivery candidates require order value and distance review.',
-                isDark: isDark,
-              ),
-              _PolicyLine(
-                text:
-                    policy['podRule']?.toString() ??
-                    'POD evidence gates collection readiness.',
-                isDark: isDark,
-              ),
-              _PolicyLine(
-                text:
-                    policy['thirdPartyRule']?.toString() ??
-                    'Third-party delivery costs stay visible for client pass-through.',
-                isDark: isDark,
-              ),
+              if (policy.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  [
+                    policy['freeDeliveryRule'],
+                    policy['podRule'],
+                    policy['thirdPartyRule'],
+                  ]
+                      .where((item) => item != null)
+                      .map((item) => item.toString())
+                      .take(2)
+                      .join(' '),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
+                  ),
+                ),
+              ],
             ],
           );
 
@@ -1709,109 +1711,122 @@ class _BillingPageState extends State<BillingPage> {
 
   Widget _buildFilters(bool isDark, List<Map<String, dynamic>> invoices) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-        borderRadius: BorderRadius.circular(22),
+        color: isDark ? AppTheme.colorFF141924 : AppTheme.colorFFF8FAFC,
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: isDark
-              ? AppTheme.white.withValues(alpha: 0.06)
+              ? AppTheme.white.withValues(alpha: 0.08)
               : AppTheme.black.withValues(alpha: 0.06),
         ),
       ),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        crossAxisAlignment: WrapCrossAlignment.center,
+      child: Column(
         children: [
-          SizedBox(
-            width: 320,
-            child: TextField(
-              onChanged: (value) => setState(() => _search = value),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search_rounded),
-                hintText: 'Search invoice, client, or trip ID',
-                filled: true,
-                fillColor: isDark
-                    ? AppTheme.colorFF0E1420
-                    : AppTheme.colorFFF8FAFC,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide.none,
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  onChanged: (value) => setState(() => _search = value),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    hintText: 'Search invoice, client, or trip ID',
+                    filled: true,
+                    fillColor: isDark
+                        ? AppTheme.colorFF0E1420
+                        : AppTheme.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'all', label: Text('All')),
-              ButtonSegment(value: 'draft', label: Text('Draft')),
-              ButtonSegment(value: 'approved', label: Text('Approved')),
-              ButtonSegment(value: 'rejected', label: Text('Rejected')),
-              ButtonSegment(value: 'issued', label: Text('Issued')),
-              ButtonSegment(value: 'paid', label: Text('Paid')),
-              ButtonSegment(value: 'overdue', label: Text('Overdue')),
-              ButtonSegment(value: 'voided', label: Text('Voided')),
+              const SizedBox(width: 12),
+              if (CrudPermissions.canCreate(CrudEntity.invoices))
+                FilledButton.icon(
+                  onPressed: invoices.isEmpty
+                      ? null
+                      : () => _showManualInvoiceDialog(invoices, isDark),
+                  icon: const Icon(Icons.add_card_rounded),
+                  label: const Text('New Manual Invoice'),
+                ),
             ],
-            selected: {_status},
-            onSelectionChanged: (value) {
-              setState(() => _status = value.first);
-            },
           ),
-          OutlinedButton.icon(
-            onPressed: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _fromDate ?? DateTime.now(),
-                firstDate: DateTime(2020),
-                lastDate: DateTime.now().add(const Duration(days: 365)),
-              );
-              if (picked != null) {
-                setState(() => _fromDate = picked);
-              }
-            },
-            icon: const Icon(Icons.date_range_rounded),
-            label: Text(
-              _fromDate == null
-                  ? 'From date'
-                  : 'From ${_fromDate!.toIso8601String().substring(0, 10)}',
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'all', label: Text('All')),
+                    ButtonSegment(value: 'draft', label: Text('Draft')),
+                    ButtonSegment(value: 'approved', label: Text('Approved')),
+                    ButtonSegment(value: 'rejected', label: Text('Rejected')),
+                    ButtonSegment(value: 'issued', label: Text('Issued')),
+                    ButtonSegment(value: 'paid', label: Text('Paid')),
+                    ButtonSegment(value: 'overdue', label: Text('Overdue')),
+                    ButtonSegment(value: 'voided', label: Text('Voided')),
+                  ],
+                  selected: {_status},
+                  onSelectionChanged: (value) {
+                    setState(() => _status = value.first);
+                  },
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _fromDate ?? DateTime.now(),
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                    );
+                    if (picked != null) {
+                      setState(() => _fromDate = picked);
+                    }
+                  },
+                  icon: const Icon(Icons.date_range_rounded),
+                  label: Text(
+                    _fromDate == null
+                        ? 'From date'
+                        : 'From ${_fromDate!.toIso8601String().substring(0, 10)}',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _toDate ?? DateTime.now(),
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                    );
+                    if (picked != null) {
+                      setState(() => _toDate = picked);
+                    }
+                  },
+                  icon: const Icon(Icons.event_available_rounded),
+                  label: Text(
+                    _toDate == null
+                        ? 'To date'
+                        : 'To ${_toDate!.toIso8601String().substring(0, 10)}',
+                  ),
+                ),
+                if (_fromDate != null || _toDate != null) ...[
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: () => setState(() {
+                      _fromDate = null;
+                      _toDate = null;
+                    }),
+                    child: const Text('Clear dates'),
+                  ),
+                ],
+              ],
             ),
           ),
-          OutlinedButton.icon(
-            onPressed: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _toDate ?? DateTime.now(),
-                firstDate: DateTime(2020),
-                lastDate: DateTime.now().add(const Duration(days: 365)),
-              );
-              if (picked != null) {
-                setState(() => _toDate = picked);
-              }
-            },
-            icon: const Icon(Icons.event_available_rounded),
-            label: Text(
-              _toDate == null
-                  ? 'To date'
-                  : 'To ${_toDate!.toIso8601String().substring(0, 10)}',
-            ),
-          ),
-          if (_fromDate != null || _toDate != null)
-            TextButton(
-              onPressed: () => setState(() {
-                _fromDate = null;
-                _toDate = null;
-              }),
-              child: const Text('Clear dates'),
-            ),
-          if (CrudPermissions.canCreate(CrudEntity.invoices))
-            FilledButton.icon(
-              onPressed: invoices.isEmpty
-                  ? null
-                  : () => _showManualInvoiceDialog(invoices, isDark),
-              icon: const Icon(Icons.add_card_rounded),
-              label: const Text('New Manual Invoice'),
-            ),
         ],
       ),
     );
@@ -2165,50 +2180,49 @@ class _BillingPageState extends State<BillingPage> {
         'GeoTab subscriptions, monthly fees, onboarding, activation, overtime, and contract fees are managed through the Pioneer ERP system separately.';
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF101826 : AppTheme.colorFFF8FAFC,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.08)
-              : AppTheme.black.withValues(alpha: 0.08),
+          color: AppTheme.colorFF4B7BE5.withValues(alpha: isDark ? 0.18 : 0.14),
         ),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 34,
+            height: 34,
             decoration: BoxDecoration(
-              color: AppTheme.colorFF1A3A6B.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(14),
+              color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(
               Icons.receipt_long_rounded,
+              size: 18,
               color: AppTheme.colorFF4B7BE5,
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  'Delivery Trip Billing',
+                  'Delivery trip billing only',
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: 13,
                     fontWeight: FontWeight.w900,
                     color: isDark ? AppTheme.white : AppTheme.colorFF111827,
                   ),
                 ),
-                const SizedBox(height: 4),
                 Text(
-                  'PioneerPath covers delivery trip charges only. $note',
+                  note,
                   style: TextStyle(
-                    fontSize: 13,
-                    height: 1.45,
+                    fontSize: 12,
+                    height: 1.35,
                     color: isDark ? AppTheme.white70 : AppTheme.colorFF64748B,
                   ),
                 ),
@@ -2317,45 +2331,57 @@ class _BillingKpiCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppTheme.dashboardKpiPadding),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-        borderRadius: BorderRadius.circular(AppTheme.radiusXl),
+        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: accent.withValues(alpha: 0.22)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: isDark ? 0.08 : 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  label.toUpperCase(),
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: isDark ? 0.16 : 0.1),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(icon, color: accent, size: 21),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: AppTheme.dashboardKpiLabelSize,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
                     color: accent,
                   ),
                 ),
-              ),
-              Icon(icon, color: accent, size: AppTheme.dashboardKpiIconSize),
-            ],
-          ),
-          const SizedBox(height: AppTheme.space16),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: AppTheme.dashboardKpiValueSize,
-              fontWeight: FontWeight.w800,
-              color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
-            ),
-          ),
-          const SizedBox(height: AppTheme.space6),
-          Text(
-            'Delivery trip invoices',
-            style: TextStyle(
-              fontSize: AppTheme.dashboardSecondarySize,
-              color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -2416,41 +2442,6 @@ class _BillingSignal extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PolicyLine extends StatelessWidget {
-  final String text;
-  final bool isDark;
-
-  const _PolicyLine({required this.text, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(
-            Icons.verified_rounded,
-            size: 15,
-            color: AppTheme.colorFF10B981,
-          ),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
-              ),
             ),
           ),
         ],

@@ -17,6 +17,7 @@ class DashboardLayout extends StatefulWidget {
   final String? subtitle;
   final List<Widget>? actions;
   final TextStyle? titleTextStyle;
+  final Future<void> Function()? onRefresh;
 
   const DashboardLayout({
     Key? key,
@@ -26,6 +27,7 @@ class DashboardLayout extends StatefulWidget {
     this.subtitle,
     this.actions,
     this.titleTextStyle,
+    this.onRefresh,
   }) : super(key: key);
 
   @override
@@ -1340,7 +1342,12 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                   color: AppTheme.getSubtleTextColor(context),
                 ),
                 onPressed: () {
-                  refreshFleetSnapshotSilently(forceRefresh: true);
+                  final routeRefresh = widget.onRefresh;
+                  if (routeRefresh != null) {
+                    routeRefresh();
+                  } else {
+                    refreshFleetSnapshotSilently(forceRefresh: true);
+                  }
                   _syncNotifications(forceRefresh: true);
                 },
                 tooltip: 'Refresh',

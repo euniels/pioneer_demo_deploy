@@ -1049,6 +1049,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     return DashboardLayout(
       currentRoute: '/live-tracking',
       title: 'Live Tracking',
+      onRefresh: () => _loadVehicles(fullRefresh: true, refreshTrail: true),
       child: _buildPageContent(),
     );
   }
