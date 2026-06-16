@@ -543,11 +543,12 @@ test('fleet route push auto stages geotab zones for coordinate only stops', func
         ->assertOk()
         ->assertJsonPath('data.status', 'succeeded');
 
-    expect(array_column($fake->added, 'typeName'))->toBe(['Zone', 'Zone', 'Route', 'RoutePlanItem', 'RoutePlanItem'])
-        ->and(array_column($fake->set, 'typeName'))->toBe(['Route'])
+    expect(array_column($fake->added, 'typeName'))->toBe(['Zone', 'Zone', 'Route'])
+        ->and($fake->set)->toBe([])
         ->and(data_get($fake->added[2], 'entity.name'))->toBe('Coordinate Only Push')
-        ->and(data_get($fake->added[3], 'entity.zone.id'))->toBe('zone-created-1')
-        ->and(data_get($fake->added[4], 'entity.zone.id'))->toBe('zone-created-2');
+        ->and(data_get($fake->added[2], 'entity.device.id'))->toBe('device-coordinate-route')
+        ->and(data_get($fake->added[2], 'entity.routePlanItemCollection.0.zone.id'))->toBe('zone-created-1')
+        ->and(data_get($fake->added[2], 'entity.routePlanItemCollection.1.zone.id'))->toBe('zone-created-2');
 
     $route = FleetRoute::query()->with('stops')->firstOrFail();
     expect($route->sync_status)->toBe('synced')
@@ -596,10 +597,11 @@ test('grouped route device assignment processes route then assignment and syncs 
         ->assertJsonPath('data.status', 'succeeded')
         ->assertJsonPath('data.result.typeName', 'GroupedWriteBack');
 
-    expect(array_column($fake->added, 'typeName'))->toBe(['Route', 'RoutePlanItem', 'RoutePlanItem'])
-        ->and(array_column($fake->set, 'typeName'))->toBe(['Route'])
-        ->and(data_get($fake->set[0], 'entity.id'))->toBe('route-created-701')
-        ->and(data_get($fake->set[0], 'entity.device.id'))->toBe('device-route-process');
+    expect(array_column($fake->added, 'typeName'))->toBe(['Route'])
+        ->and($fake->set)->toBe([])
+        ->and(data_get($fake->added[0], 'entity.device.id'))->toBe('device-route-process')
+        ->and(data_get($fake->added[0], 'entity.routePlanItemCollection.0.zone.id'))->toBe('zone-a')
+        ->and(data_get($fake->added[0], 'entity.routePlanItemCollection.1.zone.id'))->toBe('zone-b');
 
     $route = FleetRoute::query()->firstOrFail();
     expect($route->sync_status)->toBe('synced')

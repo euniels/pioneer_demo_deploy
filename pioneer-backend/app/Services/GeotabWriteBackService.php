@@ -393,6 +393,7 @@ class GeotabWriteBackService
         if (! is_array($operations) || $operations === []) {
             throw new \RuntimeException('Grouped GeoTab write-back has no operations to process.');
         }
+        $operations = $this->normalizeGroupedRoutePlanOperations($operations);
 
         $completed = [];
         $results = [];
@@ -440,6 +441,61 @@ class GeotabWriteBackService
             'typeName' => 'GroupedWriteBack',
             'operationResults' => $results,
         ];
+    }
+
+    private function normalizeGroupedRoutePlanOperations(array $operations): array
+    {
+        $skipIndexes = [];
+
+        foreach ($operations as $index => $operation) {
+            if (! is_array($operation) || (string) ($operation['action'] ?? '') !== 'route.create') {
+                continue;
+            }
+
+            $assignmentIndex = null;
+            $assignment = null;
+            foreach ($operations as $candidateIndex => $candidate) {
+                if ($candidateIndex === $index || ! is_array($candidate)) {
+                    continue;
+                }
+                if ((string) ($candidate['action'] ?? '') !== 'route.assign_device') {
+                    continue;
+                }
+                if ((string) ($candidate['localType'] ?? '') !== (string) ($operation['localType'] ?? '')
+                    || (string) ($candidate['localId'] ?? '') !== (string) ($operation['localId'] ?? '')) {
+                    continue;
+                }
+
+                $assignmentIndex = $candidateIndex;
+                $assignment = $candidate;
+                break;
+            }
+
+            $deviceId = trim((string) data_get($assignment, 'payload.deviceId', ''));
+            if ($assignmentIndex === null || $deviceId === '') {
+                continue;
+            }
+
+            if (is_array(data_get($operation, 'payload.route'))) {
+                $operation['payload']['route']['device'] = ['id' => $deviceId];
+            }
+            if (is_array(data_get($operation, 'localSnapshotPayload.route'))) {
+                $operation['localSnapshotPayload']['route']['device'] = ['id' => $deviceId];
+            }
+
+            $operations[$index] = $operation;
+            $skipIndexes[] = $assignmentIndex;
+        }
+
+        if ($skipIndexes === []) {
+            return $operations;
+        }
+
+        return array_values(array_filter(
+            $operations,
+            fn (mixed $_operation, int $index): bool => ! in_array($index, $skipIndexes, true),
+            ARRAY_FILTER_USE_BOTH,
+        ));
     }
 
     private function resolveGroupedOperationPayload(string $action, array $payload, array $results): array
@@ -632,14 +688,22 @@ class GeotabWriteBackService
             throw new \RuntimeException('Route name is required.');
         }
 
+        if (! array_key_exists('routePlanItemCollection', $route) && is_array($items) && $items !== []) {
+            $route['routePlanItemCollection'] = $this->normalizeRoutePlanItemCollection($items);
+        } elseif (is_array($route['routePlanItemCollection'] ?? null)) {
+            $route['routePlanItemCollection'] = $this->normalizeRoutePlanItemCollection((array) $route['routePlanItemCollection']);
+        }
+
         $routeId = $this->geotab->addEntity('Route', $route);
         $createdItems = [];
-        foreach (is_array($items) ? $items : [] as $item) {
-            if (! is_array($item)) {
-                continue;
+        if (! array_key_exists('routePlanItemCollection', $route)) {
+            foreach (is_array($items) ? $items : [] as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+                $item['route'] = ['id' => $routeId];
+                $createdItems[] = $this->geotab->addEntity('RoutePlanItem', $item);
             }
-            $item['route'] = ['id' => $routeId];
-            $createdItems[] = $this->geotab->addEntity('RoutePlanItem', $item);
         }
 
         return [
@@ -647,6 +711,70 @@ class GeotabWriteBackService
             'typeName' => 'Route',
             'routePlanItemIds' => $createdItems,
         ];
+    }
+
+    private function normalizeRoutePlanItemCollection(array $items): array
+    {
+        $cursor = now()->utc();
+
+        return array_values(array_map(function (array $item) use (&$cursor): array {
+            $activeFrom = $this->routePlanItemTimestamp($item['activeFrom'] ?? $item['dateTime'] ?? null, $cursor);
+            $item['activeFrom'] = $activeFrom->toIso8601String();
+            $item['dateTime'] = $this->routePlanItemTimestamp($item['dateTime'] ?? null, $activeFrom)->toIso8601String();
+            $item['activeTo'] = $this->routePlanItemTimestamp($item['activeTo'] ?? null, $activeFrom)->toIso8601String();
+
+            foreach (['expectedStopDuration', 'expectedTripDurationToArrival'] as $durationField) {
+                if (array_key_exists($durationField, $item)) {
+                    $item[$durationField] = $this->normalizeGeotabDuration($item[$durationField]);
+                }
+            }
+
+            $seconds = $this->geotabDurationSeconds($item['expectedStopDuration'] ?? null);
+            $cursor = $activeFrom->copy()->addSeconds(max(0, $seconds));
+
+            return $item;
+        }, array_values(array_filter($items, 'is_array'))));
+    }
+
+    private function routePlanItemTimestamp(mixed $value, Carbon $fallback): Carbon
+    {
+        if ($value === null || trim((string) $value) === '') {
+            return $fallback->copy();
+        }
+
+        try {
+            return Carbon::parse((string) $value)->utc();
+        } catch (\Throwable) {
+            return $fallback->copy();
+        }
+    }
+
+    private function normalizeGeotabDuration(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '00:00:00';
+        }
+
+        if (is_string($value) && preg_match('/^\d{1,3}:\d{2}:\d{2}$/', $value) === 1) {
+            return $value;
+        }
+
+        if (! is_numeric($value)) {
+            return '00:00:00';
+        }
+
+        $seconds = (int) round(((float) $value) / 1000);
+
+        return sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60);
+    }
+
+    private function geotabDurationSeconds(mixed $value): int
+    {
+        if (! is_string($value) || preg_match('/^(\d{1,3}):(\d{2}):(\d{2})$/', $value, $matches) !== 1) {
+            return 0;
+        }
+
+        return ((int) $matches[1] * 3600) + ((int) $matches[2] * 60) + (int) $matches[3];
     }
 
     private function assignRouteDevice(array $payload): array
@@ -868,6 +996,9 @@ class GeotabWriteBackService
                     ->first(fn (array $item): bool => (string) ($item['localType'] ?? '') === (string) ($operation['localType'] ?? '')
                         && (string) ($item['localId'] ?? '') === (string) ($operation['localId'] ?? '')
                         && (string) ($item['action'] ?? '') === (string) ($operation['action'] ?? ''));
+                if (! is_array($operationResult)) {
+                    continue;
+                }
                 $operationResultPayload = is_array($operationResult)
                     ? [
                         ...(array) ($operationResult['result'] ?? []),

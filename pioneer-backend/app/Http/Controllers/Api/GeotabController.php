@@ -5044,7 +5044,13 @@ class GeotabController extends Controller
         }
 
         $pod = ProofOfDelivery::query()->where('trip_id', $tripId)->first();
-        $attachments = array_values(array_filter((array) ($pod?->attachments ?? []), 'is_string'));
+        $attachments = [];
+        foreach ((array) ($pod?->attachments ?? []) as $attachment) {
+            $path = $this->podAttachmentPath($attachment);
+            if ($path !== null) {
+                $attachments[] = $path;
+            }
+        }
         $path = $attachments[$index] ?? null;
 
         if ($pod === null || $path === null || ! Storage::disk('local')->exists($path)) {
@@ -13620,16 +13626,95 @@ class GeotabController extends Controller
             'status' => $pod->status,
             'deliveredAt' => $pod->delivered_at?->toIso8601String(),
             'hasSignature' => filled($pod->signature_data_url),
-            'attachments' => array_values(array_map(
-                fn (string $path, int $index): array => [
-                    'path' => $path,
-                    'url' => url('/api/fleet/pod/'.$pod->trip_id.'/attachments/'.$index),
-                ],
-                (array) ($pod->attachments ?? []),
-                array_keys((array) ($pod->attachments ?? [])),
-            )),
+            'attachments' => $this->formatPodAttachments($pod),
             'meta' => $pod->meta ?? [],
         ];
+    }
+
+    private function formatPodAttachments(ProofOfDelivery $pod): array
+    {
+        $formatted = [];
+        $downloadIndex = 0;
+
+        foreach ((array) ($pod->attachments ?? []) as $attachment) {
+            $path = $this->podAttachmentPath($attachment);
+            $entry = $this->podAttachmentEntry($attachment, $path);
+
+            if ($entry === null) {
+                continue;
+            }
+
+            if ($path !== null) {
+                if (trim((string) ($entry['url'] ?? '')) === '') {
+                    $entry['url'] = url('/api/fleet/pod/'.$pod->trip_id.'/attachments/'.$downloadIndex);
+                }
+
+                $downloadIndex++;
+            }
+
+            $formatted[] = $entry;
+        }
+
+        return $formatted;
+    }
+
+    private function podAttachmentEntry(mixed $attachment, ?string $path): ?array
+    {
+        if (is_string($attachment)) {
+            return $path !== null ? ['path' => $path] : null;
+        }
+
+        if (! is_array($attachment)) {
+            return null;
+        }
+
+        $entry = [];
+        foreach (['name', 'type', 'mime', 'mimeType', 'url', 'demo'] as $key) {
+            if (array_key_exists($key, $attachment)) {
+                $entry[$key] = $attachment[$key];
+            }
+        }
+
+        if ($path !== null) {
+            $entry['path'] = $path;
+        }
+
+        if (array_key_exists('demo', $entry)) {
+            $entry['demo'] = (bool) $entry['demo'];
+        }
+
+        $entry = array_filter(
+            $entry,
+            static fn (mixed $value): bool => $value !== null && $value !== ''
+        );
+
+        return $entry !== [] ? $entry : null;
+    }
+
+    private function podAttachmentPath(mixed $attachment): ?string
+    {
+        if (is_string($attachment)) {
+            $path = trim($attachment);
+
+            return $path !== '' ? $path : null;
+        }
+
+        if (! is_array($attachment)) {
+            return null;
+        }
+
+        $path = $attachment['path']
+            ?? $attachment['storagePath']
+            ?? $attachment['storedPath']
+            ?? null;
+
+        if (! is_string($path)) {
+            return null;
+        }
+
+        $path = trim($path);
+
+        return $path !== '' ? $path : null;
     }
 
     private function podTableAvailable(): bool

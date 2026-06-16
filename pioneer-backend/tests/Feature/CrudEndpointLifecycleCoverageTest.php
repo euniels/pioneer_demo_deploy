@@ -5,6 +5,7 @@ use App\Models\FleetRoute;
 use App\Models\MaintenanceHistory;
 use App\Models\ManualDriver;
 use App\Models\ManualVehicle;
+use App\Models\ProofOfDelivery;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -153,6 +154,37 @@ function crudZonePayload(array $overrides = []): array
         ...$overrides,
     ];
 }
+
+test('client tracking formats pod demo attachment metadata without string path crash', function (): void {
+    $tripId = 'TRP-POD-METADATA';
+    crudSeedSnapshot(['trips' => [crudTripPayload([
+        'tripId' => $tripId,
+        'status' => 'completed',
+        'startedAt' => now()->subHours(3)->toIso8601String(),
+        'endedAt' => now()->subHours(2)->toIso8601String(),
+    ])]]);
+
+    ProofOfDelivery::query()->create([
+        'trip_id' => $tripId,
+        'tracking_token' => 'demo-token-pod-metadata',
+        'recipient_name' => 'Demo Receiver',
+        'notes' => 'Demo POD verified by accounting.',
+        'signature_data_url' => null,
+        'status' => 'verified',
+        'delivered_at' => now()->subHours(2),
+        'attachments' => [
+            ['name' => 'demo-pod-photo.jpg', 'type' => 'image/jpeg', 'demo' => true],
+        ],
+        'meta' => ['demo_data' => true],
+    ]);
+
+    $this->withHeaders(crudHeaders())
+        ->getJson('/api/fleet/client-tracking/'.$tripId)
+        ->assertOk()
+        ->assertJsonPath('data.proofOfDelivery.attachments.0.name', 'demo-pod-photo.jpg')
+        ->assertJsonPath('data.proofOfDelivery.attachments.0.type', 'image/jpeg')
+        ->assertJsonPath('data.proofOfDelivery.attachments.0.demo', true);
+});
 
 test('crud 1 trips expose create validation list detail update role denial and cancel lifecycle', function (): void {
     $this->withHeaders(crudHeaders())->postJson('/api/fleet/trips', [
