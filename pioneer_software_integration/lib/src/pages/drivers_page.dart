@@ -207,12 +207,12 @@ class _DriversPageState extends State<DriversPage>
         'Score: Lowest first' => _driverScore(a).compareTo(_driverScore(b)),
         'Trips: Most trips' => _driverTrips(b).compareTo(_driverTrips(a)),
         'Trips: Fewest trips' => _driverTrips(a).compareTo(_driverTrips(b)),
-        'Earnings: Highest' => _moneyValue(_driverRevenue(b)).compareTo(
-          _moneyValue(_driverRevenue(a)),
-        ),
-        'Earnings: Lowest' => _moneyValue(_driverRevenue(a)).compareTo(
-          _moneyValue(_driverRevenue(b)),
-        ),
+        'Earnings: Highest' => _moneyValue(
+          _driverRevenue(b),
+        ).compareTo(_moneyValue(_driverRevenue(a))),
+        'Earnings: Lowest' => _moneyValue(
+          _driverRevenue(a),
+        ).compareTo(_moneyValue(_driverRevenue(b))),
         'Status: Available first' => _statusSortValue(
           a,
         ).compareTo(_statusSortValue(b)),
@@ -230,10 +230,7 @@ class _DriversPageState extends State<DriversPage>
       _animationController.reverse();
     }
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(
-      'drivers_leaderboard_expanded',
-      _isLeaderboardExpanded,
-    );
+    await prefs.setBool('drivers_leaderboard_expanded', _isLeaderboardExpanded);
   }
 
   void _onSearchChanged(String value) {
@@ -419,7 +416,11 @@ class _DriversPageState extends State<DriversPage>
                           sliver: SliverToBoxAdapter(
                             child: _DriverCardWrap(
                               children: [
-                                for (var index = 0; index < filtered.length; index++)
+                                for (
+                                  var index = 0;
+                                  index < filtered.length;
+                                  index++
+                                )
                                   _buildDriverCard(filtered[index], isDark)
                                       .animate()
                                       .fadeIn(duration: 250.ms)
@@ -454,12 +455,19 @@ class _DriversPageState extends State<DriversPage>
   Widget _buildDriverToolbar(bool isDark, bool isMobile) {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.fromLTRB(isMobile ? 16 : 24, 16, isMobile ? 16 : 24, 12),
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
         border: Border(
           bottom: BorderSide(
-            color: isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(14),
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
         ),
       ),
@@ -474,10 +482,7 @@ class _DriversPageState extends State<DriversPage>
               backgroundColor: AppTheme.successGreen,
               foregroundColor: AppTheme.white,
               minimumSize: const Size(172, 50),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 15,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
             ),
           );
           final controls = Row(
@@ -503,11 +508,7 @@ class _DriversPageState extends State<DriversPage>
 
           if (compact) {
             return Column(
-              children: [
-                search,
-                const SizedBox(height: 12),
-                controls,
-              ],
+              children: [search, const SizedBox(height: 12), controls],
             );
           }
 
@@ -527,12 +528,19 @@ class _DriversPageState extends State<DriversPage>
     final vehicles = _vehicleFilterOptions;
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.fromLTRB(isMobile ? 16 : 24, 10, isMobile ? 16 : 24, 12),
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
         border: Border(
           bottom: BorderSide(
-            color: isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(14),
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
         ),
       ),
@@ -545,7 +553,13 @@ class _DriversPageState extends State<DriversPage>
             _DriverFilterChip(
               label: 'Status',
               value: _statusFilter,
-              options: const ['All', 'Available', 'On Trip', 'Offline', 'Inactive'],
+              options: const [
+                'All',
+                'Available',
+                'On Trip',
+                'Offline',
+                'Inactive',
+              ],
               onSelected: (value) => setState(() => _statusFilter = value),
               onClear: () => setState(() => _statusFilter = 'All'),
             ),
@@ -561,7 +575,12 @@ class _DriversPageState extends State<DriversPage>
             _DriverFilterChip(
               label: 'Score',
               value: _scoreFilter,
-              options: const ['All', '>=90 Elite', '75-89 Good', '<75 Needs attention'],
+              options: const [
+                'All',
+                '>=90 Elite',
+                '75-89 Good',
+                '<75 Needs attention',
+              ],
               onSelected: (value) => setState(() => _scoreFilter = value),
               onClear: () => setState(() => _scoreFilter = 'All'),
             ),
@@ -615,13 +634,18 @@ class _DriversPageState extends State<DriversPage>
   }
 
   List<String> get _vehicleFilterOptions {
-    final vehicles = driversNotifier.value
-        .map(_driverVehicle)
-        .where((vehicle) => vehicle.trim().isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
-    return ['All', ...vehicles.where((vehicle) => vehicle != 'Unassigned'), 'Unassigned'];
+    final vehicles =
+        driversNotifier.value
+            .map(_driverVehicle)
+            .where((vehicle) => vehicle.trim().isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    return [
+      'All',
+      ...vehicles.where((vehicle) => vehicle != 'Unassigned'),
+      'Unassigned',
+    ];
   }
 
   String _driverName(Map<String, dynamic> driver) {
@@ -664,7 +688,9 @@ class _DriversPageState extends State<DriversPage>
 
   String _driverDelayText(Map<String, dynamic> driver) {
     final delays = _driverDelays(driver);
-    return delays <= 0 ? 'No delays recorded' : '$delays delay${delays == 1 ? '' : 's'}';
+    return delays <= 0
+        ? 'No delays recorded'
+        : '$delays delay${delays == 1 ? '' : 's'}';
   }
 
   String _driverRevenue(Map<String, dynamic> driver) {
@@ -780,7 +806,9 @@ class _DriversPageState extends State<DriversPage>
         color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDark ? AppTheme.white.withAlpha(16) : AppTheme.black.withAlpha(12),
+          color: isDark
+              ? AppTheme.white.withAlpha(16)
+              : AppTheme.black.withAlpha(12),
         ),
         boxShadow: AppTheme.getElevatedShadow(context),
       ),
@@ -800,7 +828,9 @@ class _DriversPageState extends State<DriversPage>
                         style: TextStyle(
                           fontSize: isMobile ? 18 : 22,
                           fontWeight: FontWeight.w900,
-                          color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                          color: isDark
+                              ? AppTheme.white
+                              : AppTheme.colorFF111827,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -816,10 +846,14 @@ class _DriversPageState extends State<DriversPage>
                 ),
                 PopupMenuButton<String>(
                   initialValue: _leaderboardPeriod,
-                  onSelected: (value) => setState(() => _leaderboardPeriod = value),
+                  onSelected: (value) =>
+                      setState(() => _leaderboardPeriod = value),
                   itemBuilder: (context) => const [
                     PopupMenuItem(value: 'This week', child: Text('This week')),
-                    PopupMenuItem(value: 'This month', child: Text('This month')),
+                    PopupMenuItem(
+                      value: 'This month',
+                      child: Text('This month'),
+                    ),
                     PopupMenuItem(value: 'All time', child: Text('All time')),
                   ],
                   child: _DriverSoftPill(
@@ -856,7 +890,8 @@ class _DriversPageState extends State<DriversPage>
                             isMobile,
                             i,
                           ),
-                          if (i < leaders.length - 1) const SizedBox(height: 12),
+                          if (i < leaders.length - 1)
+                            const SizedBox(height: 12),
                         ],
                       ],
                     )
@@ -955,7 +990,11 @@ class _DriversPageState extends State<DriversPage>
           const SizedBox(height: 14),
           Row(
             children: [
-              _DriverScoreArc(score: score, color: _driverScoreColor(score), size: 64),
+              _DriverScoreArc(
+                score: score,
+                color: _driverScoreColor(score),
+                size: 64,
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -980,16 +1019,15 @@ class _DriversPageState extends State<DriversPage>
     );
   }
 
-  Widget _buildDriverListView(
-    List<Map<String, dynamic>> drivers,
-    bool isDark,
-  ) {
+  Widget _buildDriverListView(List<Map<String, dynamic>> drivers, bool isDark) {
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDark ? AppTheme.white.withAlpha(16) : AppTheme.black.withAlpha(12),
+          color: isDark
+              ? AppTheme.white.withAlpha(16)
+              : AppTheme.black.withAlpha(12),
         ),
       ),
       child: Column(
@@ -1018,10 +1056,14 @@ class _DriversPageState extends State<DriversPage>
         decoration: BoxDecoration(
           color: index.isEven
               ? Colors.transparent
-              : (isDark ? AppTheme.white.withAlpha(7) : AppTheme.black.withAlpha(5)),
+              : (isDark
+                    ? AppTheme.white.withAlpha(7)
+                    : AppTheme.black.withAlpha(5)),
           border: Border(
             top: BorderSide(
-              color: isDark ? AppTheme.white.withAlpha(12) : AppTheme.black.withAlpha(8),
+              color: isDark
+                  ? AppTheme.white.withAlpha(12)
+                  : AppTheme.black.withAlpha(8),
             ),
           ),
         ),
@@ -1048,13 +1090,17 @@ class _DriversPageState extends State<DriversPage>
                 child: _DriverStatusBadge(
                   label: _statusLabel(_driverStatus(driver)),
                   color: statusColor,
-                  onTap: () => setState(() => _statusFilter = _driverStatus(driver)),
+                  onTap: () =>
+                      setState(() => _statusFilter = _driverStatus(driver)),
                 ),
               ),
             ),
             Expanded(
               flex: 2,
-              child: _DriverScoreInline(score: score, color: _driverScoreColor(score)),
+              child: _DriverScoreInline(
+                score: score,
+                color: _driverScoreColor(score),
+              ),
             ),
             Expanded(
               flex: 2,
@@ -1071,7 +1117,9 @@ class _DriversPageState extends State<DriversPage>
             Expanded(
               child: Text(
                 '${_driverTrips(driver)} trips',
-                style: TextStyle(color: isDark ? AppTheme.gray300 : AppTheme.gray600),
+                style: TextStyle(
+                  color: isDark ? AppTheme.gray300 : AppTheme.gray600,
+                ),
               ),
             ),
             Expanded(
@@ -1096,139 +1144,143 @@ class _DriversPageState extends State<DriversPage>
         final accent = statusColor;
 
         return _DriverHoverLift(
-          child: Container(
-            padding: EdgeInsets.all(14 * scale),
-            decoration: BoxDecoration(
-              color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: accent.withAlpha(isDark ? 62 : 52)),
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withValues(alpha: isDark ? 0.13 : 0.08),
-                  blurRadius: 20,
-                  spreadRadius: -12,
-                  offset: const Offset(0, 14),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _DriverInitialsAvatar(
-                      name: _driverName(driver),
-                      color: statusColor,
-                      size: 42 * scale,
-                    ),
-                    SizedBox(width: 12 * scale),
-                    Expanded(
-                      child: _DriverPrimaryText(
-                        name: _driverName(driver),
-                        id: _driverId(driver),
-                        query: _searchQuery,
-                        isDark: isDark,
-                        allowWrap: true,
-                      ),
-                    ),
-                    SizedBox(width: 8 * scale),
-                    _DriverStatusBadge(
-                      label: _statusLabel(_driverStatus(driver)),
-                      color: statusColor,
-                      onTap: () => setState(
-                        () => _statusFilter = _driverStatus(driver),
-                      ),
-                    ),
-                    _driverActionsMenu(driver, isDark, crudPolicy),
-                  ],
-                ),
-                SizedBox(height: 13 * scale),
-                Text.rich(
-                  TextSpan(
+          child: InkWell(
+            onTap: () => _showDriverDetails(driver, isDark),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: EdgeInsets.all(14 * scale),
+              decoration: BoxDecoration(
+                color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: accent.withAlpha(isDark ? 62 : 52)),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: isDark ? 0.13 : 0.08),
+                    blurRadius: 20,
+                    spreadRadius: -12,
+                    offset: const Offset(0, 14),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      TextSpan(
-                        text: '$score',
-                        style: TextStyle(
-                          fontSize: 32 * scale,
-                          fontWeight: FontWeight.w900,
-                          color: scoreColor,
+                      _DriverInitialsAvatar(
+                        name: _driverName(driver),
+                        color: statusColor,
+                        size: 42 * scale,
+                      ),
+                      SizedBox(width: 12 * scale),
+                      Expanded(
+                        child: _DriverPrimaryText(
+                          name: _driverName(driver),
+                          id: _driverId(driver),
+                          query: _searchQuery,
+                          isDark: isDark,
+                          allowWrap: true,
                         ),
                       ),
-                      TextSpan(
-                        text: ' / 100',
-                        style: TextStyle(
-                          fontSize: 13 * scale,
-                          fontWeight: FontWeight.w800,
-                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                      SizedBox(width: 8 * scale),
+                      _DriverStatusBadge(
+                        label: _statusLabel(_driverStatus(driver)),
+                        color: statusColor,
+                        onTap: () => setState(
+                          () => _statusFilter = _driverStatus(driver),
+                        ),
+                      ),
+                      _driverActionsMenu(driver, isDark, crudPolicy),
+                    ],
+                  ),
+                  SizedBox(height: 13 * scale),
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '$score',
+                          style: TextStyle(
+                            fontSize: 32 * scale,
+                            fontWeight: FontWeight.w900,
+                            color: scoreColor,
+                          ),
+                        ),
+                        TextSpan(
+                          text: ' / 100',
+                          style: TextStyle(
+                            fontSize: 13 * scale,
+                            fontWeight: FontWeight.w800,
+                            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 7 * scale),
+                  Tooltip(
+                    message: 'Score $score/100 - ${_scoreTooltip(driver)}',
+                    child: _DriverScoreBar(score: score, color: scoreColor),
+                  ),
+                  SizedBox(height: 13 * scale),
+                  _DriverCardFact(
+                    icon: Icons.local_shipping_rounded,
+                    label: 'Vehicle',
+                    value: _driverVehicle(driver),
+                    query: _searchQuery,
+                  ),
+                  SizedBox(height: 7 * scale),
+                  _DriverCardFact(
+                    icon: Icons.route_rounded,
+                    label: 'Trips',
+                    value:
+                        '${_driverTrips(driver)} trips | ${_driverRevenue(driver)} earned',
+                  ),
+                  SizedBox(height: 7 * scale),
+                  _DriverCardFact(
+                    icon: Icons.schedule_rounded,
+                    label: 'Delays',
+                    value: _driverDelayText(driver),
+                  ),
+                  SizedBox(height: 10 * scale),
+                  _DriverCardDivider(isDark: isDark),
+                  SizedBox(height: 10 * scale),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _DriverLicenseLine(
+                          label: _licenseFilterLabel(driver),
+                          expiry: _licenseExpiryText(driver),
                         ),
                       ),
                     ],
                   ),
-                ),
-                SizedBox(height: 7 * scale),
-                Tooltip(
-                  message: 'Score $score/100 - ${_scoreTooltip(driver)}',
-                  child: _DriverScoreBar(score: score, color: scoreColor),
-                ),
-                SizedBox(height: 13 * scale),
-                _DriverCardFact(
-                  icon: Icons.local_shipping_rounded,
-                  label: 'Vehicle',
-                  value: _driverVehicle(driver),
-                  query: _searchQuery,
-                ),
-                SizedBox(height: 7 * scale),
-                _DriverCardFact(
-                  icon: Icons.route_rounded,
-                  label: 'Trips',
-                  value:
-                      '${_driverTrips(driver)} trips | ${_driverRevenue(driver)} earned',
-                ),
-                SizedBox(height: 7 * scale),
-                _DriverCardFact(
-                  icon: Icons.schedule_rounded,
-                  label: 'Delays',
-                  value: _driverDelayText(driver),
-                ),
-                SizedBox(height: 10 * scale),
-                _DriverCardDivider(isDark: isDark),
-                SizedBox(height: 10 * scale),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _DriverLicenseLine(
-                        label: _licenseFilterLabel(driver),
-                        expiry: _licenseExpiryText(driver),
+                  if (_licenseExpiryWarning(driver) != null) ...[
+                    SizedBox(height: 6 * scale),
+                    _licenseExpiryWarningBadge(driver, scale),
+                  ],
+                  SizedBox(height: 10 * scale),
+                  Wrap(
+                    spacing: 8 * scale,
+                    runSpacing: 8 * scale,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      GeoTabSyncStatusBadge.fromEntity(
+                        driver,
+                        compact: true,
+                        scale: scale,
                       ),
-                    ),
-                  ],
-                ),
-                if (_licenseExpiryWarning(driver) != null) ...[
-                  SizedBox(height: 6 * scale),
-                  _licenseExpiryWarningBadge(driver, scale),
+                      _fleetCrudScopeChip(crudPolicy, isDark, scale),
+                      _pushToGeotabButton(
+                        enabled: crudPolicy.canPushToGeotab,
+                        disabledReason: crudPolicy.pushDisabledReason,
+                        onPressed: () => _pushDriverToGeotab(driver),
+                        scale: scale,
+                      ),
+                    ],
+                  ),
                 ],
-                SizedBox(height: 10 * scale),
-                Wrap(
-                  spacing: 8 * scale,
-                  runSpacing: 8 * scale,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    GeoTabSyncStatusBadge.fromEntity(
-                      driver,
-                      compact: true,
-                      scale: scale,
-                    ),
-                    _fleetCrudScopeChip(crudPolicy, isDark, scale),
-                    _pushToGeotabButton(
-                      enabled: crudPolicy.canPushToGeotab,
-                      disabledReason: crudPolicy.pushDisabledReason,
-                      onPressed: () => _pushDriverToGeotab(driver),
-                      scale: scale,
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
           ),
         );
@@ -1328,7 +1380,10 @@ class _DriversPageState extends State<DriversPage>
               SnackBar(
                 behavior: SnackBarBehavior.floating,
                 content: Text(
-                  FormValidation.backendError(error, 'Driver could not be deleted.'),
+                  FormValidation.backendError(
+                    error,
+                    'Driver could not be deleted.',
+                  ),
                 ),
               ),
             );
@@ -1357,13 +1412,6 @@ class _DriversPageState extends State<DriversPage>
         }
       },
       itemBuilder: (context) => [
-        const PopupMenuItem(
-          value: 'view',
-          child: _DriverActionMenuItem(
-            icon: Icons.visibility_rounded,
-            label: 'View Details',
-          ),
-        ),
         if (CrudPermissions.canEdit(CrudEntity.drivers))
           PopupMenuItem(
             value: 'edit',
@@ -1373,7 +1421,8 @@ class _DriversPageState extends State<DriversPage>
               label: crudPolicy.canEdit ? 'Edit' : 'Edit - GeoTab read-only',
             ),
           ),
-        if (CrudPermissions.canEdit(CrudEntity.drivers) && _isDriverInactive(driver))
+        if (CrudPermissions.canEdit(CrudEntity.drivers) &&
+            _isDriverInactive(driver))
           PopupMenuItem(
             value: 'reactivate',
             enabled: crudPolicy.canReactivate,
@@ -1382,7 +1431,8 @@ class _DriversPageState extends State<DriversPage>
               label: 'Reactivate',
             ),
           ),
-        if (CrudPermissions.canDelete(CrudEntity.drivers) && !_isDriverInactive(driver))
+        if (CrudPermissions.canDelete(CrudEntity.drivers) &&
+            !_isDriverInactive(driver))
           PopupMenuItem(
             value: 'deactivate',
             enabled: crudPolicy.canDeactivate,
@@ -1583,63 +1633,129 @@ class _DriversPageState extends State<DriversPage>
     ];
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        title: Text(
-          (driver['name'] ?? 'Driver details').toString(),
-          style: TextStyle(
-            color: isDark ? AppTheme.white : AppTheme.colorFF111827,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        content: SizedBox(
-          width: 420,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    _detailStatusChip(
-                      _statusLabel(driver['status']?.toString() ?? ''),
-                      _driverStatusColor(driver),
-                    ),
-                    GeoTabSyncStatusBadge.fromEntity(driver, compact: true),
-                  ],
+      barrierDismissible: true,
+      builder: (context) {
+        final screenWidth = MediaQuery.of(context).size.width;
+        final inset = screenWidth < 640 ? 16.0 : 48.0;
+        return Dialog(
+          backgroundColor: AppTheme.transparent,
+          insetPadding: EdgeInsets.symmetric(horizontal: inset, vertical: 24),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 760,
+              maxHeight: MediaQuery.of(context).size.height * 0.86,
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark ? AppTheme.colorFF10141D : AppTheme.colorFFF4F6F8,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark
+                      ? AppTheme.white.withAlpha(12)
+                      : AppTheme.black.withAlpha(12),
                 ),
-                const SizedBox(height: 18),
-                for (final entry in details) ...[
-                  Text(
-                    entry.key,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: isDark
+                            ? const [
+                                AppTheme.colorFF142033,
+                                AppTheme.colorFF0C1220,
+                              ]
+                            : const [
+                                AppTheme.colorFF203A55,
+                                AppTheme.colorFF0F1A2A,
+                              ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(20),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          (driver['name'] ?? 'Driver details').toString(),
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: AppTheme.white,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 8,
+                          children: [
+                            _detailStatusChip(
+                              _statusLabel(driver['status']?.toString() ?? ''),
+                              _driverStatusColor(driver),
+                            ),
+                            GeoTabSyncStatusBadge.fromEntity(
+                              driver,
+                              compact: true,
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 3),
-                  SelectableText(
-                    entry.value,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final entry in details) ...[
+                            Text(
+                              entry.key,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark
+                                    ? AppTheme.gray400
+                                    : AppTheme.gray600,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            SelectableText(
+                              entry.value,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? AppTheme.white
+                                    : AppTheme.colorFF111827,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close'),
+                      ),
+                    ),
+                  ),
                 ],
-              ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1884,10 +2000,7 @@ class _DriverCardWrap extends StatelessWidget {
           alignment: WrapAlignment.start,
           children: [
             for (final child in children)
-              SizedBox(
-                width: cardWidth,
-                child: child,
-              ),
+              SizedBox(width: cardWidth, child: child),
           ],
         );
       },
@@ -1928,7 +2041,9 @@ class _DriverSearchField extends StatelessWidget {
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide(
-            color: isDark ? AppTheme.white.withAlpha(18) : AppTheme.black.withAlpha(12),
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
           ),
         ),
       ),
@@ -2364,7 +2479,9 @@ class _DriverScoreInline extends StatelessWidget {
             ),
           ),
         ),
-        Expanded(child: _DriverScoreBar(score: score, color: color)),
+        Expanded(
+          child: _DriverScoreBar(score: score, color: color),
+        ),
       ],
     );
   }
@@ -2525,7 +2642,9 @@ class _DriverCardDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 1,
-      color: isDark ? AppTheme.white.withAlpha(14) : AppTheme.black.withAlpha(10),
+      color: isDark
+          ? AppTheme.white.withAlpha(14)
+          : AppTheme.black.withAlpha(10),
     );
   }
 }
@@ -2910,10 +3029,7 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
                   padding: EdgeInsets.all(isVerySmall ? 16 : 24),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [
-                        AppTheme.colorFF4B7BE5,
-                        AppTheme.colorFF1B2A4A,
-                      ],
+                      colors: [AppTheme.colorFF4B7BE5, AppTheme.colorFF1B2A4A],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -2983,171 +3099,173 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
                 Flexible(
                   child: SingleChildScrollView(
                     child: Padding(
-                    padding: EdgeInsets.all(isVerySmall ? 16 : 24),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        children: [
-                          _formField(
-                            controller: _nameCtrl,
-                            label: 'Full Name',
-                            hint: 'e.g. Juan Dela Cruz',
-                            icon: Icons.person_rounded,
-                            isDark: isDark,
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'Name is required'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _formField(
-                            controller: _licenseCtrl,
-                            label: 'License Number',
-                            hint: 'e.g. N04-12-345678',
-                            icon: Icons.credit_card_rounded,
-                            isDark: isDark,
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'License number is required'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _formField(
-                            controller: _phoneCtrl,
-                            label: 'Contact Number',
-                            hint: 'e.g. +63 917 123 4567',
-                            icon: Icons.phone_rounded,
-                            isDark: isDark,
-                            keyboardType: TextInputType.phone,
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'Phone is required'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _formField(
-                            controller: _emailCtrl,
-                            label: 'Email',
-                            hint: 'e.g. juan@pioneer.local',
-                            icon: Icons.email_rounded,
-                            isDark: isDark,
-                            keyboardType: TextInputType.emailAddress,
-                            validator: (_) => null,
-                          ),
-                          const SizedBox(height: 16),
-                          _licenseExpiryDatePicker(isDark),
-                          const SizedBox(height: 16),
-                          _vehicleDropdown(isDark),
-                          const SizedBox(height: 16),
-                          _statusDropdown(isDark),
-                          const SizedBox(height: 16),
-                          _formField(
-                            controller: _emergencyContactCtrl,
-                            label: 'Emergency Contact',
-                            hint: 'Name and phone number',
-                            icon: Icons.emergency_rounded,
-                            isDark: isDark,
-                            validator: (_) => null,
-                          ),
-                          const SizedBox(height: 16),
-                          _formField(
-                            controller: _addressCtrl,
-                            label: 'Address',
-                            hint: 'Driver home address',
-                            icon: Icons.home_rounded,
-                            isDark: isDark,
-                            validator: (_) => null,
-                          ),
-                          SizedBox(height: isVerySmall ? 16 : 28),
+                      padding: EdgeInsets.all(isVerySmall ? 16 : 24),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          children: [
+                            _formField(
+                              controller: _nameCtrl,
+                              label: 'Full Name',
+                              hint: 'e.g. Juan Dela Cruz',
+                              icon: Icons.person_rounded,
+                              isDark: isDark,
+                              validator: (v) => (v == null || v.trim().isEmpty)
+                                  ? 'Name is required'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _formField(
+                              controller: _licenseCtrl,
+                              label: 'License Number',
+                              hint: 'e.g. N04-12-345678',
+                              icon: Icons.credit_card_rounded,
+                              isDark: isDark,
+                              validator: (v) => (v == null || v.trim().isEmpty)
+                                  ? 'License number is required'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _formField(
+                              controller: _phoneCtrl,
+                              label: 'Contact Number',
+                              hint: 'e.g. +63 917 123 4567',
+                              icon: Icons.phone_rounded,
+                              isDark: isDark,
+                              keyboardType: TextInputType.phone,
+                              validator: (v) => (v == null || v.trim().isEmpty)
+                                  ? 'Phone is required'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _formField(
+                              controller: _emailCtrl,
+                              label: 'Email',
+                              hint: 'e.g. juan@pioneer.local',
+                              icon: Icons.email_rounded,
+                              isDark: isDark,
+                              keyboardType: TextInputType.emailAddress,
+                              validator: (_) => null,
+                            ),
+                            const SizedBox(height: 16),
+                            _licenseExpiryDatePicker(isDark),
+                            const SizedBox(height: 16),
+                            _vehicleDropdown(isDark),
+                            const SizedBox(height: 16),
+                            _statusDropdown(isDark),
+                            const SizedBox(height: 16),
+                            _formField(
+                              controller: _emergencyContactCtrl,
+                              label: 'Emergency Contact',
+                              hint: 'Name and phone number',
+                              icon: Icons.emergency_rounded,
+                              isDark: isDark,
+                              validator: (_) => null,
+                            ),
+                            const SizedBox(height: 16),
+                            _formField(
+                              controller: _addressCtrl,
+                              label: 'Address',
+                              hint: 'Driver home address',
+                              icon: Icons.home_rounded,
+                              isDark: isDark,
+                              validator: (_) => null,
+                            ),
+                            SizedBox(height: isVerySmall ? 16 : 28),
 
-                          // Buttons
-                          Row(
-                            children: [
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: _saving
-                                      ? null
-                                      : () => Navigator.pop(context),
-                                  child: Container(
-                                    height: isVerySmall ? 44 : 50,
-                                    decoration: BoxDecoration(
-                                      color: isDark
-                                          ? AppTheme.colorFF0F1117
-                                          : AppTheme.colorFFF5F6F8,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: isDark
-                                            ? AppTheme.white.withAlpha(26)
-                                            : AppTheme.black.withAlpha(26),
-                                      ),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        'Cancel',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark
-                                              ? AppTheme.gray300
-                                              : AppTheme.gray700,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: MouseRegion(
-                                  cursor: SystemMouseCursors.click,
+                            // Buttons
+                            Row(
+                              children: [
+                                Expanded(
                                   child: GestureDetector(
-                                    onTap: _saving ? null : _submit,
+                                    onTap: _saving
+                                        ? null
+                                        : () => Navigator.pop(context),
                                     child: Container(
                                       height: isVerySmall ? 44 : 50,
                                       decoration: BoxDecoration(
-                                        gradient: const LinearGradient(
-                                          colors: [
-                                            AppTheme.colorFF4B7BE5,
-                                            AppTheme.colorFF00D4FF,
-                                          ],
-                                        ),
+                                        color: isDark
+                                            ? AppTheme.colorFF0F1117
+                                            : AppTheme.colorFFF5F6F8,
                                         borderRadius: BorderRadius.circular(12),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: AppTheme.colorFF4B7BE5
-                                                .withAlpha(102),
-                                            blurRadius: 12,
-                                            offset: const Offset(0, 4),
-                                          ),
-                                        ],
+                                        border: Border.all(
+                                          color: isDark
+                                              ? AppTheme.white.withAlpha(26)
+                                              : AppTheme.black.withAlpha(26),
+                                        ),
                                       ),
                                       child: Center(
-                                        child: _saving
-                                            ? const SizedBox(
-                                                width: 20,
-                                                height: 20,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      color: AppTheme.white,
-                                                      strokeWidth: 2,
-                                                    ),
-                                              )
-                                            : Text(
-                                                widget.submitLabel,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: AppTheme.white,
-                                                ),
-                                              ),
+                                        child: Text(
+                                          'Cancel',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: isDark
+                                                ? AppTheme.gray300
+                                                : AppTheme.gray700,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ],
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: MouseRegion(
+                                    cursor: SystemMouseCursors.click,
+                                    child: GestureDetector(
+                                      onTap: _saving ? null : _submit,
+                                      child: Container(
+                                        height: isVerySmall ? 44 : 50,
+                                        decoration: BoxDecoration(
+                                          gradient: const LinearGradient(
+                                            colors: [
+                                              AppTheme.colorFF4B7BE5,
+                                              AppTheme.colorFF00D4FF,
+                                            ],
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: AppTheme.colorFF4B7BE5
+                                                  .withAlpha(102),
+                                              blurRadius: 12,
+                                              offset: const Offset(0, 4),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Center(
+                                          child: _saving
+                                              ? const SizedBox(
+                                                  width: 20,
+                                                  height: 20,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        color: AppTheme.white,
+                                                        strokeWidth: 2,
+                                                      ),
+                                                )
+                                              : Text(
+                                                  widget.submitLabel,
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: AppTheme.white,
+                                                  ),
+                                                ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
                   ),
                 ),
               ],

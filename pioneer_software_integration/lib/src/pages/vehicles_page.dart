@@ -231,27 +231,26 @@ class _VehiclesPageState extends State<VehiclesPage> {
                         return Wrap(
                           spacing: gap,
                           runSpacing: gap,
-                          children: List.generate(
-                            _filteredVehicles.length,
-                            (index) {
-                              return SizedBox(
-                                width: cardWidth,
-                                child:
-                                    _buildVehicleCard(
-                                          _filteredVehicles[index],
-                                          isDark,
-                                        )
-                                        .animate()
-                                        .fadeIn(duration: 500.ms)
-                                        .slideY(
-                                          begin: 0.2,
-                                          end: 0,
-                                          duration: 500.ms,
-                                          curve: Curves.easeOut,
-                                        ),
-                              );
-                            },
-                          ),
+                          children: List.generate(_filteredVehicles.length, (
+                            index,
+                          ) {
+                            return SizedBox(
+                              width: cardWidth,
+                              child:
+                                  _buildVehicleCard(
+                                        _filteredVehicles[index],
+                                        isDark,
+                                      )
+                                      .animate()
+                                      .fadeIn(duration: 500.ms)
+                                      .slideY(
+                                        begin: 0.2,
+                                        end: 0,
+                                        duration: 500.ms,
+                                        curve: Curves.easeOut,
+                                      ),
+                            );
+                          }),
                         );
                       },
                     ),
@@ -848,297 +847,321 @@ class _VehiclesPageState extends State<VehiclesPage> {
         return _VehicleHoverLift(
           child: InkWell(
             onTap: () {
-              showModalBottomSheet(
+              showDialog(
                 context: context,
-                isScrollControlled: true,
-                backgroundColor: AppTheme.transparent,
-                builder: (_) => DraggableScrollableSheet(
-                  initialChildSize: 0.75,
-                  minChildSize: 0.5,
-                  maxChildSize: 0.95,
-                  expand: false,
-                  builder: (_, __) => VehicleDetailsModal(vehicle: vehicle),
-                ),
+                barrierDismissible: true,
+                builder: (_) {
+                  final screenWidth = MediaQuery.of(context).size.width;
+                  final inset = screenWidth < 640 ? 16.0 : 48.0;
+                  return Dialog(
+                    backgroundColor: AppTheme.transparent,
+                    insetPadding: EdgeInsets.symmetric(
+                      horizontal: inset,
+                      vertical: 24,
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 1040,
+                        maxHeight: MediaQuery.of(context).size.height * 0.92,
+                      ),
+                      child: VehicleDetailsModal(
+                        vehicle: vehicle,
+                        centeredDialog: true,
+                      ),
+                    ),
+                  );
+                },
               );
             },
             borderRadius: BorderRadius.circular(12),
             child: Container(
-            decoration: BoxDecoration(
-              color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: statusColor.withAlpha(isDark ? 62 : 52)),
-              boxShadow: [
-                BoxShadow(
-                  color: statusColor.withValues(alpha: isDark ? 0.13 : 0.08),
-                  blurRadius: 20,
-                  spreadRadius: -12,
-                  offset: const Offset(0, 14),
+              decoration: BoxDecoration(
+                color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: statusColor.withAlpha(isDark ? 62 : 52),
                 ),
-              ],
-            ),
-            child: Padding(
-              padding: EdgeInsets.all(p),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 44 * scale,
-                        height: 44 * scale,
-                        decoration: BoxDecoration(
-                          color: statusColor.withValues(alpha: 0.18),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: statusColor.withValues(alpha: 0.38),
+                boxShadow: [
+                  BoxShadow(
+                    color: statusColor.withValues(alpha: isDark ? 0.13 : 0.08),
+                    blurRadius: 20,
+                    spreadRadius: -12,
+                    offset: const Offset(0, 14),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: EdgeInsets.all(p),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 44 * scale,
+                          height: 44 * scale,
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.18),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: statusColor.withValues(alpha: 0.38),
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.local_shipping_rounded,
+                            color: statusColor,
+                            size: 22 * scale,
                           ),
                         ),
-                        child: Icon(
-                          Icons.local_shipping_rounded,
-                          color: statusColor,
-                          size: 22 * scale,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _displayValue(vehicle['plate']),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 17 * scale,
+                                  fontWeight: FontWeight.w800,
+                                  color: isDark
+                                      ? AppTheme.white
+                                      : AppTheme.colorFF233244,
+                                ),
+                              ),
+                              if (_hasDisplayValue(vehicle['truckType']) ||
+                                  makeModel.isNotEmpty) ...[
+                                const SizedBox(height: 2),
+                                Wrap(
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  spacing: 5,
+                                  runSpacing: 3,
+                                  children: [
+                                    if (_hasDisplayValue(vehicle['truckType']))
+                                      Text(
+                                        _displayValue(vehicle['truckType']),
+                                        style: TextStyle(
+                                          fontSize: 12 * scale,
+                                          color: isDark
+                                              ? AppTheme.gray400
+                                              : AppTheme.gray600,
+                                        ),
+                                      ),
+                                    if (makeModel.isNotEmpty)
+                                      Text(
+                                        '${_hasDisplayValue(vehicle['truckType']) ? '- ' : ''}$makeModel',
+                                        style: TextStyle(
+                                          fontSize: 12 * scale,
+                                          fontStyle: makeModelSample
+                                              ? FontStyle.italic
+                                              : FontStyle.normal,
+                                          color: isDark
+                                              ? AppTheme.gray400
+                                              : AppTheme.gray600,
+                                        ),
+                                      ),
+                                    if (makeModelSample) _sampleChip(scale),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
+                        _VehicleStatusBadge(
+                          label: statusLabel,
+                          color: statusColor,
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Vehicle actions',
+                          color: isDark
+                              ? AppTheme.colorFF1A1D23
+                              : AppTheme.white,
+                          icon: Icon(
+                            Icons.more_vert_rounded,
+                            color: isDark ? AppTheme.gray300 : AppTheme.gray600,
+                          ),
+                          onSelected: (action) {
+                            if (action == 'edit') {
+                              _showEditVehicleModal(vehicle);
+                            } else if (action == 'deactivate') {
+                              unawaited(_confirmDeactivateVehicle(vehicle));
+                            } else if (action == 'delete') {
+                              unawaited(_confirmDeleteVehicle(vehicle));
+                            } else if (action == 'push_geotab') {
+                              unawaited(_pushVehicleToGeotab(vehicle));
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            if (CrudPermissions.canEdit(CrudEntity.vehicles))
+                              PopupMenuItem(
+                                value: 'edit',
+                                enabled: crudPolicy.canEdit,
+                                child: Text(
+                                  crudPolicy.canEdit
+                                      ? 'Edit vehicle'
+                                      : 'Edit vehicle - GeoTab read-only',
+                                ),
+                              ),
+                            PopupMenuItem(
+                              value: 'push_geotab',
+                              enabled: crudPolicy.canPushToGeotab,
+                              child: Text(
+                                crudPolicy.canPushToGeotab
+                                    ? 'Push to GeoTab'
+                                    : 'Push to GeoTab - no local changes',
+                              ),
+                            ),
+                            if (CrudPermissions.canDelete(CrudEntity.vehicles))
+                              PopupMenuItem(
+                                value: 'deactivate',
+                                enabled: crudPolicy.canDeactivate,
+                                child: Text(
+                                  crudPolicy.canDeactivate
+                                      ? 'Deactivate'
+                                      : 'Deactivate - unavailable',
+                                ),
+                              ),
+                            if (CrudPermissions.canDelete(
+                                  CrudEntity.vehicles,
+                                ) &&
+                                crudPolicy.isManagedLocally)
+                              PopupMenuItem(
+                                value: 'delete',
+                                enabled: crudPolicy.canDelete,
+                                child: const Text('Delete'),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 10 * scale),
+                    _vehicleInfoWrap(infoItems, scale),
+                    SizedBox(height: 10 * scale),
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(12 * scale),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? AppTheme.colorFF11161F
+                            : AppTheme.colorFFF7F9FC,
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _displayValue(vehicle['plate']),
+                      child: Row(
+                        children: [
+                          Text(
+                            'Driver:',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark
+                                  ? AppTheme.gray500
+                                  : AppTheme.gray600,
+                            ),
+                          ),
+                          SizedBox(width: 6 * scale),
+                          Expanded(
+                            child: Text(
+                              _displayValue(vehicle['driver']),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 17 * scale,
-                                fontWeight: FontWeight.w800,
+                                fontSize: 12.5 * scale,
+                                fontWeight: FontWeight.w700,
                                 color: isDark
                                     ? AppTheme.white
                                     : AppTheme.colorFF233244,
                               ),
                             ),
-                            if (_hasDisplayValue(vehicle['truckType']) ||
-                                makeModel.isNotEmpty) ...[
-                              const SizedBox(height: 2),
-                              Wrap(
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 5,
-                                runSpacing: 3,
-                                children: [
-                                  if (_hasDisplayValue(vehicle['truckType']))
-                                    Text(
-                                      _displayValue(vehicle['truckType']),
-                                      style: TextStyle(
-                                        fontSize: 12 * scale,
-                                        color: isDark
-                                            ? AppTheme.gray400
-                                            : AppTheme.gray600,
-                                      ),
-                                    ),
-                                  if (makeModel.isNotEmpty)
-                                    Text(
-                                      '${_hasDisplayValue(vehicle['truckType']) ? '- ' : ''}$makeModel',
-                                      style: TextStyle(
-                                        fontSize: 12 * scale,
-                                        fontStyle: makeModelSample
-                                            ? FontStyle.italic
-                                            : FontStyle.normal,
-                                        color: isDark
-                                            ? AppTheme.gray400
-                                            : AppTheme.gray600,
-                                      ),
-                                    ),
-                                  if (makeModelSample) _sampleChip(scale),
-                                ],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      _VehicleStatusBadge(label: statusLabel, color: statusColor),
-                      PopupMenuButton<String>(
-                        tooltip: 'Vehicle actions',
-                        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-                        icon: Icon(
-                          Icons.more_vert_rounded,
-                          color: isDark ? AppTheme.gray300 : AppTheme.gray600,
-                        ),
-                        onSelected: (action) {
-                          if (action == 'edit') {
-                            _showEditVehicleModal(vehicle);
-                          } else if (action == 'deactivate') {
-                            unawaited(_confirmDeactivateVehicle(vehicle));
-                          } else if (action == 'delete') {
-                            unawaited(_confirmDeleteVehicle(vehicle));
-                          } else if (action == 'push_geotab') {
-                            unawaited(_pushVehicleToGeotab(vehicle));
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          if (CrudPermissions.canEdit(CrudEntity.vehicles))
-                            PopupMenuItem(
-                              value: 'edit',
-                              enabled: crudPolicy.canEdit,
-                              child: Text(
-                                crudPolicy.canEdit
-                                    ? 'Edit vehicle'
-                                    : 'Edit vehicle - GeoTab read-only',
-                              ),
-                            ),
-                          PopupMenuItem(
-                            value: 'push_geotab',
-                            enabled: crudPolicy.canPushToGeotab,
-                            child: Text(
-                              crudPolicy.canPushToGeotab
-                                  ? 'Push to GeoTab'
-                                  : 'Push to GeoTab - no local changes',
-                            ),
                           ),
-                          if (CrudPermissions.canDelete(CrudEntity.vehicles))
-                            PopupMenuItem(
-                              value: 'deactivate',
-                              enabled: crudPolicy.canDeactivate,
-                              child: Text(
-                                crudPolicy.canDeactivate
-                                    ? 'Deactivate'
-                                    : 'Deactivate - unavailable',
-                              ),
-                            ),
-                          if (CrudPermissions.canDelete(CrudEntity.vehicles) &&
-                              crudPolicy.isManagedLocally)
-                            PopupMenuItem(
-                              value: 'delete',
-                              enabled: crudPolicy.canDelete,
-                              child: const Text('Delete'),
-                            ),
                         ],
                       ),
-                    ],
-                  ),
-                  SizedBox(height: 10 * scale),
-                  _vehicleInfoWrap(infoItems, scale),
-                  SizedBox(height: 10 * scale),
-                  Container(
-                    width: double.infinity,
-                    padding: EdgeInsets.all(12 * scale),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? AppTheme.colorFF11161F
-                          : AppTheme.colorFFF7F9FC,
-                      borderRadius: BorderRadius.circular(14),
                     ),
-                    child: Row(
+                    SizedBox(height: 10 * scale),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        Text(
-                          'Driver:',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark ? AppTheme.gray500 : AppTheme.gray600,
-                          ),
+                        _vehicleMetaChip(
+                          label: _currencyLabel(vehicle['totalRevenue']),
+                          color: AppTheme.colorFFD4AF37,
+                          isDark: isDark,
                         ),
-                        SizedBox(width: 6 * scale),
-                        Expanded(
-                          child: Text(
-                            _displayValue(vehicle['driver']),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12.5 * scale,
-                              fontWeight: FontWeight.w700,
-                              color: isDark
-                                  ? AppTheme.white
-                                  : AppTheme.colorFF233244,
-                            ),
+                        _vehicleMetaChip(
+                          label: _registrationLabel(vehicle),
+                          color: _registrationColorForVehicle(vehicle),
+                          isDark: isDark,
+                        ),
+                        _vehicleMetaChip(
+                          label: _healthLabel(vehicle),
+                          color: _healthColorForVehicle(vehicle),
+                          isDark: isDark,
+                        ),
+                        _fleetCrudScopeChip(crudPolicy, isDark, scale),
+                        if (_routeSummary(vehicle).isNotEmpty)
+                          _vehicleMetaChip(
+                            label: _routeSummary(vehicle),
+                            color: AppTheme.colorFF4B7BE5,
+                            isDark: isDark,
+                          ),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: 150 * scale),
+                          child: GeoTabSyncStatusBadge.fromEntity(
+                            vehicle,
+                            compact: true,
+                            scale: scale,
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  SizedBox(height: 10 * scale),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _vehicleMetaChip(
-                        label: _currencyLabel(vehicle['totalRevenue']),
-                        color: AppTheme.colorFFD4AF37,
-                        isDark: isDark,
-                      ),
-                      _vehicleMetaChip(
-                        label: _registrationLabel(vehicle),
-                        color: _registrationColorForVehicle(vehicle),
-                        isDark: isDark,
-                      ),
-                      _vehicleMetaChip(
-                        label: _healthLabel(vehicle),
-                        color: _healthColorForVehicle(vehicle),
-                        isDark: isDark,
-                      ),
-                      _fleetCrudScopeChip(crudPolicy, isDark, scale),
-                      if (_routeSummary(vehicle).isNotEmpty)
-                        _vehicleMetaChip(
-                          label: _routeSummary(vehicle),
-                          color: AppTheme.colorFF4B7BE5,
-                          isDark: isDark,
+                    if (locationLabel.isNotEmpty) ...[
+                      SizedBox(height: 10 * scale),
+                      Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12 * scale,
+                          vertical: 8 * scale,
                         ),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: 150 * scale),
-                        child: GeoTabSyncStatusBadge.fromEntity(
-                          vehicle,
-                          compact: true,
-                          scale: scale,
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? AppTheme.colorFF131A24
+                              : AppTheme.colorFFF7F9FC,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isDark
+                                ? AppTheme.white.withValues(alpha: 0.05)
+                                : AppTheme.black.withValues(alpha: 0.05),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.place_rounded,
+                              size: 14 * scale,
+                              color: AppTheme.colorFF4B7BE5,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                locationLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark
+                                      ? AppTheme.gray300
+                                      : AppTheme.colorFF425466,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                  ),
-                  if (locationLabel.isNotEmpty) ...[
-                    SizedBox(height: 10 * scale),
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 12 * scale,
-                        vertical: 8 * scale,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? AppTheme.colorFF131A24
-                            : AppTheme.colorFFF7F9FC,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isDark
-                              ? AppTheme.white.withValues(alpha: 0.05)
-                              : AppTheme.black.withValues(alpha: 0.05),
-                        ),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.place_rounded,
-                            size: 14 * scale,
-                            color: AppTheme.colorFF4B7BE5,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              locationLabel,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark
-                                    ? AppTheme.gray300
-                                    : AppTheme.colorFF425466,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
-                ],
+                ),
               ),
             ),
-          ),
           ),
         );
       },
@@ -1463,7 +1486,6 @@ class _VehiclesPageState extends State<VehiclesPage> {
       ),
     );
   }
-
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬

@@ -130,7 +130,7 @@ class _TimelineRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: compact ? 30 : 38,
+            width: compact ? 34 : 40,
             child: Column(
               children: [
                 _PhaseCircle(
@@ -236,28 +236,35 @@ class _PhaseCircle extends StatelessWidget {
       return circle;
     }
 
-    return AnimatedBuilder(
-      animation: pulse,
-      builder: (context, child) {
-        final value = pulse.value;
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              width: size + (value * 12),
-              height: size + (value * 12),
-              decoration: BoxDecoration(
-                color: AppTheme.primaryBlue.withValues(
-                  alpha: (0.22 * (1 - value)).clamp(0, 0.22),
+    const pulseExpansion = 12.0;
+    final outerSize = size + pulseExpansion;
+    return SizedBox(
+      width: outerSize,
+      height: outerSize,
+      child: AnimatedBuilder(
+        animation: pulse,
+        builder: (context, child) {
+          final value = pulse.value;
+          return Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: size + (value * pulseExpansion),
+                height: size + (value * pulseExpansion),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue.withValues(
+                    alpha: (0.22 * (1 - value)).clamp(0, 0.22),
+                  ),
+                  shape: BoxShape.circle,
                 ),
-                shape: BoxShape.circle,
               ),
-            ),
-            child!,
-          ],
-        );
-      },
-      child: circle,
+              child!,
+            ],
+          );
+        },
+        child: circle,
+      ),
     );
   }
 }

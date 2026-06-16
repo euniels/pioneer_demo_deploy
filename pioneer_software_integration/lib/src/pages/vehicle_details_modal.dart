@@ -12,8 +12,13 @@ enum _VehicleAssetSource { fresh, persisted, snapshot }
 
 class VehicleDetailsModal extends StatefulWidget {
   final Map<String, dynamic> vehicle;
+  final bool centeredDialog;
 
-  const VehicleDetailsModal({required this.vehicle, super.key});
+  const VehicleDetailsModal({
+    required this.vehicle,
+    this.centeredDialog = false,
+    super.key,
+  });
 
   @override
   State<VehicleDetailsModal> createState() => _VehicleDetailsModalState();
@@ -372,15 +377,25 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final healthStatus = _string(_view['healthStatus'], fallback: 'healthy');
     final healthColor = _healthColor(healthStatus);
+    final isDialog = widget.centeredDialog;
 
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF10141D : AppTheme.colorFFF4F6F8,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        borderRadius: isDialog
+            ? BorderRadius.circular(20)
+            : const BorderRadius.vertical(top: Radius.circular(28)),
+        border: isDialog
+            ? Border.all(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.08)
+                    : AppTheme.black.withValues(alpha: 0.08),
+              )
+            : null,
       ),
       child: Column(
         children: [
-          _buildHeader(isDark, healthColor),
+          _buildHeader(isDark, healthColor, isDialog),
           Expanded(
             child: Stack(
               children: [
@@ -433,7 +448,7 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
     );
   }
 
-  Widget _buildHeader(bool isDark, Color healthColor) {
+  Widget _buildHeader(bool isDark, Color healthColor, bool isDialog) {
     final plate = _string(_view['plate'], fallback: 'UNKNOWN');
     final truckType = _string(_view['truckType'], fallback: 'Truck');
     final healthStatus = _string(_view['healthStatus'], fallback: 'healthy');
@@ -449,21 +464,27 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        borderRadius: isDialog
+            ? const BorderRadius.vertical(top: Radius.circular(20))
+            : const BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: Column(
         children: [
-          Center(
-            child: Container(
-              width: 42,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.white.withValues(alpha: 0.25),
-                borderRadius: BorderRadius.circular(999),
+          if (!isDialog) ...[
+            Center(
+              child: Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.white.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(999),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 18),
+            const SizedBox(height: 18),
+          ] else ...[
+            const SizedBox(height: 2),
+          ],
           Row(
             children: [
               Container(
