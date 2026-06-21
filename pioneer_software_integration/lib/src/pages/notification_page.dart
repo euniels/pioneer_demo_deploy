@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -147,11 +149,23 @@ class _NotificationsPageState extends State<NotificationsPage> {
     return filtered;
   }
 
-  Future<void> _markRead(NotificationItem item) async {
-    if (item.isRead) return;
-    _svc.markAsRead(item.id);
-    await BackendApiService.markNotificationRead(item.id);
-    await _load(forceRefresh: true);
+  void _openNotification(NotificationItem item) {
+    if (!item.isRead) {
+      _svc.markAsRead(item.id);
+      unawaited(BackendApiService.markNotificationRead(item.id));
+    }
+    final route = switch (item.category) {
+      NotificationCategory.maintenance => '/maintenance',
+      NotificationCategory.trip => '/trips',
+      NotificationCategory.fuel => '/delivery-confirm',
+      NotificationCategory.driver => '/drivers',
+      NotificationCategory.billing => '/billing',
+      NotificationCategory.alert => '/live-tracking',
+      NotificationCategory.system => null,
+    };
+    if (route != null) {
+      Navigator.pushNamed(context, route);
+    }
   }
 
   Future<void> _markAllRead() async {
@@ -570,7 +584,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
           (item) => _NotificationTile(
             item: item,
             isDark: isDark,
-            onTap: () => _markRead(item),
+            onTap: () => _openNotification(item),
             onDelete: () => _deleteItem(item),
           ),
         ),
@@ -826,6 +840,27 @@ class _NotificationTile extends StatelessWidget {
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 9),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: accent.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                item.category == NotificationCategory.system
+                                    ? 'System notice'
+                                    : 'Open ${item.category.label}',
+                                style: TextStyle(
+                                  color: accent,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
                             ),
                           ],
                         ),

@@ -1128,7 +1128,6 @@ class _ZoneCard extends StatelessWidget {
     final managed = zone['managedLocally'] == true;
     final accent = managed ? AppTheme.successGreen : AppTheme.colorFF00A8E8;
     return Container(
-      constraints: const BoxConstraints(minHeight: 210),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,

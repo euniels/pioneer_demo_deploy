@@ -95,9 +95,11 @@ void main() {
       'lib/src/pages/client_tracking_page.dart',
     ).readAsStringSync();
 
-    expect(source, contains('driverContactMasked'));
-    expect(source, contains('Contact through Pioneer dispatch'));
+    expect(source, isNot(contains('driverContactMasked')));
+    expect(source, isNot(contains("label: 'Driver'")));
     expect(source, contains('Vehicle plate'));
+    expect(source, contains('Cargo condition'));
+    expect(source, contains('POD condition summary'));
     expect(source, contains('Proof of delivery'));
     expect(source, contains('Awaiting delivery'));
     expect(source, contains('Delivery journey'));

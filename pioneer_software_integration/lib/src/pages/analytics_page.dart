@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../services/demo_telemetry_fixtures.dart';
 import '../theme/app_theme.dart';
 import '../utils/display_format.dart';
 import '../widgets/dashboard_layout.dart';
+import '../widgets/telemetry_widgets.dart';
 
 class AnalyticsPage extends StatefulWidget {
   const AnalyticsPage({super.key});
@@ -2048,12 +2050,10 @@ class _TelemetryAssetRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final diagnostics = _mapOf(asset['diagnostics']);
-    final fuel = _mapOf(diagnostics['fuelLevel']);
     final engineHours = _mapOf(diagnostics['engineHours']);
     final odometer = _mapOf(diagnostics['rawOdometer']);
     final alerts = _mapOf(asset['alerts']);
     final alertCount = _toInt(asset['alertCount']);
-    final fuelFallbackRatio = _toDouble(asset['fuelLevelRatio']);
     final engineHoursFallback = _toDouble(asset['engineHours']);
     final odometerFallback = _toDouble(asset['odometerKm']);
     final vehicleName = formatValue(asset['vehicle']);
@@ -2064,13 +2064,35 @@ class _TelemetryAssetRow extends StatelessWidget {
         : alertCount > 0
         ? AppTheme.warningOrange
         : AppTheme.successGreen;
-    final fuelDisplay = _diagnosticDisplay(
-      fuel,
-      fallback: fuelFallbackRatio > 0
-          ? '${(fuelFallbackRatio * 100).toStringAsFixed(0)}%'
-          : 'N/A',
-    );
-    final fuelColor = _fuelColor(fuelDisplay);
+    final sensorReadings = DemoTelemetryFixtures.readingsForVehicle({
+      ...asset,
+      'plate': vehicleName,
+    })
+        .where(
+          (reading) =>
+              reading.hasReading &&
+              (reading.key == 'temperature' ||
+                  reading.key == 'humidity' ||
+                  reading.key == 'fuel'),
+        )
+        .toList();
+
+    Widget stretchedTiles(List<Widget> tiles, {double gap = 8}) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final columns = constraints.maxWidth < 330 ? 1 : tiles.length;
+          final tileWidth =
+              (constraints.maxWidth - (gap * (columns - 1))) / columns;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: tiles
+                .map((tile) => SizedBox(width: tileWidth, child: tile))
+                .toList(),
+          );
+        },
+      );
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -2144,11 +2166,7 @@ class _TelemetryAssetRow extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              _TagMetric(label: 'Fuel', value: fuelDisplay, color: fuelColor),
+          stretchedTiles([
               _TagMetric(
                 label: 'Engine hours',
                 value: _diagnosticDisplay(
@@ -2168,25 +2186,29 @@ class _TelemetryAssetRow extends StatelessWidget {
                 ),
               ),
               _TagMetric(label: 'Alerts', value: '$alertCount', color: accent),
-            ],
-          ),
+            ], gap: 10),
+          if (sensorReadings.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            stretchedTiles(
+              sensorReadings
+                  .map<Widget>(
+                    (reading) => TelemetryReadingTile(
+                        reading: reading,
+                        icon: switch (reading.key) {
+                          'temperature' => Icons.device_thermostat_rounded,
+                          'humidity' => Icons.water_drop_rounded,
+                          _ => Icons.local_gas_station_rounded,
+                        },
+                        compact: true,
+                        showHistory: false,
+                      ),
+                  )
+                  .toList(),
+            ),
+          ],
         ],
       ),
     );
-  }
-
-  Color _fuelColor(String fuelDisplay) {
-    final fuelValue = _numericFromDisplay(fuelDisplay);
-    if (fuelValue <= 0) {
-      return AppTheme.infoBlue;
-    }
-    if (fuelValue < 30) {
-      return AppTheme.errorRed;
-    }
-    if (fuelValue <= 50) {
-      return AppTheme.warningOrange;
-    }
-    return AppTheme.successGreen;
   }
 }
 
@@ -3418,6 +3440,10 @@ const List<Map<String, dynamic>> _sampleTelemetryAssets = [
   {
     'vehicle': 'NCO 7290',
     'status': 'on trip',
+    'telemetrySource': 'Demo data',
+    'hasTemperatureSensor': true,
+    'temperatureC': 4.4,
+    'humidity': 54,
     'fuelLevelRatio': 0.31,
     'engineHours': 2864,
     'odometerKm': 84210,
@@ -3428,6 +3454,7 @@ const List<Map<String, dynamic>> _sampleTelemetryAssets = [
   {
     'vehicle': 'LAM 9297',
     'status': 'available',
+    'telemetrySource': 'Demo data',
     'fuelLevelRatio': 0.67,
     'engineHours': 1940,
     'odometerKm': 61340,
@@ -3438,6 +3465,7 @@ const List<Map<String, dynamic>> _sampleTelemetryAssets = [
   {
     'vehicle': 'IAE 5512',
     'status': 'available',
+    'telemetrySource': 'Demo data',
     'fuelLevelRatio': 0.82,
     'engineHours': 1522,
     'odometerKm': 48820,
@@ -3448,6 +3476,7 @@ const List<Map<String, dynamic>> _sampleTelemetryAssets = [
   {
     'vehicle': 'NDZ 6263',
     'status': 'available',
+    'telemetrySource': 'Demo data',
     'fuelLevelRatio': 0.46,
     'engineHours': 2218,
     'odometerKm': 70240,
@@ -3458,6 +3487,10 @@ const List<Map<String, dynamic>> _sampleTelemetryAssets = [
   {
     'vehicle': 'QR 617A',
     'status': 'maintenance',
+    'telemetrySource': 'Demo data',
+    'hasTemperatureSensor': true,
+    'temperatureC': 9.4,
+    'humidity': 57,
     'fuelLevelRatio': 0.28,
     'engineHours': 3054,
     'odometerKm': 91320,

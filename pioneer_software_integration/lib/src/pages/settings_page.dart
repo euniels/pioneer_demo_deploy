@@ -79,6 +79,7 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
   DateTime? _backendHealthLoadedAt;
   String? _backendHealthError;
   final Map<String, String> _writeBackInlineErrors = {};
+  int _settingsTab = 0;
 
   bool get _canEditSystemSettings =>
       CrudPermissions.canEdit(CrudEntity.settings);
@@ -823,6 +824,36 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     final role = AuthService.currentRole;
     final user = AuthService.currentUserData;
     final roleColor = _roleColor(role);
+    final canViewSystem = _canEditSystemSettings || _canReviewWriteBack;
+
+    Widget tabContent;
+    switch (_settingsTab) {
+      case 1:
+        tabContent = _buildNotificationCard(isDark, roleColor);
+        break;
+      case 2:
+        tabContent = canViewSystem
+            ? Column(
+                children: [
+                  _buildBackendReadinessCard(isDark, roleColor),
+                  const SizedBox(height: 16),
+                  _buildAdminCard(isDark, roleColor),
+                ],
+              )
+            : const SizedBox.shrink();
+        break;
+      default:
+        tabContent = _responsiveSettingsLayout(
+          leftCards: [
+            _buildAccountCard(isDark, user, role, roleColor),
+            _buildAppearanceCard(isDark),
+          ],
+          rightCards: [
+            _buildDisplayCard(isDark),
+            _buildAboutCard(isDark),
+          ],
+        );
+    }
 
     return DashboardLayout(
       currentRoute: '/settings',
@@ -837,30 +868,96 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
             children: [
               _buildSettingsOverview(isDark, role, roleColor),
               const SizedBox(height: 18),
-              _responsiveSettingsLayout(
-                leftCards: [
-                  _buildAccountCard(isDark, user, role, roleColor),
-                  _buildAppearanceCard(isDark),
-                  _buildAboutCard(isDark),
-                ],
-                rightCards: [
-                  _buildDisplayCard(isDark),
-                  _buildNotificationCard(isDark, roleColor),
-                ],
+              _buildSettingsTabs(
+                isDark: isDark,
+                canViewSystem: canViewSystem,
               ),
               const SizedBox(height: 18),
-              if (_canEditSystemSettings || _canReviewWriteBack) ...[
-                _buildBackendReadinessCard(isDark, roleColor),
-                const SizedBox(height: 16),
-              ],
-              if (_canEditSystemSettings || _canReviewWriteBack) ...[
-                _buildAdminCard(isDark, roleColor),
-                const SizedBox(height: 18),
-              ],
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: KeyedSubtree(
+                  key: ValueKey(_settingsTab),
+                  child: tabContent,
+                ),
+              ),
+              const SizedBox(height: 18),
               _buildSaveBar(isDark, roleColor),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsTabs({
+    required bool isDark,
+    required bool canViewSystem,
+  }) {
+    final tabs = <({String label, IconData icon})>[
+      (label: 'General', icon: Icons.tune_rounded),
+      (label: 'Notifications', icon: Icons.notifications_rounded),
+      if (canViewSystem)
+        (label: 'System & GeoTab', icon: Icons.admin_panel_settings_rounded),
+    ];
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(color: AppTheme.getBorderColor(context)),
+        ),
+      ),
+      child: Row(
+        children: [
+          for (var index = 0; index < tabs.length; index++)
+            Expanded(
+              child: InkWell(
+                onTap: () => setState(() => _settingsTab = index),
+                child: Container(
+                  height: 54,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: _settingsTab == index
+                            ? AppTheme.primaryBlue
+                            : AppTheme.transparent,
+                        width: 3,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        tabs[index].icon,
+                        size: 18,
+                        color: _settingsTab == index
+                            ? AppTheme.primaryBlue
+                            : AppTheme.getMutedTextColor(context),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          tabs[index].label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: _settingsTab == index
+                                ? AppTheme.primaryBlue
+                                : AppTheme.getMutedTextColor(context),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

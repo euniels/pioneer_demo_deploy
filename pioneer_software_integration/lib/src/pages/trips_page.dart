@@ -571,7 +571,12 @@ class _TripsPageState extends State<TripsPage> {
                 label: 'Date',
                 value: _dateFilter,
                 activeWhen: 'All Dates',
-                options: const ['All Dates', 'Today', 'Last 7 Days', 'This Month'],
+                options: const [
+                  'All Dates',
+                  'Today',
+                  'Last 7 Days',
+                  'This Month',
+                ],
                 onSelected: (value) {
                   setState(() => _dateFilter = value);
                   _persistFilters();
@@ -1796,21 +1801,31 @@ class _TripsPageState extends State<TripsPage> {
           final allSelected =
               visibleIds.isNotEmpty &&
               visibleIds.every(_selectedTripIds.contains);
+          final hasBulkActionBar = _selectedTripIds.isNotEmpty;
           return Container(
             width: constraints.maxWidth,
             decoration: BoxDecoration(
               color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: isDark
                     ? AppTheme.white.withValues(alpha: 0.08)
                     : AppTheme.black.withValues(alpha: 0.08),
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: isDark
+                      ? AppTheme.black.withValues(alpha: 0.35)
+                      : AppTheme.black.withValues(alpha: 0.10),
+                  blurRadius: 22,
+                  offset: const Offset(0, 14),
+                ),
+              ],
             ),
             child: Column(
               children: [
-                if (_selectedTripIds.isNotEmpty) _buildBulkActionBar(isDark),
-                _buildTableHeader(isDark, allSelected),
+                if (hasBulkActionBar) _buildBulkActionBar(isDark),
+                _buildTableHeader(isDark, allSelected, hasBulkActionBar),
                 Expanded(
                   child: ListView.builder(
                     itemCount: _filteredTrips.length,
@@ -1862,30 +1877,45 @@ class _TripsPageState extends State<TripsPage> {
     );
   }
 
-  Widget _buildTableHeader(bool isDark, bool allSelected) {
+  Widget _buildTableHeader(
+    bool isDark,
+    bool allSelected,
+    bool hasBulkActionBar,
+  ) {
     return Container(
-      constraints: const BoxConstraints(minHeight: 52),
-      decoration: const BoxDecoration(color: AppTheme.primaryBlue),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 48,
-            child: Checkbox(
-              value: allSelected,
-              onChanged: (selected) => _toggleAllVisibleTrips(selected == true),
-              checkColor: AppTheme.primaryBlue,
-              fillColor: const WidgetStatePropertyAll(AppTheme.white),
+      constraints: const BoxConstraints(minHeight: 56),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue,
+        borderRadius: hasBulkActionBar
+            ? null
+            : const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 56,
+              child: Center(
+                child: Checkbox(
+                  value: allSelected,
+                  onChanged: (selected) =>
+                      _toggleAllVisibleTrips(selected == true),
+                  checkColor: AppTheme.primaryBlue,
+                  fillColor: const WidgetStatePropertyAll(AppTheme.white),
+                ),
+              ),
             ),
-          ),
-          _tableColumn('DATE / TRIP', 12, header: true),
-          _tableColumn('ORIGIN', 15, header: true),
-          _tableColumn('DESTINATION', 15, header: true),
-          _tableColumn('CLIENT', 15, header: true),
-          _tableColumn('DRIVER', 12, header: true),
-          _tableColumn('VEHICLE', 10, header: true),
-          _tableColumn('STATUS', 10, header: true),
-          _tableColumn('ACTIONS', 11, header: true),
-        ],
+            _tableColumn('DATE / TRIP', 12, header: true),
+            _tableColumn('ORIGIN', 15, header: true),
+            _tableColumn('DESTINATION', 15, header: true),
+            _tableColumn('CLIENT', 15, header: true),
+            _tableColumn('DRIVER', 12, header: true),
+            _tableColumn('VEHICLE', 10, header: true),
+            _tableColumn('STATUS', 10, header: true),
+            _tableColumn('ACTIONS', 11, header: true),
+          ],
+        ),
       ),
     );
   }
@@ -1894,7 +1924,7 @@ class _TripsPageState extends State<TripsPage> {
     String text,
     int flex, {
     bool header = false,
-    TextAlign textAlign = TextAlign.left,
+    TextAlign textAlign = TextAlign.center,
     FontWeight? weight,
     Color? color,
   }) {
@@ -1946,29 +1976,33 @@ class _TripsPageState extends State<TripsPage> {
         child: Row(
           children: [
             SizedBox(
-              width: 48,
-              child: Checkbox(
-                value: selected,
-                onChanged: (value) =>
-                    _toggleTripSelection(tripId, value == true),
+              width: 56,
+              child: Center(
+                child: Checkbox(
+                  value: selected,
+                  onChanged: (value) =>
+                      _toggleTripSelection(tripId, value == true),
+                ),
               ),
             ),
             Expanded(
               flex: 12,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Text(
                     '${trip['date'] ?? ''}',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 13,
                       color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 4),
                   Text(
                     tripId,
+                    textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -1982,34 +2016,39 @@ class _TripsPageState extends State<TripsPage> {
               '${trip['origin'] ?? ''}',
               15,
               color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              textAlign: TextAlign.center,
             ),
             _tableColumn(
               '${trip['destination'] ?? ''}',
               15,
               color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              textAlign: TextAlign.center,
             ),
             _tableColumn(
               '${trip['customer'] ?? ''}',
               15,
               weight: FontWeight.w600,
               color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              textAlign: TextAlign.center,
             ),
             _tableColumn(
               '${trip['driver'] ?? ''}',
               12,
               color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              textAlign: TextAlign.center,
             ),
             _tableColumn(
               '${trip['vehicle'] ?? ''}',
               10,
               color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              textAlign: TextAlign.center,
             ),
             Expanded(
               flex: 10,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Align(
-                  alignment: Alignment.centerLeft,
+                  alignment: Alignment.center,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 9,
@@ -2021,6 +2060,7 @@ class _TripsPageState extends State<TripsPage> {
                     ),
                     child: Text(
                       statusPresentation.label,
+                      textAlign: TextAlign.center,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -2039,7 +2079,7 @@ class _TripsPageState extends State<TripsPage> {
             Expanded(
               flex: 11,
               child: Align(
-                alignment: Alignment.centerLeft,
+                alignment: Alignment.center,
                 child: PopupMenuButton<_TripListAction>(
                   tooltip: 'Trip actions',
                   onSelected: (action) => _handleTripAction(action, trip),
@@ -2195,9 +2235,10 @@ class _TripsPageState extends State<TripsPage> {
   }
 
   void _showTripDetails(Map<String, dynamic> trip) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => TripDetailsPage(trip: trip)),
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => TripDetailsPage(trip: trip, embedded: true),
     );
   }
 
@@ -2519,7 +2560,13 @@ class _TripSummaryCard extends StatelessWidget {
 
 class TripDetailsPage extends StatefulWidget {
   final Map trip;
-  const TripDetailsPage({super.key, required this.trip});
+  final bool embedded;
+
+  const TripDetailsPage({
+    super.key,
+    required this.trip,
+    this.embedded = false,
+  });
 
   @override
   State<TripDetailsPage> createState() => _TripDetailsPageState();
@@ -3468,11 +3515,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final isMobile = MediaQuery.of(context).size.width < 600;
 
-    return DashboardLayout(
-      currentRoute: '/trips',
-      title: 'Trip Details',
-      subtitle: trip['tripId'] ?? '',
-      actions: [
+    final pageActions = <Widget>[
         OutlinedButton.icon(
           onPressed: _printTripManifest,
           icon: const Icon(Icons.assignment_rounded),
@@ -3492,8 +3535,8 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           onPressed: () => Navigator.pop(context),
           tooltip: 'Back to Trips',
         ),
-      ],
-      child: SingleChildScrollView(
+      ];
+    final detailContent = SingleChildScrollView(
         padding: EdgeInsets.all(isMobile ? 16 : 24),
         child:
             Container(
@@ -3506,167 +3549,212 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                           ? AppTheme.white.withValues(alpha: 0.08)
                           : AppTheme.black.withValues(alpha: 0.08),
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: isDark
+                            ? AppTheme.black.withValues(alpha: 0.24)
+                            : AppTheme.black.withValues(alpha: 0.08),
+                        blurRadius: 30,
+                        offset: const Offset(0, 16),
+                      ),
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // â”€â”€ Header: tripId + status + kebab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-                      if (isMobile) ...[
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  trip['tripId'],
-                                  style: TextStyle(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w900,
-                                    color: isDark
-                                        ? AppTheme.white
-                                        : AppTheme.colorFF2C3E50,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  trip['date'],
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: isDark
-                                        ? AppTheme.gray400
-                                        : AppTheme.gray600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            IconButton(
-                              onPressed: () => _showKebabMenu(context, isDark),
-                              icon: Icon(
-                                Icons.more_vert_rounded,
-                                color: isDark
-                                    ? AppTheme.gray400
-                                    : AppTheme.gray600,
-                              ),
-                              style: IconButton.styleFrom(
-                                backgroundColor: isDark
-                                    ? AppTheme.colorFF0F1117
-                                    : AppTheme.colorFFF5F6F8,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
+                      Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.all(isMobile ? 16 : 20),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? AppTheme.colorFF111722
+                              : AppTheme.colorFFF5F6F8,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: isDark
+                                ? AppTheme.white.withValues(alpha: 0.08)
+                                : AppTheme.black.withValues(alpha: 0.08),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: isDark
+                                  ? AppTheme.black.withValues(alpha: 0.12)
+                                  : AppTheme.black.withValues(alpha: 0.05),
+                              blurRadius: 22,
+                              offset: const Offset(0, 10),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            color: (trip['statusColor'] as Color).withValues(
-                              alpha: 0.15,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: (trip['statusColor'] as Color).withValues(
-                                alpha: 0.3,
-                              ),
-                              width: 2,
-                            ),
-                          ),
-                          child: Text(
-                            _getStatusText(trip['status']),
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: trip['statusColor'] as Color,
-                            ),
-                          ),
-                        ),
-                      ] else
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Column(
+                            if (isMobile) ...[
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    trip['tripId'],
-                                    style: TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.w900,
-                                      color: isDark
-                                          ? AppTheme.white
-                                          : AppTheme.colorFF2C3E50,
-                                    ),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        trip['tripId'],
+                                        style: TextStyle(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w900,
+                                          color: isDark
+                                              ? AppTheme.white
+                                              : AppTheme.colorFF2C3E50,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        trip['date'],
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: isDark
+                                              ? AppTheme.gray400
+                                              : AppTheme.gray600,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    trip['date'],
-                                    style: TextStyle(
-                                      fontSize: 14,
+                                  IconButton(
+                                    onPressed: () =>
+                                        _showKebabMenu(context, isDark),
+                                    icon: Icon(
+                                      Icons.more_vert_rounded,
                                       color: isDark
                                           ? AppTheme.gray400
                                           : AppTheme.gray600,
                                     ),
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: isDark
+                                          ? AppTheme.colorFF0F1117
+                                          : AppTheme.colorFFF5F6F8,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
-                            ),
-                            Row(
+                            ] else
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          trip['tripId'],
+                                          style: TextStyle(
+                                            fontSize: 28,
+                                            fontWeight: FontWeight.w900,
+                                            color: isDark
+                                                ? AppTheme.white
+                                                : AppTheme.colorFF2C3E50,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          trip['date'],
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: isDark
+                                                ? AppTheme.gray400
+                                                : AppTheme.gray600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: (trip['statusColor'] as Color)
+                                              .withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color:
+                                                (trip['statusColor'] as Color)
+                                                    .withValues(alpha: 0.3),
+                                            width: 2,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _getStatusText(trip['status']),
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                            color: trip['statusColor'] as Color,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      IconButton(
+                                        onPressed: () =>
+                                            _showKebabMenu(context, isDark),
+                                        icon: Icon(
+                                          Icons.more_vert_rounded,
+                                          color: isDark
+                                              ? AppTheme.gray400
+                                              : AppTheme.gray600,
+                                        ),
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: isDark
+                                              ? AppTheme.colorFF0F1117
+                                              : AppTheme.colorFFF5F6F8,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              10,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            const SizedBox(height: 18),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: (trip['statusColor'] as Color)
-                                        .withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: (trip['statusColor'] as Color)
-                                          .withValues(alpha: 0.3),
-                                      width: 2,
-                                    ),
-                                  ),
-                                  child: Text(
-                                    _getStatusText(trip['status']),
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                      color: trip['statusColor'] as Color,
-                                    ),
-                                  ),
+                                _buildDetailSummaryChip(
+                                  'Client',
+                                  trip['customer'],
+                                  isDark,
+                                  compact: !isMobile,
                                 ),
-                                const SizedBox(width: 12),
-                                IconButton(
-                                  onPressed: () =>
-                                      _showKebabMenu(context, isDark),
-                                  icon: Icon(
-                                    Icons.more_vert_rounded,
-                                    color: isDark
-                                        ? AppTheme.gray400
-                                        : AppTheme.gray600,
-                                  ),
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: isDark
-                                        ? AppTheme.colorFF0F1117
-                                        : AppTheme.colorFFF5F6F8,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                  ),
+                                _buildDetailSummaryChip(
+                                  'Origin',
+                                  trip['origin'],
+                                  isDark,
+                                  compact: !isMobile,
+                                ),
+                                _buildDetailSummaryChip(
+                                  'Destination',
+                                  trip['destination'],
+                                  isDark,
+                                  compact: !isMobile,
                                 ),
                               ],
                             ),
                           ],
                         ),
+                      ),
                       const SizedBox(height: 32),
                       _buildSection(isDark, 'Customer Information', [
                         _buildInfoRow(
@@ -3826,7 +3914,108 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                   duration: 500.ms,
                   curve: Curves.easeOut,
                 ),
-      ),
+      );
+
+    if (widget.embedded) {
+      final size = MediaQuery.sizeOf(context);
+      final compact = size.width < 760;
+      return Dialog(
+        backgroundColor: AppTheme.transparent,
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 48,
+          vertical: 20,
+        ),
+        child: Container(
+          width: compact ? size.width - 20 : 1080,
+          height: (size.height * 0.9).clamp(560.0, 820.0),
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.getBorderColor(context)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 14,
+                ),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.route_rounded, color: AppTheme.white),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Trip Details',
+                            style: TextStyle(
+                              color: AppTheme.white,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            trip['tripId']?.toString() ?? '',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Print manifest',
+                      onPressed: _printTripManifest,
+                      icon: const Icon(
+                        Icons.assignment_rounded,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                    if (_isCompletedTrip)
+                      IconButton(
+                        tooltip: 'Delivery receipt',
+                        onPressed: _printDeliveryReceipt,
+                        icon: const Icon(
+                          Icons.receipt_long_rounded,
+                          color: AppTheme.white,
+                        ),
+                      ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(child: detailContent),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return DashboardLayout(
+      currentRoute: '/trips',
+      title: 'Trip Details',
+      subtitle: trip['tripId'] ?? '',
+      actions: pageActions,
+      child: detailContent,
     );
   }
 
@@ -3848,7 +4037,32 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           ),
         ),
         const SizedBox(height: 16),
-        ...children,
+        Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(isMobile ? 16 : 20),
+          decoration: BoxDecoration(
+            color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFD,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isDark
+                  ? AppTheme.white.withValues(alpha: 0.08)
+                  : AppTheme.black.withValues(alpha: 0.08),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: isDark
+                    ? AppTheme.black.withValues(alpha: 0.12)
+                    : AppTheme.black.withValues(alpha: 0.05),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: children,
+          ),
+        ),
       ],
     );
   }
@@ -4050,6 +4264,51 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           fontWeight: FontWeight.w900,
           color: color,
         ),
+      ),
+    );
+  }
+
+  Widget _buildDetailSummaryChip(
+    String label,
+    String? value,
+    bool isDark, {
+    bool compact = false,
+  }) {
+    final displayValue = value?.toString().trim().isNotEmpty == true
+        ? value.toString()
+        : 'TBA';
+    return Container(
+      constraints: BoxConstraints(minWidth: compact ? 120 : 170),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF111722 : AppTheme.colorFFEAF2FF,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.colorFF4B7BE5.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            displayValue,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+            ),
+          ),
+        ],
       ),
     );
   }

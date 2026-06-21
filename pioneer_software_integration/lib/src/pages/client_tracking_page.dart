@@ -4,8 +4,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 
+import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
 import '../services/auth.dart';
+import '../services/demo_telemetry_fixtures.dart';
 import '../services/google_map_marker_factory.dart';
 import '../services/role_service.dart';
 import '../theme/app_theme.dart';
@@ -14,6 +16,7 @@ import '../utils/workflow_status_helper.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
+import '../widgets/telemetry_widgets.dart';
 
 class ClientTrackingPage extends StatefulWidget {
   const ClientTrackingPage({super.key});
@@ -716,95 +719,189 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
                   ],
           ),
         ),
-        child: ListView(
-          padding: const EdgeInsets.all(24),
+        child: Column(
           children: [
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: AppTheme.getCardBg(context),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: AppTheme.getBorderColor(context)),
-                boxShadow: AppTheme.getCardShadow(context),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            _buildTrackingToolbar(context),
+            _buildTrackingSuggestionBar(context),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(24),
                 children: [
-                  Text(
-                    'Lookup delivery status',
-                    style: AppTheme.getHeadingStyle(context, fontSize: 24),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Enter a trip ID to see the client-safe live status, location, progress, and proof-of-delivery state.',
-                    style: AppTheme.getSubtitleStyle(context),
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _tripController,
-                          decoration: const InputDecoration(
-                            labelText: 'Trip ID',
-                            hintText: 'Example: TRP-ABC123',
-                          ),
-                          onSubmitted: (_) => _load(),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton(onPressed: _load, child: const Text('Load')),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _buildTripSuggestions(),
+                  if (_future == null)
+                    const _ClientTrackingEmpty(
+                      title: 'Ready for live client tracking',
+                      message:
+                          'Enter a trip ID or choose a recent delivery to preview the client-facing tracking portal.',
+                    )
+                  else
+                    FutureBuilder<Map<String, dynamic>>(
+                      future: _future,
+                      initialData: _cachedTrackingData(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                                ConnectionState.waiting &&
+                            !snapshot.hasData) {
+                          return const PioneerRouteSkeletonBody(
+                            routeName: '/client-tracking',
+                          );
+                        }
+
+                        if (snapshot.hasError || !snapshot.hasData) {
+                          return const _ClientTrackingEmpty(
+                            title: 'Tracking lookup failed',
+                            message:
+                                'The trip was not found or the backend response was unavailable.',
+                          );
+                        }
+
+                        final data = snapshot.data!;
+                        final location = _mapOf(data['location']);
+                        final pod = _mapOf(data['proofOfDelivery']);
+                        final route = _listOfMaps(data['route']);
+
+                        return _buildClientDeliveryView(
+                          context,
+                          data: data,
+                          location: location,
+                          pod: pod,
+                          route: route,
+                        );
+                      },
+                    ),
                 ],
               ),
             ),
-            const SizedBox(height: 20),
-            if (_future == null)
-              const _ClientTrackingEmpty(
-                title: 'Ready for live client tracking',
-                message:
-                    'This screen is now connected to the backend client-tracking endpoint. Load a trip to preview what a client-facing tracking portal can show.',
-              )
-            else
-              FutureBuilder<Map<String, dynamic>>(
-                future: _future,
-                initialData: _cachedTrackingData(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting &&
-                      !snapshot.hasData) {
-                    return const PioneerRouteSkeletonBody(
-                      routeName: '/client-tracking',
-                    );
-                  }
-
-                  if (snapshot.hasError || !snapshot.hasData) {
-                    return const _ClientTrackingEmpty(
-                      title: 'Tracking lookup failed',
-                      message:
-                          'The trip was not found or the backend response was unavailable.',
-                    );
-                  }
-
-                  final data = snapshot.data!;
-                  final location = _mapOf(data['location']);
-                  final pod = _mapOf(data['proofOfDelivery']);
-                  final route = _listOfMaps(data['route']);
-
-                  return _buildClientDeliveryView(
-                    context,
-                    data: data,
-                    location: location,
-                    pod: pod,
-                    route: route,
-                  );
-                },
-              ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildTrackingToolbar(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.sizeOf(context).width < 850;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final search = SizedBox(
+            height: 50,
+            child: TextField(
+              controller: _tripController,
+              onSubmitted: (_) => _load(),
+              style: AppTheme.getBodyStyle(context).copyWith(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Enter Trip ID, delivery reference, or client code...',
+                hintStyle: AppTheme.getSubtitleStyle(
+                  context,
+                ).copyWith(fontSize: 14),
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor:
+                    isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(
+                    color: isDark
+                        ? AppTheme.white.withAlpha(20)
+                        : AppTheme.black.withAlpha(18),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(
+                    color: isDark
+                        ? AppTheme.white.withAlpha(20)
+                        : AppTheme.black.withAlpha(18),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: AppTheme.primaryBlue),
+                ),
+              ),
+            ),
+          );
+          final loadButton = SizedBox(
+            height: 50,
+            width: compact ? double.infinity : 150,
+            child: FilledButton.icon(
+              onPressed: _load,
+              icon: const Icon(Icons.route_rounded),
+              label: const Text('Track'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.colorFF10B981,
+                foregroundColor: AppTheme.white,
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [search, const SizedBox(height: 12), loadButton],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              const SizedBox(width: 14),
+              loadButton,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTrackingSuggestionBar(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.sizeOf(context).width < 850;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: _buildTripSuggestions(),
     );
   }
 
@@ -863,9 +960,6 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
     final progress = (_toDouble(data['progressPercent']) / 100).clamp(0.0, 1.0);
     final cargoType = data['cargoType']?.toString().trim() ?? '';
     final weight = _toDouble(data['totalWeightKg']);
-    final contact = formatValue(data['driverContactMasked']) == 'N/A'
-        ? 'Contact through Pioneer dispatch'
-        : formatValue(data['driverContactMasked']);
 
     return Container(
       width: double.infinity,
@@ -919,16 +1013,6 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
           ),
           const SizedBox(height: AppTheme.space20),
           _ClientDetailRow(
-            icon: Icons.person_outline_rounded,
-            label: 'Driver',
-            value: formatValue(data['driver']),
-          ),
-          _ClientDetailRow(
-            icon: Icons.phone_outlined,
-            label: 'Contact',
-            value: contact,
-          ),
-          _ClientDetailRow(
             icon: Icons.local_shipping_outlined,
             label: 'Vehicle plate',
             value: formatValue(data['vehicle']),
@@ -947,7 +1031,125 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
             ),
           ],
           const SizedBox(height: AppTheme.space16),
+          _buildCargoCondition(context, data, pod),
+          const SizedBox(height: AppTheme.space16),
           _buildProofOfDelivery(context, data, pod),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCargoCondition(
+    BuildContext context,
+    Map<String, dynamic> data,
+    Map<String, dynamic> pod,
+  ) {
+    final condition = _mapOf(data['cargoCondition'] ?? data['telemetry']);
+    final vehicle = <String, dynamic>{
+      'plate': data['vehicle'],
+      'hasTemperatureSensor':
+          data['hasTemperatureSensor'] ?? condition['sensorEquipped'],
+      'temperatureC':
+          condition['temperatureC'] ?? condition['temperature'] ?? data['temperatureC'],
+      'humidity': condition['humidity'] ?? data['humidity'],
+    };
+    final readings = DemoTelemetryFixtures.readingsForVehicle(vehicle)
+        .where(
+          (reading) =>
+              reading.key == 'temperature' || reading.key == 'humidity',
+        )
+        .toList();
+    final sensorEquipped = readings.any(
+      (reading) => reading.availability != TelemetryAvailability.notEquipped,
+    );
+    final compliant = sensorEquipped && readings.every(
+      (reading) =>
+          reading.severity == TelemetrySeverity.normal && reading.hasReading,
+    );
+    final podReady = pod.isNotEmpty || _isCompletedTrackingStatus(data['status']);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppTheme.space16),
+      decoration: BoxDecoration(
+        color: AppTheme.getCardBg(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.getBorderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Cargo condition',
+                  style: AppTheme.getHeadingStyle(context, fontSize: 18),
+                ),
+              ),
+              TelemetryFreshnessBadge(reading: readings.first),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            sensorEquipped
+                ? compliant
+                      ? 'Cargo conditions are within the configured safe range.'
+                      : 'A cargo reading needs Pioneer operations review.'
+                : 'This vehicle is not equipped with a cargo-condition sensor.',
+            style: AppTheme.getDashboardSecondaryStyle(context),
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final tileWidth = constraints.maxWidth < 430
+                  ? constraints.maxWidth
+                  : (constraints.maxWidth - 10) / 2;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: readings
+                    .map(
+                      (reading) => SizedBox(
+                        width: tileWidth,
+                        child: TelemetryReadingTile(
+                          reading: reading,
+                          icon: reading.key == 'temperature'
+                              ? Icons.device_thermostat_rounded
+                              : Icons.water_drop_rounded,
+                          compact: true,
+                          showHistory: false,
+                        ),
+                      ),
+                    )
+                    .toList(),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(
+                podReady ? Icons.verified_rounded : Icons.schedule_rounded,
+                size: 18,
+                color: podReady
+                    ? AppTheme.successGreen
+                    : AppTheme.warningOrange,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  podReady
+                      ? 'POD condition summary: delivery evidence available.'
+                      : 'POD condition summary: awaiting delivery evidence.',
+                  style: AppTheme.getDashboardBodyStyle(context).copyWith(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

@@ -77,8 +77,8 @@ void main() {
       ).readAsStringSync();
 
       expect(source, contains("summary['predictiveMaintenance']"));
-      expect(source, contains('Predictive Maintenance'));
-      expect(source, contains('No maintenance predictions yet'));
+      expect(source, contains('Service Forecast'));
+      expect(source, contains('No service forecast yet'));
     },
   );
 

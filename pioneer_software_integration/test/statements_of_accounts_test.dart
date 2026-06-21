@@ -59,7 +59,7 @@ void main() {
       contains("'overdue' => 'Overdue \${_daysOverdue(invoice)} days'"),
     );
     expect(source, contains('All invoice dates'));
-    expect(source, contains('Clear filters'));
+    expect(source, contains("label: const Text('Clear')"));
     expect(source, contains('SO / ERP ref'));
   });
 }

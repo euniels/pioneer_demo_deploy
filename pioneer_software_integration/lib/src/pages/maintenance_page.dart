@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../config/pioneer_runtime_config.dart';
+import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
 import '../services/fleet_sync_service.dart';
@@ -15,6 +16,7 @@ import '../widgets/dashboard_layout.dart';
 import '../widgets/geotab_push_preview.dart';
 import '../widgets/geotab_sync_status_badge.dart';
 import '../widgets/page_skeletons.dart';
+import '../widgets/telemetry_widgets.dart';
 import '../theme/app_theme.dart';
 
 class MaintenancePage extends StatefulWidget {
@@ -1974,6 +1976,17 @@ class _MaintenanceCard extends StatelessWidget {
         data['voided'] == true ||
         data['status']?.toString().toLowerCase() == 'voided';
     final readOnly = data['isReadOnly'] == true;
+    final severityText = _faultSeverity(data).toLowerCase();
+    final faultSeverity = severityText.contains('critical') ||
+            severityText.contains('high')
+        ? TelemetrySeverity.critical
+        : severityText.contains('medium') || severityText.contains('warning')
+        ? TelemetrySeverity.warning
+        : TelemetrySeverity.normal;
+    final faultColor = telemetrySeverityColor(
+      faultSeverity,
+      TelemetryAvailability.live,
+    );
 
     final card = Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -1982,7 +1995,9 @@ class _MaintenanceCard extends StatelessWidget {
         color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: isDark
+          color: section == 'faults'
+              ? faultColor.withValues(alpha: 0.4)
+              : isDark
               ? AppTheme.white.withValues(alpha: 0.06)
               : AppTheme.black.withValues(alpha: 0.06),
         ),
@@ -1990,13 +2005,43 @@ class _MaintenanceCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: AppTheme.dashboardSectionHeaderSize,
-              fontWeight: FontWeight.w900,
-              color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: AppTheme.dashboardSectionHeaderSize,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
+                  ),
+                ),
+              ),
+              if (section == 'faults') ...[
+                _TinyBadge(label: _faultSeverity(data), color: faultColor),
+                const SizedBox(width: 7),
+                _TinyBadge(
+                  label: data['acknowledged'] == true
+                      ? 'Acknowledged'
+                      : 'Needs review',
+                  color: data['acknowledged'] == true
+                      ? AppTheme.successGreen
+                      : AppTheme.warningOrange,
+                ),
+              ],
+              if (section == 'dvir')
+                _TinyBadge(
+                  label: data['repaired'] == true
+                      ? 'Repaired'
+                      : data['hasDefects'] == true
+                      ? 'Defect found'
+                      : 'Passed',
+                  color: data['repaired'] == true ||
+                          data['hasDefects'] != true
+                      ? AppTheme.successGreen
+                      : AppTheme.warningOrange,
+                ),
+            ],
           ),
           if (section == 'history') ...[
             const SizedBox(height: 8),
@@ -2045,6 +2090,27 @@ class _MaintenanceCard extends StatelessWidget {
               color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
             ),
           ),
+          if (section == 'faults') ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _TinyBadge(
+                  label: 'First ${formatValue(data['firstDetectedAt'] ?? data['dateTime'])}',
+                  color: AppTheme.primaryBlue,
+                ),
+                _TinyBadge(
+                  label: 'Last ${formatValue(data['lastDetectedAt'] ?? data['recordedAt'] ?? data['dateTime'])}',
+                  color: AppTheme.primaryBlue,
+                ),
+                _TinyBadge(
+                  label: '${data['occurrenceCount'] ?? 1} occurrence${(data['occurrenceCount'] ?? 1) == 1 ? '' : 's'}',
+                  color: faultColor,
+                ),
+              ],
+            ),
+          ],
           if (section == 'history') ...[
             const SizedBox(height: 10),
             Text(

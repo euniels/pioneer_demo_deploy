@@ -63,33 +63,6 @@ class _StatementOfAccountsPageState extends State<StatementOfAccountsPage> {
     super.dispose();
   }
 
-  InputDecoration _filterDecoration(bool isDark, Widget icon, String hint) {
-    return InputDecoration(
-      prefixIcon: icon,
-      hintText: hint,
-      filled: true,
-      fillColor: isDark ? AppTheme.colorFF141924 : AppTheme.colorFFF8FAFC,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
-        borderSide: BorderSide.none,
-      ),
-    );
-  }
-
-  Widget _filterTextField({
-    required bool isDark,
-    required IconData icon,
-    required String hint,
-    required ValueChanged<String> onChanged,
-    TextEditingController? controller,
-  }) {
-    return TextField(
-      controller: controller,
-      onChanged: onChanged,
-      decoration: _filterDecoration(isDark, Icon(icon), hint),
-    );
-  }
-
   Future<void> _selectDateRange() async {
     final selected = await showDateRangePicker(
       context: context,
@@ -309,126 +282,251 @@ class _StatementOfAccountsPageState extends State<StatementOfAccountsPage> {
           final clients = _filteredClients(_listOfMaps(data['clients']));
           final overview = _filteredOverview(clients);
 
-          return RefreshIndicator(
-            onRefresh: () async => _reload(),
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                _buildOverview(isDark, overview),
-                const SizedBox(height: 20),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    SizedBox(
-                      width: 280,
-                      child: _filterTextField(
-                        isDark: isDark,
-                        icon: Icons.search_rounded,
-                        hint: 'Filter by client',
-                        controller: _clientFilterController,
-                        onChanged: (value) => setState(() => _search = value),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 270,
-                      child: OutlinedButton.icon(
-                        onPressed: _selectDateRange,
-                        icon: const Icon(Icons.date_range_rounded),
-                        label: Text(
-                          _dateRange == null
-                              ? 'All invoice dates'
-                              : '${_displayDate(_dateRange!.start)} - ${_displayDate(_dateRange!.end)}',
-                        ),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 220,
-                      child: DropdownButtonFormField<String>(
-                        key: ValueKey(_status),
-                        initialValue: _status,
-                        decoration: _filterDecoration(
-                          isDark,
-                          const Icon(Icons.payments_rounded),
-                          'Payment status',
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 'all', child: Text('All')),
-                          DropdownMenuItem(value: 'paid', child: Text('Paid')),
-                          DropdownMenuItem(
-                            value: 'unpaid',
-                            child: Text('Unpaid'),
+          return Column(
+            children: [
+              _buildSoaToolbar(isDark, clients, overview),
+              _buildSoaFilterBar(isDark, clients),
+              Expanded(
+                child: Container(
+                  color: isDark
+                      ? AppTheme.colorFF0A0E1A
+                      : AppTheme.colorFFF5F6F8,
+                  child: RefreshIndicator(
+                    onRefresh: () async => _reload(),
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(24),
+                      children: [
+                        _buildOverview(isDark, overview),
+                        const SizedBox(height: 20),
+                        if (clients.isEmpty)
+                          _SoaEmptyState(
+                            isDark: isDark,
+                            title: 'No client balances found',
+                            message: 'No SOA rows match the current search.',
+                          )
+                        else
+                          ...clients.map(
+                            (client) => _ClientStatementSection(
+                              client: client,
+                              isDark: isDark,
+                              onViewDetail: () => _showClientAccountDetail(
+                                client,
+                                billingInvoices,
+                                isDark,
+                              ),
+                            ),
                           ),
-                          DropdownMenuItem(
-                            value: 'overdue',
-                            child: Text('Overdue'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'partial',
-                            child: Text('Partial'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'voided',
-                            child: Text('Voided'),
-                          ),
+                        if (clients.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          _GrandTotalRow(overview: overview, isDark: isDark),
                         ],
-                        onChanged: (value) =>
-                            setState(() => _status = value ?? 'all'),
-                      ),
-                    ),
-                    FilledButton.icon(
-                      onPressed: () async =>
-                          _exportCurrentView(clients, overview),
-                      icon: const Icon(Icons.picture_as_pdf_rounded),
-                      label: const Text('Export PDF'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () async => _exportCsvCurrentView(clients),
-                      icon: const Icon(Icons.table_view_rounded),
-                      label: const Text('Export CSV'),
-                    ),
-                    if (_dateRange != null ||
-                        _search.isNotEmpty ||
-                        _status != 'all')
-                      TextButton.icon(
-                        onPressed: () => setState(() {
-                          _clientFilterController.clear();
-                          _search = '';
-                          _status = 'all';
-                          _dateRange = null;
-                        }),
-                        icon: const Icon(Icons.filter_alt_off_rounded),
-                        label: const Text('Clear filters'),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                if (clients.isEmpty)
-                  _SoaEmptyState(
-                    isDark: isDark,
-                    title: 'No client balances found',
-                    message: 'No SOA rows match the current search.',
-                  )
-                else
-                  ...clients.map(
-                    (client) => _ClientStatementSection(
-                      client: client,
-                      isDark: isDark,
-                      onViewDetail: () => _showClientAccountDetail(
-                        client,
-                        billingInvoices,
-                        isDark,
-                      ),
+                      ],
                     ),
                   ),
-                if (clients.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _GrandTotalRow(overview: overview, isDark: isDark),
-                ],
-              ],
-            ),
+                ),
+              ),
+            ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildSoaToolbar(
+    bool isDark,
+    List<Map<String, dynamic>> clients,
+    Map<String, dynamic> overview,
+  ) {
+    final isMobile = MediaQuery.sizeOf(context).width < 850;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 820;
+          final search = SizedBox(
+            height: 50,
+            child: TextField(
+              controller: _clientFilterController,
+              onChanged: (value) => setState(() => _search = value),
+              style: AppTheme.getBodyStyle(context).copyWith(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search client, invoice, or account reference...',
+                hintStyle: AppTheme.getSubtitleStyle(
+                  context,
+                ).copyWith(fontSize: 14),
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor:
+                    isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(
+                    color: isDark
+                        ? AppTheme.white.withAlpha(20)
+                        : AppTheme.black.withAlpha(18),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(
+                    color: isDark
+                        ? AppTheme.white.withAlpha(20)
+                        : AppTheme.black.withAlpha(18),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: AppTheme.primaryBlue),
+                ),
+              ),
+            ),
+          );
+          final actions = Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              SizedBox(
+                height: 50,
+                child: FilledButton.icon(
+                  onPressed: () async => _exportCurrentView(clients, overview),
+                  icon: const Icon(Icons.picture_as_pdf_rounded),
+                  label: const Text('PDF'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.primaryBlue,
+                    foregroundColor: AppTheme.white,
+                    textStyle: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: () async => _exportCsvCurrentView(clients),
+                  icon: const Icon(Icons.table_view_rounded),
+                  label: const Text('CSV'),
+                ),
+              ),
+            ],
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [search, const SizedBox(height: 12), actions],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              const SizedBox(width: 14),
+              actions,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSoaFilterBar(
+    bool isDark,
+    List<Map<String, dynamic>> clients,
+  ) {
+    final isMobile = MediaQuery.sizeOf(context).width < 850;
+    final hasFilters =
+        _dateRange != null || _search.isNotEmpty || _status != 'all';
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _SoaResultChip(label: '${clients.length} clients shown'),
+            const SizedBox(width: 10),
+            PopupMenuButton<String>(
+              tooltip: 'Payment status',
+              onSelected: (value) => setState(() => _status = value),
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'all', child: Text('All statuses')),
+                PopupMenuItem(value: 'paid', child: Text('Paid')),
+                PopupMenuItem(value: 'unpaid', child: Text('Unpaid')),
+                PopupMenuItem(value: 'overdue', child: Text('Overdue')),
+                PopupMenuItem(value: 'partial', child: Text('Partial')),
+                PopupMenuItem(value: 'voided', child: Text('Voided')),
+              ],
+              child: _SoaControlChip(
+                icon: Icons.payments_rounded,
+                label: _status == 'all'
+                    ? 'All statuses'
+                    : '${_status[0].toUpperCase()}${_status.substring(1)}',
+              ),
+            ),
+            const SizedBox(width: 10),
+            InkWell(
+              onTap: _selectDateRange,
+              borderRadius: BorderRadius.circular(8),
+              child: _SoaControlChip(
+                icon: Icons.date_range_rounded,
+                label: _dateRange == null
+                    ? 'All invoice dates'
+                    : '${_displayDate(_dateRange!.start)} - ${_displayDate(_dateRange!.end)}',
+              ),
+            ),
+            if (hasFilters) ...[
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: () => setState(() {
+                  _clientFilterController.clear();
+                  _search = '';
+                  _status = 'all';
+                  _dateRange = null;
+                }),
+                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                label: const Text('Clear'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -819,6 +917,74 @@ class _SoaMetric extends StatelessWidget {
   }
 }
 
+class _SoaResultChip extends StatelessWidget {
+  final String label;
+
+  const _SoaResultChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF00D4FF.withAlpha(18),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.colorFF00D4FF.withAlpha(70)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppTheme.colorFF00D4FF,
+          fontSize: 13,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _SoaControlChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _SoaControlChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withAlpha(20)
+              : AppTheme.black.withAlpha(18),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: AppTheme.gray400),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: AppTheme.getBodyStyle(
+              context,
+            ).copyWith(fontSize: 13, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(width: 8),
+          const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+        ],
+      ),
+    );
+  }
+}
+
 class _ClientStatementSection extends StatelessWidget {
   final Map<String, dynamic> client;
   final bool isDark;
@@ -1175,37 +1341,105 @@ class _GrandTotalRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.darkPanelAlt : AppTheme.lightPanel,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.35)),
-      ),
-      child: Wrap(
-        alignment: WrapAlignment.end,
-        spacing: 32,
-        runSpacing: 10,
-        children: [
-          Text(
-            'Grand total',
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-              color: AppTheme.getTextColor(context),
+    final total = _money(overview['grandTotal']);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 720;
+        final totalBlock = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryBlue.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.account_balance_wallet_rounded,
+                color: AppTheme.primaryBlue,
+              ),
             ),
+            const SizedBox(width: 14),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GRAND TOTAL',
+                  style: TextStyle(
+                    fontSize: 12,
+                    letterSpacing: 0,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.getMutedTextColor(context),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  total,
+                  style: TextStyle(
+                    fontSize: compact ? 24 : 30,
+                    fontWeight: FontWeight.w900,
+                    color: AppTheme.getTextColor(context),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+        final breakdown = Wrap(
+          spacing: 28,
+          runSpacing: 12,
+          alignment: WrapAlignment.end,
+          children: [
+            _SubtotalValue(label: 'Paid', value: _money(overview['totalPaid'])),
+            _SubtotalValue(
+              label: 'Outstanding',
+              value: _money(overview['totalOutstanding']),
+            ),
+          ],
+        );
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: isDark
+                  ? [AppTheme.colorFF111827, const Color(0xFF172554)]
+                  : [AppTheme.white, const Color(0xFFEFF6FF)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppTheme.primaryBlue.withValues(alpha: 0.35),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.primaryBlue.withValues(alpha: 0.10),
+                blurRadius: 24,
+                spreadRadius: -14,
+                offset: const Offset(0, 14),
+              ),
+            ],
           ),
-          _SubtotalValue(
-            label: 'Invoiced',
-            value: _money(overview['grandTotal']),
-          ),
-          _SubtotalValue(label: 'Paid', value: _money(overview['totalPaid'])),
-          _SubtotalValue(
-            label: 'Outstanding',
-            value: _money(overview['totalOutstanding']),
-          ),
-        ],
-      ),
+          child: compact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    totalBlock,
+                    const SizedBox(height: 18),
+                    breakdown,
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: totalBlock),
+                    breakdown,
+                  ],
+                ),
+        );
+      },
     );
   }
 }

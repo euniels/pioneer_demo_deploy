@@ -8,7 +8,9 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 
+import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
+import '../services/demo_telemetry_fixtures.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/google_map_marker_factory.dart';
 import '../services/live_tracking_freshness.dart';
@@ -20,6 +22,7 @@ import '../theme/app_theme.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
+import '../widgets/telemetry_widgets.dart';
 
 class LiveTrackingPageEnhanced extends StatefulWidget {
   const LiveTrackingPageEnhanced({super.key});
@@ -47,6 +50,9 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   final math.Random _temperatureRandom = math.Random(42);
   bool _isFollowingSelected = false;
   bool _trafficEnabled = false;
+  bool _coldChainMapFilter = false;
+  bool _lowFuelMapFilter = false;
+  bool _offlineMapFilter = false;
   DateTime? _lastFollowMoveAt;
   double _currentMapZoom = 10.0;
   gmaps.LatLngBounds? _visibleBounds;
@@ -108,7 +114,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   List<Map<String, dynamic>> get _visibleVehicleMarkers {
     final bounds = _visibleBounds;
-    final vehicles = _vehicleMarkers;
+    final vehicles = _vehicleMarkers.where(_matchesTelemetryMapFilters).toList();
     if (bounds == null) {
       return vehicles;
     }
@@ -124,6 +130,28 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         bounds,
       );
     }).toList();
+  }
+
+  bool _matchesTelemetryMapFilters(Map<String, dynamic> vehicle) {
+    if (!_coldChainMapFilter && !_lowFuelMapFilter && !_offlineMapFilter) {
+      return true;
+    }
+    final readings = DemoTelemetryFixtures.readingsForVehicle(vehicle);
+    final coldChainAlert = readings
+        .where((reading) =>
+            reading.key == 'temperature' || reading.key == 'humidity')
+        .any((reading) => reading.severity != TelemetrySeverity.normal);
+    final lowFuel = readings.any((reading) =>
+        reading.key == 'fuel' &&
+        reading.hasReading &&
+        reading.severity != TelemetrySeverity.normal);
+    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
+    final offline =
+        freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
+        freshness.state == LiveTrackingFreshnessState.stale;
+    return (_coldChainMapFilter && coldChainAlert) ||
+        (_lowFuelMapFilter && lowFuel) ||
+        (_offlineMapFilter && offline);
   }
 
   List<Map<String, dynamic>> get _sortedVehicles {
@@ -1421,6 +1449,18 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         ),
         SizedBox(height: isMobile ? 8 : 12),
         _buildControlButton(
+          icon: Icons.filter_alt_rounded,
+          onTap: _showTelemetryMapFilters,
+          isDark: isDark,
+          isMobile: isMobile,
+          active: _coldChainMapFilter ||
+              _lowFuelMapFilter ||
+              _offlineMapFilter,
+          activeColor: AppTheme.colorFF00D4FF,
+          tooltip: 'Filter fleet alerts',
+        ),
+        SizedBox(height: isMobile ? 8 : 12),
+        _buildControlButton(
           icon: Icons.traffic_rounded,
           onTap: () => setState(() => _trafficEnabled = !_trafficEnabled),
           isDark: isDark,
@@ -1446,6 +1486,87 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           tooltip: 'Zoom out',
         ),
       ],
+    );
+  }
+
+  Future<void> _showTelemetryMapFilters() async {
+    var coldChain = _coldChainMapFilter;
+    var lowFuel = _lowFuelMapFilter;
+    var offline = _offlineMapFilter;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.getCardBg(context),
+      showDragHandle: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Fleet alert filters',
+                  style: AppTheme.getHeadingStyle(context, fontSize: 19),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Show vehicles matching any selected condition.',
+                  style: AppTheme.getSubtitleStyle(context),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Cold-chain alert'),
+                  secondary: const Icon(Icons.device_thermostat_rounded),
+                  value: coldChain,
+                  onChanged: (value) =>
+                      setSheetState(() => coldChain = value),
+                ),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Low fuel'),
+                  secondary: const Icon(Icons.local_gas_station_rounded),
+                  value: lowFuel,
+                  onChanged: (value) => setSheetState(() => lowFuel = value),
+                ),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Offline or stale'),
+                  secondary: const Icon(Icons.signal_wifi_off_rounded),
+                  value: offline,
+                  onChanged: (value) => setSheetState(() => offline = value),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => setSheetState(() {
+                        coldChain = false;
+                        lowFuel = false;
+                        offline = false;
+                      }),
+                      child: const Text('Clear'),
+                    ),
+                    const Spacer(),
+                    FilledButton(
+                      onPressed: () {
+                        setState(() {
+                          _coldChainMapFilter = coldChain;
+                          _lowFuelMapFilter = lowFuel;
+                          _offlineMapFilter = offline;
+                        });
+                        Navigator.pop(sheetContext);
+                      },
+                      child: const Text('Apply filters'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1691,7 +1812,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                               _buildFreshnessPill(freshness),
                               const SizedBox(height: 8),
                               if (_hasDemoTemperatureSensor(vehicle)) ...[
-                                _buildCompactTemperaturePill(vehicle),
+                                _buildLiveTelemetryStrip(vehicle),
                                 const SizedBox(height: 8),
                               ],
                               Row(
@@ -1875,6 +1996,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     );
   }
 
+  // Kept for the existing compact-temperature source tests.
+  // ignore: unused_element
   Widget _buildCompactTemperaturePill(
     Map<String, dynamic> vehicle, {
     bool compact = false,
@@ -1922,6 +2045,90 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
               SizedBox(width: compact ? 4 : 5),
               Icon(_temperatureTrendIcon(sample.trend), size: 13, color: color),
             ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLiveTelemetryStrip(
+    Map<String, dynamic> vehicle, {
+    bool compact = false,
+  }) {
+    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
+      valueListenable: _demoTemperatureSamples,
+      builder: (context, samples, _) {
+        final sample = samples[_plateOf(vehicle)];
+        final trend = switch (sample?.trend) {
+          _DemoTemperatureTrend.rising => TelemetryTrend.rising,
+          _DemoTemperatureTrend.falling => TelemetryTrend.falling,
+          _ => TelemetryTrend.stable,
+        };
+        final readings = DemoTelemetryFixtures.readingsForVehicle(
+          vehicle,
+          temperatureOverride: sample?.temperatureC,
+          temperatureHistory: sample?.history ?? const <double>[],
+          temperatureTrend: trend,
+        ).where((reading) => reading.hasReading).toList();
+        if (readings.isEmpty) return const SizedBox.shrink();
+        final visible = readings.take(compact ? 2 : 3).toList();
+        return Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: visible.map((reading) {
+            final icon = switch (reading.key) {
+              'temperature' => Icons.device_thermostat_rounded,
+              'humidity' => Icons.water_drop_rounded,
+              _ => Icons.local_gas_station_rounded,
+            };
+            return SizedBox(
+              width: compact ? 126 : 142,
+              child: TelemetryReadingTile(
+                reading: reading,
+                icon: icon,
+                compact: true,
+                showHistory: false,
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildSelectedTelemetryExtras(Map<String, dynamic> vehicle) {
+    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
+      valueListenable: _demoTemperatureSamples,
+      builder: (context, samples, _) {
+        final sample = samples[_plateOf(vehicle)];
+        final readings = DemoTelemetryFixtures.readingsForVehicle(
+          vehicle,
+          temperatureOverride: sample?.temperatureC,
+        )
+            .where((reading) =>
+                reading.key != 'temperature' && reading.hasReading)
+            .toList();
+        if (readings.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: readings
+                .map(
+                  (reading) => SizedBox(
+                    width: 180,
+                    child: TelemetryReadingTile(
+                      reading: reading,
+                      icon: reading.key == 'humidity'
+                          ? Icons.water_drop_rounded
+                          : Icons.local_gas_station_rounded,
+                      compact: true,
+                      showHistory: false,
+                    ),
+                  ),
+                )
+                .toList(),
           ),
         );
       },
@@ -2548,7 +2755,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                                             if (_hasDemoTemperatureSensor(
                                               vehicle,
                                             )) ...[
-                                              _buildCompactTemperaturePill(
+                                              _buildLiveTelemetryStrip(
                                                 vehicle,
                                                 compact: true,
                                               ),
@@ -2727,6 +2934,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                         ],
                       ),
                       _buildSelectedTemperaturePanel(vehicle),
+                      _buildSelectedTelemetryExtras(vehicle),
                       if (_isFollowingSelected) ...[
                         SizedBox(height: isMobile ? 6 : 10),
                         Container(

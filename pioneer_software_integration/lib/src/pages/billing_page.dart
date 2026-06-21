@@ -146,27 +146,31 @@ class _BillingPageState extends State<BillingPage> {
           return RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(28, 22, 28, 32),
+              padding: const EdgeInsets.only(bottom: 32),
               children: [
-                _buildBillingScopeNotice(isDark, contextData),
-                const SizedBox(height: 10),
-                _buildSummary(isDark, overview),
-                const SizedBox(height: 10),
                 _buildFilters(isDark, invoices),
-                const SizedBox(height: 10),
-                if (filtered.isEmpty)
-                  _BillingEmptyState(
-                    isDark: isDark,
-                    title: 'No invoices match the current filters',
-                    message:
-                        'Try a different search term or switch the invoice status filter.',
-                  )
-                else
-                  _buildInvoiceTable(isDark, filtered),
-                const SizedBox(height: 14),
-                _buildBillingCommandCenter(isDark, overview),
-                const SizedBox(height: 14),
-                _buildVehicleSubscriptionCoverage(isDark),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
+                  child: Column(
+                    children: [
+                      _buildSummary(isDark, overview),
+                      const SizedBox(height: 16),
+                      _buildBillingScopeNotice(isDark, contextData),
+                      const SizedBox(height: 12),
+                      if (filtered.isEmpty)
+                        _BillingEmptyState(
+                          isDark: isDark,
+                          title: 'No invoices match the current filters',
+                          message:
+                              'Try a different search term or switch the invoice status filter.',
+                        )
+                      else
+                        _buildInvoiceTable(isDark, filtered),
+                      const SizedBox(height: 14),
+                      _buildVehicleSubscriptionCoverage(isDark),
+                    ],
+                  ),
+                ),
               ],
             ),
           );
@@ -1390,28 +1394,36 @@ class _BillingPageState extends State<BillingPage> {
                   : AppTheme.black.withValues(alpha: 0.08),
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.fact_check_rounded,
-                    size: 18,
-                    color: AppTheme.colorFF4B7BE5,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Vehicle Subscription Coverage Report',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                        color: isDark ? AppTheme.white : AppTheme.colorFF111827,
-                      ),
-                    ),
-                  ),
-                  TextButton.icon(
+          child: Theme(
+            data: Theme.of(context).copyWith(dividerColor: AppTheme.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: EdgeInsets.zero,
+              leading: const Icon(
+                Icons.fact_check_rounded,
+                size: 18,
+                color: AppTheme.colorFF4B7BE5,
+              ),
+              title: Text(
+                'Vehicle Subscription Coverage Report',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  color: isDark ? AppTheme.white : AppTheme.colorFF111827,
+                ),
+              ),
+              subtitle: Text(
+                'ERP reference only. This does not create a PioneerPath invoice.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
+                ),
+              ),
+              children: [
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
                     onPressed: () {
                       setState(() {
                         _coverageFuture =
@@ -1421,81 +1433,69 @@ class _BillingPageState extends State<BillingPage> {
                       });
                     },
                     icon: const Icon(Icons.refresh_rounded, size: 16),
-                    label: const Text('Refresh'),
+                    label: const Text('Refresh report'),
                   ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Reference only for ERP GeoTab subscription descriptions. Copy the plate lists into ERP service billing; this does not create a PioneerPath invoice.',
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.45,
-                  color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
                 ),
-              ),
-              const SizedBox(height: 12),
-              if (loading)
-                Text(
-                  'Loading coverage report...',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark ? AppTheme.white54 : AppTheme.colorFF64748B,
-                  ),
-                )
-              else if (groups.isEmpty)
-                Text(
-                  'No active vehicle subscription coverage records yet.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark ? AppTheme.white54 : AppTheme.colorFF64748B,
-                  ),
-                )
-              else
-                ...groups
-                    .take(4)
-                    .map(
-                      (group) => Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? AppTheme.white.withValues(alpha: 0.04)
-                                : AppTheme.colorFFF8FAFC,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${group['client'] ?? 'Unassigned Client'} (${group['count'] ?? 0})',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w900,
-                                  color: isDark
-                                      ? AppTheme.white
-                                      : AppTheme.colorFF111827,
+                if (loading)
+                  Text(
+                    'Loading coverage report...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? AppTheme.white54 : AppTheme.colorFF64748B,
+                    ),
+                  )
+                else if (groups.isEmpty)
+                  Text(
+                    'No active vehicle subscription coverage records yet.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? AppTheme.white54 : AppTheme.colorFF64748B,
+                    ),
+                  )
+                else
+                  ...groups.take(4).map(
+                        (group) => Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? AppTheme.white.withValues(alpha: 0.04)
+                                  : AppTheme.colorFFF8FAFC,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${group['client'] ?? 'Unassigned Client'} (${group['count'] ?? 0})',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
+                                    color: isDark
+                                        ? AppTheme.white
+                                        : AppTheme.colorFF111827,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 4),
-                              SelectableText(
-                                (group['copyText'] ?? '').toString(),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  height: 1.4,
-                                  color: isDark
-                                      ? AppTheme.white70
-                                      : AppTheme.colorFF475569,
+                                const SizedBox(height: 4),
+                                SelectableText(
+                                  (group['copyText'] ?? '').toString(),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.4,
+                                    color: isDark
+                                        ? AppTheme.white70
+                                        : AppTheme.colorFF475569,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                    ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -1586,6 +1586,7 @@ class _BillingPageState extends State<BillingPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildBillingCommandCenter(
     bool isDark,
     Map<String, dynamic> overview,
@@ -1711,10 +1712,10 @@ class _BillingPageState extends State<BillingPage> {
 
   Widget _buildFilters(bool isDark, List<Map<String, dynamic>> invoices) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.colorFFF8FAFC,
-        borderRadius: BorderRadius.circular(18),
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFC,
+        borderRadius: BorderRadius.circular(0),
         border: Border.all(
           color: isDark
               ? AppTheme.white.withValues(alpha: 0.08)
@@ -1723,41 +1724,84 @@ class _BillingPageState extends State<BillingPage> {
       ),
       child: Column(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  onChanged: (value) => setState(() => _search = value),
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.search_rounded),
-                    hintText: 'Search invoice, client, or trip ID',
-                    filled: true,
-                    fillColor: isDark
-                        ? AppTheme.colorFF0E1420
-                        : AppTheme.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide.none,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final search = TextField(
+                onChanged: (value) => setState(() => _search = value),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  hintText: 'Search invoice, client, or trip ID',
+                  filled: true,
+                  fillColor: isDark ? AppTheme.colorFF1F2937 : AppTheme.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: isDark
+                          ? AppTheme.white.withValues(alpha: 0.08)
+                          : AppTheme.black.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: isDark
+                          ? AppTheme.white.withValues(alpha: 0.08)
+                          : AppTheme.black.withValues(alpha: 0.08),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              if (CrudPermissions.canCreate(CrudEntity.invoices))
-                FilledButton.icon(
-                  onPressed: invoices.isEmpty
-                      ? null
-                      : () => _showManualInvoiceDialog(invoices, isDark),
-                  icon: const Icon(Icons.add_card_rounded),
-                  label: const Text('New Manual Invoice'),
-                ),
-            ],
+              );
+              final addButton = CrudPermissions.canCreate(CrudEntity.invoices)
+                  ? FilledButton.icon(
+                      onPressed: invoices.isEmpty
+                          ? null
+                          : () => _showManualInvoiceDialog(invoices, isDark),
+                      icon: const Icon(Icons.add_card_rounded),
+                      label: const Text('New Manual Invoice'),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(190, 52),
+                        backgroundColor: AppTheme.successGreen,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    )
+                  : null;
+
+              if (constraints.maxWidth < 720) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    search,
+                    if (addButton != null) ...[
+                      const SizedBox(height: 10),
+                      addButton,
+                    ],
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(child: search),
+                  if (addButton != null) ...[
+                    const SizedBox(width: 12),
+                    addButton,
+                  ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: 10),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
+                _BillingFilterChip(
+                  label: '${invoices.length} invoices shown',
+                  isDark: isDark,
+                ),
+                const SizedBox(width: 10),
                 SegmentedButton<String>(
                   segments: const [
                     ButtonSegment(value: 'all', label: Text('All')),
@@ -1873,7 +1917,7 @@ class _BillingPageState extends State<BillingPage> {
         if (constraints.maxWidth < 980) {
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: SizedBox(width: 1080, child: table),
+            child: SizedBox(width: 980, child: table),
           );
         }
         return table;
@@ -1894,24 +1938,17 @@ class _BillingPageState extends State<BillingPage> {
       ),
       child: const Row(
         children: [
-          Expanded(flex: 10, child: _InvoiceTableHeader('INVOICE NO.')),
-          Expanded(flex: 10, child: _InvoiceTableHeader('DATE')),
-          Expanded(flex: 18, child: _InvoiceTableHeader('CLIENT')),
-          Expanded(flex: 12, child: _InvoiceTableHeader('TRIP REFERENCE')),
+          Expanded(flex: 12, child: _InvoiceTableHeader('INVOICE NO.')),
+          Expanded(flex: 20, child: _InvoiceTableHeader('CLIENT')),
+          Expanded(flex: 14, child: _InvoiceTableHeader('TRIP REFERENCE')),
+          Expanded(flex: 10, child: _InvoiceTableHeader('DUE DATE')),
           Expanded(
-            flex: 10,
-            child: _InvoiceTableHeader('SUBTOTAL', alignRight: true),
-          ),
-          Expanded(
-            flex: 8,
-            child: _InvoiceTableHeader('VAT', alignRight: true),
-          ),
-          Expanded(
-            flex: 10,
+            flex: 12,
             child: _InvoiceTableHeader('TOTAL', alignRight: true),
           ),
-          Expanded(flex: 10, child: _InvoiceTableHeader('STATUS')),
-          Expanded(flex: 12, child: _InvoiceTableHeader('ACTIONS')),
+          Expanded(flex: 11, child: _InvoiceTableHeader('STATUS')),
+          Expanded(flex: 11, child: _InvoiceTableHeader('POD GATE')),
+          Expanded(flex: 10, child: _InvoiceTableHeader('ACTIONS')),
         ],
       ),
     );
@@ -1959,48 +1996,36 @@ class _BillingPageState extends State<BillingPage> {
           children: [
             _invoiceTextColumn(
               (invoice['invoiceNumber'] ?? 'INV-SYNCED').toString(),
-              10,
+              12,
               isDark,
               weight: FontWeight.w700,
               color: AppTheme.colorFF4B7BE5,
             ),
             _invoiceTextColumn(
-              (invoice['issueDate'] ?? 'N/A').toString(),
-              10,
-              isDark,
-            ),
-            _invoiceTextColumn(
               (invoice['client'] ?? 'Unknown Client').toString(),
-              18,
+              20,
               isDark,
               weight: FontWeight.w600,
             ),
             _invoiceTextColumn(
               (invoice['tripId'] ?? 'N/A').toString(),
-              12,
+              14,
               isDark,
             ),
             _invoiceTextColumn(
-              _peso(invoice['subtotalBeforeVat'] ?? invoice['subtotal']),
+              (invoice['dueDate'] ?? invoice['issueDate'] ?? 'N/A').toString(),
               10,
               isDark,
-              textAlign: TextAlign.right,
-            ),
-            _invoiceTextColumn(
-              _peso(invoice['vat'] ?? invoice['vatAmount']),
-              8,
-              isDark,
-              textAlign: TextAlign.right,
             ),
             _invoiceTextColumn(
               _peso(invoice['totalWithVat'] ?? invoice['amount']),
-              10,
+              12,
               isDark,
               textAlign: TextAlign.right,
               weight: FontWeight.w800,
             ),
             Expanded(
-              flex: 10,
+              flex: 11,
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: AppTheme.space8,
@@ -2014,7 +2039,24 @@ class _BillingPageState extends State<BillingPage> {
               ),
             ),
             Expanded(
-              flex: 12,
+              flex: 11,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppTheme.space8,
+                ),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _StatusDotPill(
+                    label: podReady ? 'Ready' : 'POD hold',
+                    color: podReady
+                        ? AppTheme.colorFF10B981
+                        : AppTheme.colorFFF59E0B,
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 10,
               child: PopupMenuButton<String>(
                 tooltip: 'Invoice actions',
                 onSelected: (value) {
@@ -2390,6 +2432,39 @@ class _BillingKpiCard extends StatelessWidget {
   }
 }
 
+class _BillingFilterChip extends StatelessWidget {
+  final String label;
+  final bool isDark;
+
+  const _BillingFilterChip({required this.label, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF3498DB.withValues(alpha: isDark ? 0.13 : 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: AppTheme.colorFF3498DB.withValues(alpha: isDark ? 0.32 : 0.24),
+        ),
+      ),
+      child: Center(
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: AppTheme.colorFF3498DB,
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ignore: unused_element
 class _BillingSignal extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -2553,13 +2628,6 @@ class _InvoiceCard extends StatelessWidget {
       _ => AppTheme.colorFFF59E0B,
     };
     final podReady = invoice['podReady'] == true;
-    final manualReview = invoice['manualReviewRequired'] == true;
-    final pricingModel =
-        (invoice['pricingModel'] ?? 'Distance, fuel, and service charge')
-            .toString();
-    final decision =
-        (invoice['billingDecision'] ?? 'Ready for normal invoice collection.')
-            .toString();
 
     return InkWell(
       onTap: onTap,
@@ -2628,70 +2696,6 @@ class _InvoiceCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? AppTheme.white.withValues(alpha: 0.04)
-                    : AppTheme.colorFFF8FAFC,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 6,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: manualReview
-                          ? AppTheme.colorFFF59E0B
-                          : AppTheme.colorFF10B981,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          pricingModel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            color: isDark
-                                ? AppTheme.white
-                                : AppTheme.colorFF18212F,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          decision,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark
-                                ? AppTheme.white60
-                                : AppTheme.colorFF64748B,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  _StatusDotPill(
-                    label: podReady ? 'POD READY' : 'POD HOLD',
-                    color: podReady
-                        ? AppTheme.colorFF10B981
-                        : AppTheme.colorFFF59E0B,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
             Wrap(
               spacing: 10,
               runSpacing: 10,
@@ -2715,6 +2719,11 @@ class _InvoiceCard extends StatelessWidget {
                   'Amount',
                   _peso(invoice['totalWithVat'] ?? invoice['amount']),
                   accent,
+                ),
+                _dataPill(
+                  'POD',
+                  podReady ? 'Ready' : 'Hold',
+                  podReady ? AppTheme.colorFF10B981 : AppTheme.colorFFF59E0B,
                 ),
               ],
             ),
@@ -2745,7 +2754,7 @@ class _InvoiceCard extends StatelessWidget {
                 ],
               ),
             ],
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Text(
               '${invoice['origin'] ?? 'Trip start'} -> ${invoice['destination'] ?? 'Trip stop'}',
               maxLines: 1,
@@ -2754,15 +2763,6 @@ class _InvoiceCard extends StatelessWidget {
                 fontSize: 13,
                 height: 1.4,
                 color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Base ${_peso(invoice['baseRate'])} - Distance ${_peso(invoice['distanceCost'])} - Fuel ${_peso(invoice['fuelCost'])}',
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: isDark ? AppTheme.white54 : AppTheme.colorFF94A3B8,
               ),
             ),
             const SizedBox(height: 12),

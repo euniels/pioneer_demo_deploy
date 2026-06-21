@@ -11,8 +11,11 @@ import '../services/trips_store.dart';
 import '../services/vehicles_store.dart';
 import '../services/billing_store.dart';
 import '../services/notification_service.dart';
+import '../models/telemetry_view_data.dart';
+import '../services/demo_telemetry_fixtures.dart';
 import '../theme/app_theme.dart';
 import '../utils/display_format.dart';
+import '../widgets/telemetry_widgets.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -189,6 +192,8 @@ class _DashboardPageState extends State<DashboardPage>
                 curve: Curves.easeOut,
               ),
           const SizedBox(height: AppTheme.dashboardSectionSpacing),
+          _buildFleetAttentionSection(isDark),
+          const SizedBox(height: AppTheme.dashboardSectionSpacing),
           _buildPredictiveIntelligenceSection(isDark)
               .animate()
               .fadeIn(duration: 550.ms)
@@ -233,6 +238,135 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  Widget _buildFleetAttentionSection(bool isDark) {
+    final vehicles = vehiclesNotifier.value;
+    final readings = vehicles
+        .expand(DemoTelemetryFixtures.readingsForVehicle)
+        .toList();
+    final lowFuel = readings
+        .where(
+          (reading) =>
+              reading.key == 'fuel' &&
+              reading.hasReading &&
+              reading.severity != TelemetrySeverity.normal,
+        )
+        .length;
+    final coldChain = readings
+        .where(
+          (reading) =>
+              (reading.key == 'temperature' || reading.key == 'humidity') &&
+              reading.hasReading &&
+              reading.severity != TelemetrySeverity.normal,
+        )
+        .length;
+    final offline = vehicles.where((vehicle) {
+      final freshness = (vehicle['freshness'] ?? vehicle['reportingStatus'] ?? '')
+          .toString()
+          .toLowerCase();
+      return vehicle['isCommunicating'] == false ||
+          vehicle['offline'] == true ||
+          freshness == 'offline' ||
+          freshness == 'stale';
+    }).length;
+    final faultRows = _dashboardList(
+      _dashboardSummary['activeFaults'] ?? _dashboardSummary['faults'],
+    );
+    final activeFaults = _dashboardInt(
+      _dashboardSummary['activeFaultCount'] ??
+          _dashboardSummary['active_fault_count'] ??
+          faultRows.length,
+    );
+
+    final items = <Widget>[
+      TelemetryAlertRow(
+        title: lowFuel == 0 ? 'Fuel levels clear' : '$lowFuel low-fuel alert${lowFuel == 1 ? '' : 's'}',
+        detail: lowFuel == 0
+            ? 'No reported vehicle is below the review threshold.'
+            : 'Review live fuel readings before dispatch.',
+        severity: lowFuel == 0
+            ? TelemetrySeverity.normal
+            : TelemetrySeverity.warning,
+        icon: Icons.local_gas_station_rounded,
+        onTap: () => Navigator.pushNamed(context, '/delivery-confirm'),
+      ),
+      TelemetryAlertRow(
+        title: coldChain == 0
+            ? 'Cold chain within range'
+            : '$coldChain cargo-condition alert${coldChain == 1 ? '' : 's'}',
+        detail: coldChain == 0
+            ? 'Equipped vehicles are reporting within configured safe ranges.'
+            : 'Open Live Tracking to inspect temperature and humidity.',
+        severity: coldChain == 0
+            ? TelemetrySeverity.normal
+            : TelemetrySeverity.warning,
+        icon: Icons.ac_unit_rounded,
+        onTap: () => Navigator.pushNamed(context, '/live-tracking'),
+      ),
+      TelemetryAlertRow(
+        title: activeFaults == 0
+            ? 'No active faults reported'
+            : '$activeFaults active fault${activeFaults == 1 ? '' : 's'}',
+        detail: activeFaults == 0
+            ? 'Maintenance remains ready for incoming fault events.'
+            : 'Review severity, occurrence history, and acknowledgment state.',
+        severity: activeFaults == 0
+            ? TelemetrySeverity.normal
+            : TelemetrySeverity.critical,
+        icon: Icons.build_circle_rounded,
+        onTap: () => Navigator.pushNamed(context, '/maintenance'),
+      ),
+      TelemetryAlertRow(
+        title: offline == 0
+            ? 'All devices reporting'
+            : '$offline offline or stale device${offline == 1 ? '' : 's'}',
+        detail: offline == 0
+            ? 'No fleet reporting gaps are currently visible.'
+            : 'Check the last update before using location or sensor data.',
+        severity: offline == 0
+            ? TelemetrySeverity.normal
+            : TelemetrySeverity.warning,
+        icon: Icons.sensors_rounded,
+        onTap: () => Navigator.pushNamed(context, '/live-tracking'),
+      ),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF101827 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.getBorderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _dashboardSectionHeading(
+            'Fleet Attention',
+            'A compact review of reported fuel, cargo, fault, and device conditions.',
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 1050 ? 4 : 2;
+              final width = columns == 4
+                  ? (constraints.maxWidth - 36) / 4
+                  : constraints.maxWidth < 680
+                  ? constraints.maxWidth
+                  : (constraints.maxWidth - 12) / 2;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: items
+                    .map((item) => SizedBox(width: width, child: item))
+                    .toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPredictiveIntelligenceSection(bool isDark) {
     final summary = _dashboardSummary.isNotEmpty
         ? _dashboardSummary
@@ -265,12 +399,12 @@ class _DashboardPageState extends State<DashboardPage>
       _dashboardSignalPanel(
         isDark,
         icon: Icons.build_circle_outlined,
-        title: 'Predictive Maintenance',
-        subtitle: 'Assets closest to their next service window',
+        title: 'Service Forecast',
+        subtitle: 'History and odometer estimates for the next service window',
         child: predictions.isEmpty
             ? _signalConfirmation(
-                'No maintenance predictions yet',
-                'Add service history to generate due-date forecasts.',
+                'No service forecast yet',
+                'Add service history and odometer readings to estimate due dates.',
               )
             : Column(
                 children: predictions
@@ -371,8 +505,8 @@ class _DashboardPageState extends State<DashboardPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _dashboardSectionHeading(
-          'Predictive Intelligence',
-          'Service urgency, avoidable idle cost, and fuel movement surfaced before operational charts.',
+          'Operational Readiness',
+          'Service estimates, avoidable idle cost, and fuel movement surfaced before operational charts.',
         ),
         const SizedBox(height: AppTheme.space16),
         LayoutBuilder(

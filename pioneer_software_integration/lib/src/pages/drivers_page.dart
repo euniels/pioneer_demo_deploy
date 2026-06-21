@@ -1259,26 +1259,6 @@ class _DriversPageState extends State<DriversPage>
                     SizedBox(height: 6 * scale),
                     _licenseExpiryWarningBadge(driver, scale),
                   ],
-                  SizedBox(height: 10 * scale),
-                  Wrap(
-                    spacing: 8 * scale,
-                    runSpacing: 8 * scale,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      GeoTabSyncStatusBadge.fromEntity(
-                        driver,
-                        compact: true,
-                        scale: scale,
-                      ),
-                      _fleetCrudScopeChip(crudPolicy, isDark, scale),
-                      _pushToGeotabButton(
-                        enabled: crudPolicy.canPushToGeotab,
-                        disabledReason: crudPolicy.pushDisabledReason,
-                        onPressed: () => _pushDriverToGeotab(driver),
-                        scale: scale,
-                      ),
-                    ],
-                  ),
                 ],
               ),
             ),
@@ -1358,6 +1338,12 @@ class _DriversPageState extends State<DriversPage>
           }
         } else if (value == 'edit') {
           _showEditDriverModal(driver);
+        } else if (value == 'push_geotab') {
+          if (!crudPolicy.canPushToGeotab) {
+            _showDriverActionMessage(crudPolicy.pushDisabledReason);
+            return;
+          }
+          await _pushDriverToGeotab(driver);
         } else if (value == 'delete') {
           if (!crudPolicy.canDelete) {
             _showDriverActionMessage(crudPolicy.deleteDisabledReason);
@@ -1421,6 +1407,16 @@ class _DriversPageState extends State<DriversPage>
               label: crudPolicy.canEdit ? 'Edit' : 'Edit - GeoTab read-only',
             ),
           ),
+        PopupMenuItem(
+          value: 'push_geotab',
+          enabled: crudPolicy.canPushToGeotab,
+          child: _DriverActionMenuItem(
+            icon: Icons.cloud_upload_outlined,
+            label: crudPolicy.canPushToGeotab
+                ? 'Push to GeoTab'
+                : 'Push to GeoTab - no local changes',
+          ),
+        ),
         if (CrudPermissions.canEdit(CrudEntity.drivers) &&
             _isDriverInactive(driver))
           PopupMenuItem(
@@ -1462,74 +1458,6 @@ class _DriversPageState extends State<DriversPage>
             ),
           ),
       ],
-    );
-  }
-
-  Widget _pushToGeotabButton({
-    required bool enabled,
-    required String disabledReason,
-    required VoidCallback onPressed,
-    required double scale,
-  }) {
-    return Tooltip(
-      message: enabled
-          ? 'Review and stage this saved local record for GeoTab approval.'
-          : disabledReason,
-      child: OutlinedButton.icon(
-        onPressed: enabled ? onPressed : null,
-        icon: Icon(Icons.cloud_upload_outlined, size: 14 * scale),
-        label: Text(
-          'Push to GeoTab',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-        ),
-        style: OutlinedButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.symmetric(horizontal: 9 * scale),
-        ),
-      ),
-    );
-  }
-
-  Widget _fleetCrudScopeChip(
-    FleetCrudPolicy policy,
-    bool isDark,
-    double scale,
-  ) {
-    return Tooltip(
-      message: policy.scopeDetail,
-      child: Container(
-        constraints: BoxConstraints(maxWidth: 190 * scale),
-        padding: EdgeInsets.symmetric(
-          horizontal: 9 * scale,
-          vertical: 5 * scale,
-        ),
-        decoration: BoxDecoration(
-          color: policy.scopeColor.withValues(alpha: isDark ? 0.18 : 0.12),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: policy.scopeColor.withValues(alpha: isDark ? 0.34 : 0.24),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(policy.scopeIcon, size: 12 * scale, color: policy.scopeColor),
-            SizedBox(width: 5 * scale),
-            Flexible(
-              child: Text(
-                policy.scopeLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11 * scale,
-                  fontWeight: FontWeight.w800,
-                  color: policy.scopeColor,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -1659,50 +1587,67 @@ class _DriversPageState extends State<DriversPage>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Container(
-                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                    decoration: BoxDecoration(
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                    decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: isDark
-                            ? const [
-                                AppTheme.colorFF142033,
-                                AppTheme.colorFF0C1220,
-                              ]
-                            : const [
-                                AppTheme.colorFF203A55,
-                                AppTheme.colorFF0F1A2A,
-                              ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+                        colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
                       ),
-                      borderRadius: const BorderRadius.vertical(
+                      borderRadius: BorderRadius.vertical(
                         top: Radius.circular(20),
                       ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Text(
-                          (driver['name'] ?? 'Driver details').toString(),
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                            color: AppTheme.white,
+                        const Icon(Icons.person_rounded, color: AppTheme.white),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                (driver['name'] ?? 'Driver details').toString(),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: AppTheme.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'Driver overview and contact details',
+                                style: TextStyle(
+                                  color: AppTheme.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 8,
+                                children: [
+                                  _detailStatusChip(
+                                    _statusLabel(
+                                      driver['status']?.toString() ?? '',
+                                    ),
+                                    _driverStatusColor(driver),
+                                  ),
+                                  GeoTabSyncStatusBadge.fromEntity(
+                                    driver,
+                                    compact: true,
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 8,
-                          children: [
-                            _detailStatusChip(
-                              _statusLabel(driver['status']?.toString() ?? ''),
-                              _driverStatusColor(driver),
-                            ),
-                            GeoTabSyncStatusBadge.fromEntity(
-                              driver,
-                              compact: true,
-                            ),
-                          ],
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: AppTheme.white,
+                          ),
                         ),
                       ],
                     ),

@@ -2004,94 +2004,176 @@ class _RouteDetailsDialog extends StatelessWidget {
     final center = points.isNotEmpty
         ? points.first
         : const gmaps.LatLng(14.2788, 121.1248);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenSize = MediaQuery.sizeOf(context);
+    final isCompact = screenSize.width < 760;
+    final dialogHeight = (screenSize.height * 0.84).clamp(520.0, 720.0);
+
+    final mapPanel = PioneerGoogleMap(
+      initialCenter: center,
+      initialZoom: 13,
+      markers: points.indexed
+          .map(
+            (entry) => gmaps.Marker(
+              markerId: gmaps.MarkerId('route-stop-${entry.$1}'),
+              position: entry.$2,
+              infoWindow: gmaps.InfoWindow(
+                title: '${entry.$1 + 1}. ${stops[entry.$1]['name'] ?? 'Stop'}',
+              ),
+            ),
+          )
+          .toSet(),
+      polylines: points.length >= 2
+          ? {
+              gmaps.Polyline(
+                polylineId: const gmaps.PolylineId('route-path'),
+                points: points,
+                color: AppTheme.primaryBlue,
+                width: 5,
+                startCap: gmaps.Cap.roundCap,
+                endCap: gmaps.Cap.roundCap,
+                jointType: gmaps.JointType.round,
+              ),
+            }
+          : const <gmaps.Polyline>{},
+    );
+
+    final detailsPanel = Container(
+      color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+      child: ListView.separated(
+        padding: const EdgeInsets.all(16),
+        itemCount: stops.length + 1,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (_, index) {
+          if (index == 0) {
+            return _RouteMetadataSummary(route: route);
+          }
+          final stop = stops[index - 1];
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? AppTheme.colorFF1A1D23
+                  : AppTheme.colorFFF7F9FC,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.getBorderColor(context)),
+            ),
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: CircleAvatar(
+                radius: 17,
+                backgroundColor: AppTheme.primaryBlue,
+                child: Text(
+                  '$index',
+                  style: const TextStyle(
+                    color: AppTheme.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              title: SelectableText(
+                stop['name']?.toString() ?? 'Stop',
+                style: AppTheme.getHeadingStyle(context, fontSize: 13),
+              ),
+              subtitle: SelectableText(
+                'Zone: ${stop['zoneId'] ?? 'Not linked'}\n'
+                '${stop['latitude']}, ${stop['longitude']}',
+                style: AppTheme.getSubtitleStyle(context),
+              ),
+            ),
+          );
+        },
+      ),
+    );
 
     return Dialog(
-      child: SizedBox(
-        width: 920,
-        height: 640,
+      backgroundColor: AppTheme.transparent,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 10 : 48,
+        vertical: 20,
+      ),
+      child: Container(
+        width: isCompact ? screenSize.width - 20 : 980,
+        height: dialogHeight,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppTheme.getBorderColor(context)),
+        ),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
+                ),
+              ),
               child: Row(
                 children: [
+                  const Icon(Icons.route_rounded, color: AppTheme.white),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      route['name']?.toString() ??
-                          route['routeName']?.toString() ??
-                          'Route details',
-                      style: AppTheme.getHeadingStyle(context, fontSize: 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          route['name']?.toString() ??
+                              route['routeName']?.toString() ??
+                              'Route details',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppTheme.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 18,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Route overview and ordered stops',
+                          style: TextStyle(
+                            color: AppTheme.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: AppTheme.white,
+                    ),
                   ),
                 ],
               ),
             ),
             Expanded(
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: PioneerGoogleMap(
-                      initialCenter: center,
-                      initialZoom: 13,
-                      markers: points.indexed
-                          .map(
-                            (entry) => gmaps.Marker(
-                              markerId: gmaps.MarkerId(
-                                'route-stop-${entry.$1}',
-                              ),
-                              position: entry.$2,
-                              infoWindow: gmaps.InfoWindow(
-                                title:
-                                    '${entry.$1 + 1}. ${stops[entry.$1]['name'] ?? 'Stop'}',
-                              ),
-                            ),
-                          )
-                          .toSet(),
-                      polylines: points.length >= 2
-                          ? {
-                              gmaps.Polyline(
-                                polylineId: const gmaps.PolylineId(
-                                  'route-path',
-                                ),
-                                points: points,
-                                color: AppTheme.primaryBlue,
-                                width: 5,
-                              ),
-                            }
-                          : const <gmaps.Polyline>{},
+              child: isCompact
+                  ? Column(
+                      children: [
+                        Expanded(flex: 3, child: mapPanel),
+                        Divider(
+                          height: 1,
+                          color: AppTheme.getBorderColor(context),
+                        ),
+                        Expanded(flex: 2, child: detailsPanel),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(flex: 3, child: mapPanel),
+                        VerticalDivider(
+                          width: 1,
+                          color: AppTheme.getBorderColor(context),
+                        ),
+                        SizedBox(width: 320, child: detailsPanel),
+                      ],
                     ),
-                  ),
-                  SizedBox(
-                    width: 280,
-                    child: ListView.separated(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: stops.length + 1,
-                      separatorBuilder: (_, __) => const Divider(),
-                      itemBuilder: (_, index) {
-                        if (index == 0) {
-                          return _RouteMetadataSummary(route: route);
-                        }
-                        final stop = stops[index - 1];
-                        return ListTile(
-                          leading: CircleAvatar(child: Text('$index')),
-                          title: SelectableText(
-                            stop['name']?.toString() ?? 'Stop',
-                          ),
-                          subtitle: SelectableText(
-                            'Zone: ${stop['zoneId'] ?? 'Not linked'}\n'
-                            '${stop['latitude']}, ${stop['longitude']}',
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),

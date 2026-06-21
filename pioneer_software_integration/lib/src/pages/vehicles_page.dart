@@ -2,17 +2,18 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 
 import '../config/pioneer_runtime_config.dart';
+import '../models/telemetry_view_data.dart';
 import '../widgets/dashboard_layout.dart';
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
 import '../services/fleet_crud_policy.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/page_cache_service.dart';
+import '../services/demo_telemetry_fixtures.dart';
 import '../services/vehicles_store.dart';
 import '../utils/display_format.dart';
 import '../utils/form_validation.dart';
 import '../widgets/geotab_push_preview.dart';
-import '../widgets/geotab_sync_status_badge.dart';
 import 'vehicle_details_modal.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/app_theme.dart';
@@ -766,6 +767,31 @@ class _VehiclesPageState extends State<VehiclesPage> {
       default:
         statusLabel = vehicle['status']?.toString() ?? 'Available';
     }
+    final telemetryReadings = DemoTelemetryFixtures.readingsForVehicle(vehicle);
+    final telemetryIssues = telemetryReadings.where(
+      (reading) =>
+          reading.hasReading &&
+          reading.severity != TelemetrySeverity.normal,
+    ).length;
+    final telemetryReporting = telemetryReadings.any(
+      (reading) => reading.hasReading,
+    );
+    final telemetryOffline = vehicle['isCommunicating'] == false ||
+        vehicle['offline'] == true;
+    final telemetryLabel = telemetryOffline
+        ? 'Telemetry stale'
+        : telemetryIssues > 0
+        ? 'Telemetry needs review'
+        : telemetryReporting
+        ? 'Telemetry reporting'
+        : 'Telemetry not reported';
+    final telemetryColor = telemetryOffline
+        ? AppTheme.neutralGray
+        : telemetryIssues > 0
+        ? AppTheme.warningOrange
+        : telemetryReporting
+        ? AppTheme.successGreen
+        : AppTheme.infoBlue;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1096,6 +1122,11 @@ class _VehiclesPageState extends State<VehiclesPage> {
                           color: _healthColorForVehicle(vehicle),
                           isDark: isDark,
                         ),
+                        _vehicleMetaChip(
+                          label: telemetryLabel,
+                          color: telemetryColor,
+                          isDark: isDark,
+                        ),
                         _fleetCrudScopeChip(crudPolicy, isDark, scale),
                         if (_routeSummary(vehicle).isNotEmpty)
                           _vehicleMetaChip(
@@ -1103,14 +1134,6 @@ class _VehiclesPageState extends State<VehiclesPage> {
                             color: AppTheme.colorFF4B7BE5,
                             isDark: isDark,
                           ),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: 150 * scale),
-                          child: GeoTabSyncStatusBadge.fromEntity(
-                            vehicle,
-                            compact: true,
-                            scale: scale,
-                          ),
-                        ),
                       ],
                     ),
                     if (locationLabel.isNotEmpty) ...[
