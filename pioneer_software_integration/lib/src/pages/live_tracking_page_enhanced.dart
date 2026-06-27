@@ -8,12 +8,9 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 
-import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
-import '../services/demo_telemetry_fixtures.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/google_map_marker_factory.dart';
-import '../services/live_tracking_freshness.dart';
 import '../services/live_tracking_motion_math.dart';
 import '../services/realtime_stream_service.dart';
 import '../services/trips_store.dart';
@@ -22,7 +19,6 @@ import '../theme/app_theme.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
-import '../widgets/telemetry_widgets.dart';
 
 class LiveTrackingPageEnhanced extends StatefulWidget {
   const LiveTrackingPageEnhanced({super.key});
@@ -40,19 +36,10 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   late final AnimationController _pulseController;
   late final Ticker _motionTicker;
   final ValueNotifier<int> _motionFrame = ValueNotifier<int>(0);
-  final ValueNotifier<Map<String, _DemoTemperatureSample>>
-      _demoTemperatureSamples =
-      ValueNotifier<Map<String, _DemoTemperatureSample>>(const {});
   Timer? _updateTimer;
-  Timer? _temperatureTimer;
   Timer? _boundsRefreshDebounce;
   final Map<String, _MarkerMotionState> _markerMotionStates = {};
-  final math.Random _temperatureRandom = math.Random(42);
   bool _isFollowingSelected = false;
-  bool _trafficEnabled = false;
-  bool _coldChainMapFilter = false;
-  bool _lowFuelMapFilter = false;
-  bool _offlineMapFilter = false;
   DateTime? _lastFollowMoveAt;
   double _currentMapZoom = 10.0;
   gmaps.LatLngBounds? _visibleBounds;
@@ -77,7 +64,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   final Map<String, gmaps.BitmapDescriptor> _zoneLabelIconCache = {};
 
   bool _isLoading = true;
-  bool _isLoadingVehicles = false;
   String? _errorMessage;
   String selectedPlate = '';
   String? _pendingPlateArg;
@@ -94,12 +80,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   static const Duration _dataStaleThreshold = Duration(minutes: 5);
   static const Duration _followMoveThrottle = Duration(milliseconds: 220);
   static const double _stationarySpeedThresholdKph = 2.0;
-  static const double _temperatureSafeMinC = 2.0;
-  static const double _temperatureSafeMaxC = 8.0;
-  static const Set<String> _demoTemperatureSensorPlates = {
-    'DEMO-TRK-01',
-    'DEMO-TRK-02',
-  };
   static const double _bearingCorrectionThresholdDegrees = 5.0;
   static const Duration _markerRenderDelay = Duration(milliseconds: 900);
   static const double _viewportBufferFraction = 0.20;
@@ -114,7 +94,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   List<Map<String, dynamic>> get _visibleVehicleMarkers {
     final bounds = _visibleBounds;
-    final vehicles = _vehicleMarkers.where(_matchesTelemetryMapFilters).toList();
+    final vehicles = _vehicleMarkers;
     if (bounds == null) {
       return vehicles;
     }
@@ -130,28 +110,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         bounds,
       );
     }).toList();
-  }
-
-  bool _matchesTelemetryMapFilters(Map<String, dynamic> vehicle) {
-    if (!_coldChainMapFilter && !_lowFuelMapFilter && !_offlineMapFilter) {
-      return true;
-    }
-    final readings = DemoTelemetryFixtures.readingsForVehicle(vehicle);
-    final coldChainAlert = readings
-        .where((reading) =>
-            reading.key == 'temperature' || reading.key == 'humidity')
-        .any((reading) => reading.severity != TelemetrySeverity.normal);
-    final lowFuel = readings.any((reading) =>
-        reading.key == 'fuel' &&
-        reading.hasReading &&
-        reading.severity != TelemetrySeverity.normal);
-    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
-    final offline =
-        freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
-        freshness.state == LiveTrackingFreshnessState.stale;
-    return (_coldChainMapFilter && coldChainAlert) ||
-        (_lowFuelMapFilter && lowFuel) ||
-        (_offlineMapFilter && offline);
   }
 
   List<Map<String, dynamic>> get _sortedVehicles {
@@ -334,7 +292,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     tripsNotifier.addListener(_onRouteOrdersChanged);
     refreshFleetBootstrapSilently();
     refreshFleetSnapshotSilently();
-    _seedDemoTemperatureSamples();
     _loadMarkerIcons();
     _loadZoneOverlays();
     _loadVehicles(fullRefresh: false, refreshTrail: true);
@@ -351,20 +308,15 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         refreshTrail: selectedPlate.isNotEmpty && _pollTick % 3 == 0,
       );
     });
-    _temperatureTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      _advanceDemoTemperatureSamples();
-    });
   }
 
   @override
   void dispose() {
     _updateTimer?.cancel();
-    _temperatureTimer?.cancel();
     _boundsRefreshDebounce?.cancel();
     _pulseController.dispose();
     _motionTicker.dispose();
     _motionFrame.dispose();
-    _demoTemperatureSamples.dispose();
     vehiclesNotifier.removeListener(_onVehiclesChanged);
     tripsNotifier.removeListener(_onRouteOrdersChanged);
     super.dispose();
@@ -388,7 +340,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   void _onVehiclesChanged() {
     _syncMarkerAnimations();
-    _ensureDemoTemperatureSamples();
     if (_vehicleMarkers.isNotEmpty) {
       final nextSelectedPlate =
           selectedPlate.isNotEmpty &&
@@ -418,116 +369,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     if (mounted) {
       setState(() {});
     }
-  }
-
-  void _seedDemoTemperatureSamples() {
-    final now = DateTime.now();
-    _demoTemperatureSamples.value = {
-      'DEMO-TRK-01': _DemoTemperatureSample.seed(
-        plate: 'DEMO-TRK-01',
-        baseTemperatureC: 4.4,
-        updatedAt: now,
-        safeMinC: _temperatureSafeMinC,
-        safeMaxC: _temperatureSafeMaxC,
-      ),
-      'DEMO-TRK-02': _DemoTemperatureSample.seed(
-        plate: 'DEMO-TRK-02',
-        baseTemperatureC: 7.4,
-        updatedAt: now,
-        safeMinC: _temperatureSafeMinC,
-        safeMaxC: _temperatureSafeMaxC,
-      ),
-    };
-  }
-
-  void _ensureDemoTemperatureSamples() {
-    final current = Map<String, _DemoTemperatureSample>.from(
-      _demoTemperatureSamples.value,
-    );
-    var changed = false;
-    final now = DateTime.now();
-    for (final vehicle in _vehicleMarkers) {
-      final plate = _plateOf(vehicle);
-      if (!_hasDemoTemperatureSensor(vehicle) || current.containsKey(plate)) {
-        continue;
-      }
-      current[plate] = _DemoTemperatureSample.seed(
-        plate: plate,
-        baseTemperatureC: plate == 'DEMO-TRK-02' ? 7.4 : 4.4,
-        updatedAt: now,
-        safeMinC: _temperatureSafeMinC,
-        safeMaxC: _temperatureSafeMaxC,
-      );
-      changed = true;
-    }
-    if (changed) {
-      _demoTemperatureSamples.value = current;
-    }
-  }
-
-  void _advanceDemoTemperatureSamples() {
-    final current = _demoTemperatureSamples.value;
-    if (current.isEmpty) {
-      _seedDemoTemperatureSamples();
-      return;
-    }
-
-    final now = DateTime.now();
-    final next = <String, _DemoTemperatureSample>{};
-    for (final entry in current.entries) {
-      final plate = entry.key;
-      final sample = entry.value;
-      final phase = plate == 'DEMO-TRK-02' ? 1.7 : 0.25;
-      final baseline = plate == 'DEMO-TRK-02' ? 7.4 : 4.4;
-      final previousCarry = (sample.temperatureC - baseline) * 0.62;
-      final wave =
-          math.sin(now.millisecondsSinceEpoch / 6200 + phase) *
-          (plate == 'DEMO-TRK-02' ? 0.34 : 0.24);
-      final jitter = (_temperatureRandom.nextDouble() - 0.5) * 0.14;
-      final temperature = (baseline + previousCarry + wave + jitter).clamp(
-        1.4,
-        9.2,
-      );
-      next[plate] = sample.next(
-        nextTemperatureC: temperature.toDouble(),
-        updatedAt: now,
-        safeMinC: _temperatureSafeMinC,
-        safeMaxC: _temperatureSafeMaxC,
-      );
-    }
-    _demoTemperatureSamples.value = next;
-  }
-
-  bool _hasDemoTemperatureSensor(Map<String, dynamic>? vehicle) {
-    final plate = _plateOf(vehicle);
-    if (plate.isEmpty) {
-      return false;
-    }
-    return _demoTemperatureSensorPlates.contains(plate);
-  }
-
-  Color _temperatureStatusColor(_DemoTemperatureStatus status) {
-    return switch (status) {
-      _DemoTemperatureStatus.normal => AppTheme.accentCyan,
-      _DemoTemperatureStatus.review => AppTheme.warningOrange,
-      _DemoTemperatureStatus.critical => AppTheme.errorRed,
-    };
-  }
-
-  IconData _temperatureTrendIcon(_DemoTemperatureTrend trend) {
-    return switch (trend) {
-      _DemoTemperatureTrend.rising => Icons.trending_up_rounded,
-      _DemoTemperatureTrend.falling => Icons.trending_down_rounded,
-      _DemoTemperatureTrend.stable => Icons.trending_flat_rounded,
-    };
-  }
-
-  String _temperatureTrendLabel(_DemoTemperatureTrend trend) {
-    return switch (trend) {
-      _DemoTemperatureTrend.rising => 'rising',
-      _DemoTemperatureTrend.falling => 'falling',
-      _DemoTemperatureTrend.stable => 'stable',
-    };
   }
 
   List<Map<String, dynamic>> get _routeOrders {
@@ -821,11 +662,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required bool fullRefresh,
     required bool refreshTrail,
   }) async {
-    if (_isLoadingVehicles) {
-      return;
-    }
-
-    _isLoadingVehicles = true;
     try {
       if (fullRefresh) {
         await refreshVehiclesFromBackend();
@@ -918,8 +754,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         _isLoading = false;
         _errorMessage = 'Live tracking is temporarily unavailable.';
       });
-    } finally {
-      _isLoadingVehicles = false;
     }
   }
 
@@ -1077,7 +911,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     return DashboardLayout(
       currentRoute: '/live-tracking',
       title: 'Live Tracking',
-      onRefresh: () => _loadVehicles(fullRefresh: true, refreshTrail: true),
       child: _buildPageContent(),
     );
   }
@@ -1108,9 +941,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         )
         .length;
     final total = _vehicleMarkers.length;
-    final fleetFreshness = LiveTrackingFreshnessResolver.forFleet(
-      _vehicleMarkers,
-    );
 
     if (isLargeScreen) {
       return Row(
@@ -1127,14 +957,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   top: 24,
                   left: 24,
                   right: 24,
-                  child: _buildTopStats(
-                        moving,
-                        idle,
-                        stopped,
-                        stale,
-                        total,
-                        fleetFreshness,
-                      )
+                  child: _buildTopStats(moving, idle, stopped, stale, total)
                       .animate()
                       .fadeIn(duration: 600.ms)
                       .slideY(begin: 0.2, end: 0, duration: 500.ms),
@@ -1178,14 +1001,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           top: 16,
           left: 12,
           right: 12,
-          child: _buildTopStats(
-                moving,
-                idle,
-                stopped,
-                stale,
-                total,
-                fleetFreshness,
-              )
+          child: _buildTopStats(moving, idle, stopped, stale, total)
               .animate()
               .fadeIn(duration: 600.ms)
               .slideY(begin: 0.2, end: 0, duration: 500.ms),
@@ -1265,7 +1081,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     int stopped,
     int stale,
     int total,
-    LiveTrackingFreshness fleetFreshness,
   ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final screenWidth = MediaQuery.of(context).size.width;
@@ -1329,12 +1144,11 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
             SizedBox(width: isMobile ? 8 : 12),
             _buildStatChip(
               label: _lastLiveSyncAt == null
-                  ? fleetFreshness.label
-                  : '${fleetFreshness.label} ${_secondsAgo(_lastLiveSyncAt!)}s',
-              color: fleetFreshness.color,
+                  ? 'Connecting'
+                  : 'Live ${_secondsAgo(_lastLiveSyncAt!)}s',
+              color: AppTheme.colorFF00C2A8,
               isDark: isDark,
               isMobile: isMobile,
-              icon: fleetFreshness.icon,
             ),
           ],
         ),
@@ -1347,7 +1161,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required Color color,
     required bool isDark,
     required bool isMobile,
-    IconData? icon,
   }) {
     return Container(
       padding: EdgeInsets.symmetric(
@@ -1362,10 +1175,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icon != null) ...[
-            Icon(icon, size: isMobile ? 11 : 13, color: color),
-            SizedBox(width: isMobile ? 3 : 5),
-          ],
           Container(
             width: isMobile ? 5 : 6,
             height: isMobile ? 5 : 6,
@@ -1445,29 +1254,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           onTap: () => _loadVehicles(fullRefresh: true, refreshTrail: true),
           isDark: isDark,
           isMobile: isMobile,
-          tooltip: 'Refresh live data',
-        ),
-        SizedBox(height: isMobile ? 8 : 12),
-        _buildControlButton(
-          icon: Icons.filter_alt_rounded,
-          onTap: _showTelemetryMapFilters,
-          isDark: isDark,
-          isMobile: isMobile,
-          active: _coldChainMapFilter ||
-              _lowFuelMapFilter ||
-              _offlineMapFilter,
-          activeColor: AppTheme.colorFF00D4FF,
-          tooltip: 'Filter fleet alerts',
-        ),
-        SizedBox(height: isMobile ? 8 : 12),
-        _buildControlButton(
-          icon: Icons.traffic_rounded,
-          onTap: () => setState(() => _trafficEnabled = !_trafficEnabled),
-          isDark: isDark,
-          isMobile: isMobile,
-          active: _trafficEnabled,
-          activeColor: AppTheme.warningOrange,
-          tooltip: _trafficEnabled ? 'Hide traffic layer' : 'Show traffic',
         ),
         SizedBox(height: isMobile ? 8 : 12),
         _buildControlButton(
@@ -1475,7 +1261,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           onTap: () => _zoomBy(1),
           isDark: isDark,
           isMobile: isMobile,
-          tooltip: 'Zoom in',
         ),
         SizedBox(height: isMobile ? 8 : 12),
         _buildControlButton(
@@ -1483,90 +1268,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           onTap: () => _zoomBy(-1),
           isDark: isDark,
           isMobile: isMobile,
-          tooltip: 'Zoom out',
         ),
       ],
-    );
-  }
-
-  Future<void> _showTelemetryMapFilters() async {
-    var coldChain = _coldChainMapFilter;
-    var lowFuel = _lowFuelMapFilter;
-    var offline = _offlineMapFilter;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppTheme.getCardBg(context),
-      showDragHandle: true,
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Fleet alert filters',
-                  style: AppTheme.getHeadingStyle(context, fontSize: 19),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Show vehicles matching any selected condition.',
-                  style: AppTheme.getSubtitleStyle(context),
-                ),
-                const SizedBox(height: 12),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Cold-chain alert'),
-                  secondary: const Icon(Icons.device_thermostat_rounded),
-                  value: coldChain,
-                  onChanged: (value) =>
-                      setSheetState(() => coldChain = value),
-                ),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Low fuel'),
-                  secondary: const Icon(Icons.local_gas_station_rounded),
-                  value: lowFuel,
-                  onChanged: (value) => setSheetState(() => lowFuel = value),
-                ),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Offline or stale'),
-                  secondary: const Icon(Icons.signal_wifi_off_rounded),
-                  value: offline,
-                  onChanged: (value) => setSheetState(() => offline = value),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    TextButton(
-                      onPressed: () => setSheetState(() {
-                        coldChain = false;
-                        lowFuel = false;
-                        offline = false;
-                      }),
-                      child: const Text('Clear'),
-                    ),
-                    const Spacer(),
-                    FilledButton(
-                      onPressed: () {
-                        setState(() {
-                          _coldChainMapFilter = coldChain;
-                          _lowFuelMapFilter = lowFuel;
-                          _offlineMapFilter = offline;
-                        });
-                        Navigator.pop(sheetContext);
-                      },
-                      child: const Text('Apply filters'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 
@@ -1575,58 +1278,30 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required VoidCallback onTap,
     required bool isDark,
     required bool isMobile,
-    bool active = false,
-    Color? activeColor,
-    String? tooltip,
   }) {
-    final accent = activeColor ?? AppTheme.colorFF4B7BE5;
-    final button = GestureDetector(
+    return GestureDetector(
       onTap: onTap,
       child: Container(
         width: isMobile ? 40 : 48,
         height: isMobile ? 40 : 48,
         decoration: BoxDecoration(
-          color: active
-              ? Color.alphaBlend(
-                  accent.withValues(alpha: isDark ? 0.24 : 0.12),
-                  isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-                )
-              : isDark
-              ? AppTheme.colorFF1A1D23
-              : AppTheme.white,
+          color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
           borderRadius: BorderRadius.circular(isMobile ? 10 : 12),
-          border: Border.all(
-            color: active
-                ? accent.withValues(alpha: 0.55)
-                : AppTheme.getBorderColor(context).withValues(alpha: 0.45),
-          ),
           boxShadow: [
             BoxShadow(
-              color: (active ? accent : AppTheme.black).withValues(
-                alpha: active ? 0.18 : (isDark ? 0.4 : 0.08),
-              ),
-              blurRadius: active ? 16 : 12,
+              color: AppTheme.black.withValues(alpha: isDark ? 0.4 : 0.08),
+              blurRadius: 12,
               offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Icon(
           icon,
-          color: active
-              ? accent
-              : isDark
-              ? AppTheme.white
-              : AppTheme.colorFF2C3E50,
+          color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
           size: isMobile ? 20 : 24,
         ),
       ),
     );
-
-    if (tooltip == null) {
-      return button;
-    }
-
-    return Tooltip(message: tooltip, child: button);
   }
 
   Widget _buildVehicleListSidebar() {
@@ -1702,9 +1377,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 final isSelected = _plateOf(vehicle) == selectedPlate;
                 final markerState = _visualMarkerState(vehicle);
                 final markerColor = _sidebarStateAccent(vehicle);
-                final freshness = LiveTrackingFreshnessResolver.forVehicle(
-                  vehicle,
-                );
                 final baseCardColor = isDark
                     ? AppTheme.colorFF252930
                     : AppTheme.colorFFF8F9FA;
@@ -1809,12 +1481,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                                 ],
                               ),
                               const SizedBox(height: 12),
-                              _buildFreshnessPill(freshness),
-                              const SizedBox(height: 8),
-                              if (_hasDemoTemperatureSensor(vehicle)) ...[
-                                _buildLiveTelemetryStrip(vehicle),
-                                const SizedBox(height: 8),
-                              ],
                               Row(
                                 children: [
                                   Icon(
@@ -1951,361 +1617,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
       ),
       child: iconTile,
-    );
-  }
-
-  Widget _buildFreshnessPill(
-    LiveTrackingFreshness freshness, {
-    bool compact = false,
-  }) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 7 : 9,
-        vertical: compact ? 3 : 4,
-      ),
-      decoration: BoxDecoration(
-        color: freshness.color.withValues(alpha: 0.13),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: freshness.color.withValues(alpha: 0.32)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            freshness.icon,
-            size: compact ? 11 : 12,
-            color: freshness.color,
-          ),
-          SizedBox(width: compact ? 4 : 5),
-          Flexible(
-            child: Text(
-              compact
-                  ? freshness.label
-                  : '${freshness.label} - ${freshness.detail}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: compact ? 10 : 11,
-                fontWeight: FontWeight.w800,
-                color: freshness.color,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Kept for the existing compact-temperature source tests.
-  // ignore: unused_element
-  Widget _buildCompactTemperaturePill(
-    Map<String, dynamic> vehicle, {
-    bool compact = false,
-  }) {
-    if (!_hasDemoTemperatureSensor(vehicle)) {
-      return const SizedBox.shrink();
-    }
-
-    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
-      valueListenable: _demoTemperatureSamples,
-      builder: (context, samples, _) {
-        final sample = samples[_plateOf(vehicle)];
-        if (sample == null) {
-          return const SizedBox.shrink();
-        }
-        final color = _temperatureStatusColor(sample.status);
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 260),
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 7 : 9,
-            vertical: compact ? 4 : 5,
-          ),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.13),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: color.withValues(alpha: 0.34)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.device_thermostat_rounded, size: 13, color: color),
-              SizedBox(width: compact ? 4 : 5),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                child: Text(
-                  '${sample.temperatureC.toStringAsFixed(1)}\u00B0C',
-                  key: ValueKey(sample.temperatureC.toStringAsFixed(1)),
-                  style: TextStyle(
-                    fontSize: compact ? 10 : 11,
-                    fontWeight: FontWeight.w900,
-                    color: color,
-                  ),
-                ),
-              ),
-              SizedBox(width: compact ? 4 : 5),
-              Icon(_temperatureTrendIcon(sample.trend), size: 13, color: color),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildLiveTelemetryStrip(
-    Map<String, dynamic> vehicle, {
-    bool compact = false,
-  }) {
-    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
-      valueListenable: _demoTemperatureSamples,
-      builder: (context, samples, _) {
-        final sample = samples[_plateOf(vehicle)];
-        final trend = switch (sample?.trend) {
-          _DemoTemperatureTrend.rising => TelemetryTrend.rising,
-          _DemoTemperatureTrend.falling => TelemetryTrend.falling,
-          _ => TelemetryTrend.stable,
-        };
-        final readings = DemoTelemetryFixtures.readingsForVehicle(
-          vehicle,
-          temperatureOverride: sample?.temperatureC,
-          temperatureHistory: sample?.history ?? const <double>[],
-          temperatureTrend: trend,
-        ).where((reading) => reading.hasReading).toList();
-        if (readings.isEmpty) return const SizedBox.shrink();
-        final visible = readings.take(compact ? 2 : 3).toList();
-        return Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: visible.map((reading) {
-            final icon = switch (reading.key) {
-              'temperature' => Icons.device_thermostat_rounded,
-              'humidity' => Icons.water_drop_rounded,
-              _ => Icons.local_gas_station_rounded,
-            };
-            return SizedBox(
-              width: compact ? 126 : 142,
-              child: TelemetryReadingTile(
-                reading: reading,
-                icon: icon,
-                compact: true,
-                showHistory: false,
-              ),
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
-
-  Widget _buildSelectedTelemetryExtras(Map<String, dynamic> vehicle) {
-    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
-      valueListenable: _demoTemperatureSamples,
-      builder: (context, samples, _) {
-        final sample = samples[_plateOf(vehicle)];
-        final readings = DemoTelemetryFixtures.readingsForVehicle(
-          vehicle,
-          temperatureOverride: sample?.temperatureC,
-        )
-            .where((reading) =>
-                reading.key != 'temperature' && reading.hasReading)
-            .toList();
-        if (readings.isEmpty) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: readings
-                .map(
-                  (reading) => SizedBox(
-                    width: 180,
-                    child: TelemetryReadingTile(
-                      reading: reading,
-                      icon: reading.key == 'humidity'
-                          ? Icons.water_drop_rounded
-                          : Icons.local_gas_station_rounded,
-                      compact: true,
-                      showHistory: false,
-                    ),
-                  ),
-                )
-                .toList(),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildSelectedTemperaturePanel(Map<String, dynamic> vehicle) {
-    if (!_hasDemoTemperatureSensor(vehicle)) {
-      return const SizedBox.shrink();
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isMobile = screenWidth < 600;
-
-    return ValueListenableBuilder<Map<String, _DemoTemperatureSample>>(
-      valueListenable: _demoTemperatureSamples,
-      builder: (context, samples, _) {
-        final sample = samples[_plateOf(vehicle)];
-        if (sample == null) {
-          return const SizedBox.shrink();
-        }
-        final color = _temperatureStatusColor(sample.status);
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 260),
-          margin: EdgeInsets.only(top: isMobile ? 8 : 12),
-          padding: EdgeInsets.all(isMobile ? 10 : 12),
-          decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              color.withValues(alpha: isDark ? 0.13 : 0.08),
-              isDark ? AppTheme.colorFF111827 : AppTheme.colorFFF8FAFC,
-            ),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withValues(alpha: 0.30)),
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final tight = constraints.maxWidth < 430;
-              final reading = Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      Icons.device_thermostat_rounded,
-                      color: color,
-                      size: 21,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Cargo temperature',
-                        style: TextStyle(
-                          fontSize: isMobile ? 10.5 : 12,
-                          fontWeight: FontWeight.w800,
-                          color: isDark ? AppTheme.gray300 : AppTheme.gray600,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        child: Text(
-                          '${sample.temperatureC.toStringAsFixed(1)}\u00B0C',
-                          key: ValueKey(
-                            sample.temperatureC.toStringAsFixed(1),
-                          ),
-                          style: TextStyle(
-                            fontSize: isMobile ? 18 : 22,
-                            fontWeight: FontWeight.w900,
-                            color: color,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-              final trend = Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(_temperatureTrendIcon(sample.trend), color: color),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${sample.statusLabel} - ${_temperatureTrendLabel(sample.trend)}',
-                    style: TextStyle(
-                      fontSize: isMobile ? 11 : 12,
-                      fontWeight: FontWeight.w900,
-                      color: color,
-                    ),
-                  ),
-                ],
-              );
-              final sparkline = SizedBox(
-                width: tight ? double.infinity : 120,
-                height: 34,
-                child: CustomPaint(
-                  painter: _TemperatureSparklinePainter(
-                    values: sample.history,
-                    color: color,
-                    safeMinC: _temperatureSafeMinC,
-                    safeMaxC: _temperatureSafeMaxC,
-                    isDark: isDark,
-                  ),
-                ),
-              );
-
-              if (tight) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    reading,
-                    const SizedBox(height: 10),
-                    sparkline,
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        trend,
-                        _buildDemoSensorBadge(isDark),
-                      ],
-                    ),
-                  ],
-                );
-              }
-
-              return Row(
-                children: [
-                  reading,
-                  const SizedBox(width: 14),
-                  Expanded(child: sparkline),
-                  const SizedBox(width: 14),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      trend,
-                      const SizedBox(height: 6),
-                      _buildDemoSensorBadge(isDark),
-                    ],
-                  ),
-                ],
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildDemoSensorBadge(bool isDark) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: AppTheme.primaryBlue.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: AppTheme.primaryBlue.withValues(alpha: 0.28),
-        ),
-      ),
-      child: Text(
-        'Demo sensor',
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w900,
-          color: isDark ? AppTheme.white : AppTheme.primaryBlue,
-        ),
-      ),
     );
   }
 
@@ -2653,8 +1964,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                         final isSelected = _plateOf(vehicle) == selectedPlate;
                         final markerState = _visualMarkerState(vehicle);
                         final markerColor = _sidebarStateAccent(vehicle);
-                        final freshness =
-                            LiveTrackingFreshnessResolver.forVehicle(vehicle);
                         final baseCardColor = isDark
                             ? AppTheme.colorFF252930
                             : AppTheme.colorFFF8F9FA;
@@ -2747,20 +2056,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                             const SizedBox(height: 4),
-                                            _buildFreshnessPill(
-                                              freshness,
-                                              compact: true,
-                                            ),
-                                            const SizedBox(height: 4),
-                                            if (_hasDemoTemperatureSensor(
-                                              vehicle,
-                                            )) ...[
-                                              _buildLiveTelemetryStrip(
-                                                vehicle,
-                                                compact: true,
-                                              ),
-                                              const SizedBox(height: 4),
-                                            ],
                                             SelectableText(
                                               _lastKnownAddressLabel(vehicle),
                                               style: AppTheme.getCaptionStyle(
@@ -2808,48 +2103,40 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           ),
         ],
       ),
-      child: Stack(
+      child: Row(
         children: [
-          Padding(
-            padding: EdgeInsets.only(right: isMobile ? 24 : 28),
-            child: Row(
+          Container(
+            width: isMobile ? 44 : 60,
+            height: isMobile ? 44 : 60,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: _motionStateGradient(vehicle)),
+              borderRadius: BorderRadius.circular(isMobile ? 12 : 16),
+            ),
+            child: Icon(
+              _motionStateIcon(vehicle),
+              color: AppTheme.white,
+              size: isMobile ? 22 : 32,
+            ),
+          ),
+          SizedBox(width: isMobile ? 10 : 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: isMobile ? 44 : 60,
-                  height: isMobile ? 44 : 60,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: _motionStateGradient(vehicle),
-                    ),
-                    borderRadius: BorderRadius.circular(isMobile ? 12 : 16),
-                  ),
-                  child: Icon(
-                    _motionStateIcon(vehicle),
-                    color: AppTheme.white,
-                    size: isMobile ? 22 : 32,
+                Text(
+                  _plateOf(vehicle),
+                  style: TextStyle(
+                    fontSize: isMobile ? 15 : 20,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
                   ),
                 ),
-                SizedBox(width: isMobile ? 10 : 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _plateOf(vehicle),
-                        style: TextStyle(
-                          fontSize: isMobile ? 15 : 20,
-                          fontWeight: FontWeight.w900,
-                          color: isDark
-                              ? AppTheme.white
-                              : AppTheme.colorFF2C3E50,
-                        ),
-                      ),
-                      SizedBox(height: isMobile ? 4 : 8),
-                      Wrap(
-                        spacing: isMobile ? 8 : 16,
-                        runSpacing: 4,
-                        children: [
+                SizedBox(height: isMobile ? 4 : 8),
+                Wrap(
+                  spacing: isMobile ? 8 : 16,
+                  runSpacing: 4,
+                  children: [
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -2931,91 +2218,75 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                         ),
                       ],
                     ),
-                        ],
+                  ],
+                ),
+                if (_isFollowingSelected) ...[
+                  SizedBox(height: isMobile ? 6 : 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.35),
                       ),
-                      _buildSelectedTemperaturePanel(vehicle),
-                      _buildSelectedTelemetryExtras(vehicle),
-                      if (_isFollowingSelected) ...[
-                        SizedBox(height: isMobile ? 6 : 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.colorFF4B7BE5.withValues(
-                              alpha: 0.14,
-                            ),
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(
-                              color: AppTheme.colorFF4B7BE5.withValues(
-                                alpha: 0.35,
-                              ),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.my_location_rounded,
-                                size: 14,
-                                color: AppTheme.colorFF4B7BE5,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Following ${_plateOf(vehicle)}',
-                                style: TextStyle(
-                                  fontSize: isMobile ? 11 : 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: isDark
-                                      ? AppTheme.white
-                                      : AppTheme.colorFF1F2937,
-                                ),
-                              ),
-                            ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.my_location_rounded,
+                          size: 14,
+                          color: AppTheme.colorFF4B7BE5,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Following ${_plateOf(vehicle)}',
+                          style: TextStyle(
+                            fontSize: isMobile ? 11 : 12,
+                            fontWeight: FontWeight.w700,
+                            color: isDark
+                                ? AppTheme.white
+                                : AppTheme.colorFF1F2937,
                           ),
                         ),
                       ],
-                      SizedBox(height: isMobile ? 6 : 10),
-                      Text(
-                        _secondaryText(vehicle),
-                        style: TextStyle(
-                          fontSize: isMobile ? 11 : 13,
-                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                    ),
                   ),
+                ],
+                SizedBox(height: isMobile ? 6 : 10),
+                Text(
+                  _secondaryText(vehicle),
+                  style: TextStyle(
+                    fontSize: isMobile ? 11 : 13,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
-          Positioned(
-            top: 0,
-            right: 0,
-            child: IconButton(
-              onPressed: () {
-                if (mounted) {
-                  setState(() {
-                    selectedPlate = '';
-                    _selectedTrail = const [];
-                    _isFollowingSelected = false;
-                  });
-                }
-              },
-              icon: Icon(
-                Icons.close_rounded,
-                size: isMobile ? 20 : 24,
-                color: isDark ? AppTheme.gray500 : AppTheme.gray600,
-              ),
-              padding: EdgeInsets.zero,
-              constraints: BoxConstraints.tightFor(
-                width: isMobile ? 28 : 32,
-                height: isMobile ? 28 : 32,
-              ),
+          IconButton(
+            onPressed: () {
+              if (mounted) {
+                setState(() {
+                  selectedPlate = '';
+                  _selectedTrail = const [];
+                  _isFollowingSelected = false;
+                });
+              }
+            },
+            icon: Icon(
+              Icons.close_rounded,
+              size: isMobile ? 20 : 24,
+              color: isDark ? AppTheme.gray500 : AppTheme.gray600,
             ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
           ),
         ],
       ),
@@ -3039,7 +2310,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
               initialCenter: _toGoogleLatLng(_defaultCenter),
               initialZoom: 10,
               zoomControlsEnabled: false,
-              trafficEnabled: _trafficEnabled,
               polygons: {
                 ..._visibleZoneOverlayPolygons,
                 ..._selectedGeofencePolygons,
@@ -3141,7 +2411,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _legendRow(
-            icon: Icons.local_shipping_rounded,
+            icon: Icons.navigation_rounded,
             color: AppTheme.colorFF1A3A6B,
             label: 'Moving',
             isDark: isDark,
@@ -3205,14 +2475,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   Set<gmaps.Polyline> _liveTrackingPolylines() {
-    final selectedVehicle = _selectedVehicle;
-    final selectedState = selectedVehicle == null
-        ? null
-        : _visualMarkerState(selectedVehicle);
-    final actualTrailColor = selectedState == PioneerMapMarkerStyle.stale
-        ? AppTheme.colorFF94A3B8
-        : AppTheme.colorFF0E7A43;
-
     return {
       if (_selectedPlannedPath.length > 1)
         gmaps.Polyline(
@@ -3220,33 +2482,20 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           points: _selectedPlannedPath.map(_toGoogleLatLng).toList(),
           color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.78),
           width: 3,
-          patterns: [
-            gmaps.PatternItem.dash(18),
-            gmaps.PatternItem.gap(10),
-          ],
-          startCap: gmaps.Cap.roundCap,
-          endCap: gmaps.Cap.roundCap,
-          jointType: gmaps.JointType.round,
         ),
       if (_selectedTrail.length > 1)
         gmaps.Polyline(
           polylineId: const gmaps.PolylineId('selected-live-trail-glow'),
           points: _selectedTrail.map(_toGoogleLatLng).toList(),
-          color: actualTrailColor.withValues(alpha: 0.23),
-          width: 11,
-          startCap: gmaps.Cap.roundCap,
-          endCap: gmaps.Cap.roundCap,
-          jointType: gmaps.JointType.round,
+          color: AppTheme.colorFF27AE60.withValues(alpha: 0.22),
+          width: 9,
         ),
       if (_selectedTrail.length > 1)
         gmaps.Polyline(
           polylineId: const gmaps.PolylineId('selected-live-trail'),
           points: _selectedTrail.map(_toGoogleLatLng).toList(),
-          color: actualTrailColor,
+          color: AppTheme.colorFF0E7A43,
           width: 4,
-          startCap: gmaps.Cap.roundCap,
-          endCap: gmaps.Cap.roundCap,
-          jointType: gmaps.JointType.round,
         ),
     };
   }
@@ -3387,11 +2636,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   PioneerMapMarkerStyle _visualMarkerState(Map<String, dynamic> vehicle) {
-    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
-    if (freshness.state == LiveTrackingFreshnessState.stale ||
-        freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
-        _isVehicleStale(vehicle) ||
-        _isVehicleDataStale(vehicle)) {
+    if (_isVehicleStale(vehicle) || _isVehicleDataStale(vehicle)) {
       return PioneerMapMarkerStyle.stale;
     }
 
@@ -4061,7 +3306,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   String _plateLabelOf(Map<String, dynamic>? vehicle) {
     final plate = _plateOf(vehicle);
-    return plate.isEmpty ? 'Unknown plate' : plate;
+    return plate.isEmpty ? 'Unknown' : plate;
   }
 
   String _driverLabelOf(Map<String, dynamic> vehicle) {
@@ -4071,18 +3316,10 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   String _lastKnownAddressLabel(Map<String, dynamic> vehicle) {
     final address = vehicle['currentLocationLabel']?.toString().trim() ?? '';
-    return address.isEmpty ? 'Location unavailable' : address;
+    return address.isEmpty ? 'Location unavailable.' : address;
   }
 
   String _motionStateShortLabel(Map<String, dynamic> vehicle) {
-    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
-    if (freshness.state == LiveTrackingFreshnessState.geotabUnavailable) {
-      return 'GeoTab unavailable';
-    }
-    if (freshness.state == LiveTrackingFreshnessState.stale) {
-      return 'Stale';
-    }
-
     switch (_visualMarkerState(vehicle)) {
       case PioneerMapMarkerStyle.moving:
         return 'Moving';
@@ -4124,7 +3361,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   IconData _motionStateIcon(Map<String, dynamic> vehicle) {
     switch (_visualMarkerState(vehicle)) {
       case PioneerMapMarkerStyle.moving:
-        return Icons.local_shipping_rounded;
+        return Icons.navigation_rounded;
       case PioneerMapMarkerStyle.idle:
         return Icons.pause_circle_filled_rounded;
       case PioneerMapMarkerStyle.offline:
@@ -4135,12 +3372,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   String _statusLabel(Map<String, dynamic> vehicle) {
-    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
-    if (freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
-        freshness.state == LiveTrackingFreshnessState.stale) {
-      return freshness.detail;
-    }
-
     switch (_visualMarkerState(vehicle)) {
       case PioneerMapMarkerStyle.moving:
         return 'Moving at ${_speedOf(vehicle)} km/h';
@@ -4157,13 +3388,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     if (_hasMaintenanceBadge(vehicle)) {
       return 'Maintenance attention';
     }
-    final freshness = LiveTrackingFreshnessResolver.forVehicle(vehicle);
-    if (freshness.state == LiveTrackingFreshnessState.geotabUnavailable ||
-        freshness.state == LiveTrackingFreshnessState.cached ||
-        freshness.state == LiveTrackingFreshnessState.stale) {
-      return freshness.detail;
-    }
-
     final syncState = vehicle['syncState']?.toString().trim().toLowerCase();
     if (syncState == 'offline_cached') {
       return 'Offline cached';
@@ -4289,219 +3513,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   bool _hasMeaningfulMovement(LatLng from, LatLng to) {
     return _distanceMeters(from, to) > 1.0;
-  }
-}
-
-enum _DemoTemperatureTrend { rising, falling, stable }
-
-enum _DemoTemperatureStatus { normal, review, critical }
-
-class _DemoTemperatureSample {
-  const _DemoTemperatureSample({
-    required this.plate,
-    required this.temperatureC,
-    required this.previousTemperatureC,
-    required this.trend,
-    required this.status,
-    required this.updatedAt,
-    required this.history,
-  });
-
-  factory _DemoTemperatureSample.seed({
-    required String plate,
-    required double baseTemperatureC,
-    required DateTime updatedAt,
-    required double safeMinC,
-    required double safeMaxC,
-  }) {
-    final status = _statusFor(baseTemperatureC, safeMinC, safeMaxC);
-    return _DemoTemperatureSample(
-      plate: plate,
-      temperatureC: baseTemperatureC,
-      previousTemperatureC: baseTemperatureC,
-      trend: _DemoTemperatureTrend.stable,
-      status: status,
-      updatedAt: updatedAt,
-      history: List<double>.filled(12, baseTemperatureC),
-    );
-  }
-
-  final String plate;
-  final double temperatureC;
-  final double previousTemperatureC;
-  final _DemoTemperatureTrend trend;
-  final _DemoTemperatureStatus status;
-  final DateTime updatedAt;
-  final List<double> history;
-
-  _DemoTemperatureSample next({
-    required double nextTemperatureC,
-    required DateTime updatedAt,
-    required double safeMinC,
-    required double safeMaxC,
-  }) {
-    final delta = nextTemperatureC - temperatureC;
-    final nextTrend = delta.abs() < 0.05
-        ? _DemoTemperatureTrend.stable
-        : delta > 0
-        ? _DemoTemperatureTrend.rising
-        : _DemoTemperatureTrend.falling;
-    final nextHistory = <double>[
-      ...history.skip(math.max(0, history.length - 15)),
-      nextTemperatureC,
-    ];
-
-    return _DemoTemperatureSample(
-      plate: plate,
-      temperatureC: nextTemperatureC,
-      previousTemperatureC: temperatureC,
-      trend: nextTrend,
-      status: _statusFor(nextTemperatureC, safeMinC, safeMaxC),
-      updatedAt: updatedAt,
-      history: nextHistory,
-    );
-  }
-
-  String get statusLabel {
-    switch (status) {
-      case _DemoTemperatureStatus.normal:
-        return 'In range';
-      case _DemoTemperatureStatus.review:
-        return 'Review';
-      case _DemoTemperatureStatus.critical:
-        return 'Out of range';
-    }
-  }
-
-  static _DemoTemperatureStatus _statusFor(
-    double value,
-    double safeMinC,
-    double safeMaxC,
-  ) {
-    if (value < safeMinC || value > safeMaxC) {
-      return _DemoTemperatureStatus.critical;
-    }
-    if (value <= safeMinC + 0.5 || value >= safeMaxC - 0.5) {
-      return _DemoTemperatureStatus.review;
-    }
-    return _DemoTemperatureStatus.normal;
-  }
-}
-
-class _TemperatureSparklinePainter extends CustomPainter {
-  const _TemperatureSparklinePainter({
-    required this.values,
-    required this.color,
-    required this.safeMinC,
-    required this.safeMaxC,
-    required this.isDark,
-  });
-
-  final List<double> values;
-  final Color color;
-  final double safeMinC;
-  final double safeMaxC;
-  final bool isDark;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (values.length < 2 || size.width <= 0 || size.height <= 0) {
-      return;
-    }
-
-    final minValue = math.min(
-      values.reduce((left, right) => math.min(left, right)),
-      safeMinC,
-    );
-    final maxValue = math.max(
-      values.reduce((left, right) => math.max(left, right)),
-      safeMaxC,
-    );
-    final paddedMin = minValue - 1;
-    final paddedMax = maxValue + 1;
-    final range = math.max(1.0, paddedMax - paddedMin);
-
-    double yFor(double value) {
-      final normalized = ((value - paddedMin) / range).clamp(0.0, 1.0);
-      return size.height - (normalized * size.height);
-    }
-
-    final safeTop = yFor(safeMaxC);
-    final safeBottom = yFor(safeMinC);
-    final safeBand = Rect.fromLTRB(
-      0,
-      math.min(safeTop, safeBottom),
-      size.width,
-      math.max(safeTop, safeBottom),
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(safeBand, const Radius.circular(7)),
-      Paint()
-        ..color = AppTheme.accentCyan.withValues(alpha: isDark ? 0.10 : 0.08)
-        ..style = PaintingStyle.fill,
-    );
-
-    final grid = Paint()
-      ..color = (isDark ? AppTheme.white : AppTheme.black).withValues(
-        alpha: 0.08,
-      )
-      ..strokeWidth = 1;
-    canvas.drawLine(Offset(0, safeTop), Offset(size.width, safeTop), grid);
-    canvas.drawLine(Offset(0, safeBottom), Offset(size.width, safeBottom), grid);
-
-    final path = ui.Path();
-    for (var index = 0; index < values.length; index++) {
-      final x = values.length == 1
-          ? 0.0
-          : (index / (values.length - 1)) * size.width;
-      final y = yFor(values[index]);
-      if (index == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-    }
-
-    final glow = Paint()
-      ..color = color.withValues(alpha: 0.24)
-      ..strokeWidth = 7
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
-    final line = Paint()
-      ..color = color
-      ..strokeWidth = 2.6
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(path, glow);
-    canvas.drawPath(path, line);
-
-    final latest = Offset(size.width, yFor(values.last));
-    canvas.drawCircle(
-      latest,
-      4.2,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.fill,
-    );
-    canvas.drawCircle(
-      latest,
-      6.2,
-      Paint()
-        ..color = color.withValues(alpha: 0.22)
-        ..style = PaintingStyle.fill,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _TemperatureSparklinePainter oldDelegate) {
-    return oldDelegate.values != values ||
-        oldDelegate.color != color ||
-        oldDelegate.safeMinC != safeMinC ||
-        oldDelegate.safeMaxC != safeMaxC ||
-        oldDelegate.isDark != isDark;
   }
 }
 

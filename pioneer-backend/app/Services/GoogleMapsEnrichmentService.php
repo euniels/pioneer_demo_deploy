@@ -332,6 +332,77 @@ class GoogleMapsEnrichmentService
         });
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function nearestFuelStation(array $coordinate, int $radiusMeters = 75): ?array
+    {
+        $point = $this->validPoint($coordinate);
+        if ($point === null || ! $this->isConfigured()) {
+            return null;
+        }
+
+        $radiusMeters = max(25, min(250, $radiusMeters));
+        $cacheKey = 'google_maps_nearest_fuel_station_v1_'.md5(json_encode([
+            'point' => $this->roundedPoint($point, 4),
+            'radius' => $radiusMeters,
+        ]));
+
+        return Cache::remember($cacheKey, now()->addDays(7), function () use ($point, $radiusMeters): ?array {
+            try {
+                $response = $this->httpClient()
+                    ->withHeaders([
+                        'X-Goog-Api-Key' => $this->serverKey(),
+                        'X-Goog-FieldMask' => 'places.id,places.displayName,places.formattedAddress,places.location,places.types',
+                    ])
+                    ->post('https://places.googleapis.com/v1/places:searchNearby', [
+                        'includedTypes' => ['gas_station'],
+                        'maxResultCount' => 5,
+                        'locationRestriction' => [
+                            'circle' => [
+                                'center' => [
+                                    'latitude' => $point['latitude'],
+                                    'longitude' => $point['longitude'],
+                                ],
+                                'radius' => $radiusMeters,
+                            ],
+                        ],
+                    ]);
+
+                if (! $response->successful()) {
+                    throw new \RuntimeException('Places Nearby Search returned HTTP '.$response->status().'.');
+                }
+
+                $best = null;
+                foreach ((array) $response->json('places', []) as $place) {
+                    $latitude = data_get($place, 'location.latitude');
+                    $longitude = data_get($place, 'location.longitude');
+                    if (! is_numeric($latitude) || ! is_numeric($longitude)) {
+                        continue;
+                    }
+
+                    $distance = $this->distanceMeters($point['latitude'], $point['longitude'], (float) $latitude, (float) $longitude);
+                    if ($best === null || $distance < $best['distanceMeters']) {
+                        $best = [
+                            'placeId' => data_get($place, 'id'),
+                            'name' => data_get($place, 'displayName.text', 'Nearby fuel station'),
+                            'address' => data_get($place, 'formattedAddress'),
+                            'distanceMeters' => round($distance, 1),
+                            'confidence' => $distance <= 50 ? 'likely' : 'uncertain',
+                            'source' => 'google_places_nearby_search',
+                        ];
+                    }
+                }
+
+                return $best;
+            } catch (\Throwable $e) {
+                $this->logFailure('places.nearest_fuel_station', $e);
+
+                return null;
+            }
+        });
+    }
+
     private function serverKey(): string
     {
         return trim((string) config('services.google_maps.server_key', ''));
@@ -406,6 +477,17 @@ class GoogleMapsEnrichmentService
                 ],
             ],
         ];
+    }
+
+    private function distanceMeters(float $fromLat, float $fromLng, float $toLat, float $toLng): float
+    {
+        $earthRadius = 6371000;
+        $latDelta = deg2rad($toLat - $fromLat);
+        $lngDelta = deg2rad($toLng - $fromLng);
+        $a = sin($latDelta / 2) ** 2
+            + cos(deg2rad($fromLat)) * cos(deg2rad($toLat)) * sin($lngDelta / 2) ** 2;
+
+        return $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
     }
 
     /**

@@ -2,30 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
-import '../services/demo_telemetry_fixtures.dart';
 import '../services/vehicles_store.dart';
 import '../utils/display_format.dart';
 import '../widgets/geotab_sync_status_badge.dart';
-import '../widgets/telemetry_widgets.dart';
 import '../theme/app_theme.dart';
 
 enum _VehicleAssetSource { fresh, persisted, snapshot }
-
-class _TelemetryDiagnosticGroup {
-  const _TelemetryDiagnosticGroup({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.readings,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final List<TelemetryReadingViewData> readings;
-}
 
 class VehicleDetailsModal extends StatefulWidget {
   final Map<String, dynamic> vehicle;
@@ -394,25 +377,15 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final healthStatus = _string(_view['healthStatus'], fallback: 'healthy');
     final healthColor = _healthColor(healthStatus);
-    final isDialog = widget.centeredDialog;
 
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF10141D : AppTheme.colorFFF4F6F8,
-        borderRadius: isDialog
-            ? BorderRadius.circular(20)
-            : const BorderRadius.vertical(top: Radius.circular(28)),
-        border: isDialog
-            ? Border.all(
-                color: isDark
-                    ? AppTheme.white.withValues(alpha: 0.08)
-                    : AppTheme.black.withValues(alpha: 0.08),
-              )
-            : null,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: Column(
         children: [
-          _buildHeader(isDark, healthColor, isDialog),
+          _buildHeader(isDark, healthColor),
           Expanded(
             child: Stack(
               children: [
@@ -423,35 +396,35 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
                     const SizedBox(height: 18),
                     _buildSectionCard(
                       isDark: isDark,
-                      title: 'Overview',
+                      title: 'Asset Intelligence',
                       icon: Icons.local_shipping_rounded,
                       child: _buildAssetGrid(isDark),
                     ),
                     const SizedBox(height: 18),
                     _buildSectionCard(
                       isDark: isDark,
-                      title: 'Route & Geofence',
+                      title: 'Route And Geofence',
                       icon: Icons.route_rounded,
                       child: _buildRouteSection(isDark),
                     ),
                     const SizedBox(height: 18),
                     _buildSectionCard(
                       isDark: isDark,
-                      title: 'Sensors & Diagnostics',
+                      title: 'Diagnostics',
                       icon: Icons.monitor_heart_rounded,
                       child: _buildDiagnosticsGrid(isDark),
                     ),
                     const SizedBox(height: 18),
                     _buildSectionCard(
                       isDark: isDark,
-                      title: 'Health & Events',
+                      title: 'Vehicle Health',
                       icon: Icons.health_and_safety_rounded,
                       child: _buildHealthSection(isDark),
                     ),
                     const SizedBox(height: 18),
                     _buildSectionCard(
                       isDark: isDark,
-                      title: 'History',
+                      title: 'Maintenance And Fuel History',
                       icon: Icons.history_rounded,
                       child: _buildHistorySection(isDark),
                     ),
@@ -465,122 +438,152 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
     );
   }
 
-  Widget _buildHeader(bool isDark, Color healthColor, bool isDialog) {
+  Widget _buildHeader(bool isDark, Color healthColor) {
     final plate = _string(_view['plate'], fallback: 'UNKNOWN');
     final truckType = _string(_view['truckType'], fallback: 'Truck');
     final healthStatus = _string(_view['healthStatus'], fallback: 'healthy');
     final healthScore = _intValue(_view['healthScore']);
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
-      decoration: const BoxDecoration(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
+          colors: isDark
+              ? const [AppTheme.colorFF142033, AppTheme.colorFF0C1220]
+              : const [AppTheme.colorFF203A55, AppTheme.colorFF0F1A2A],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: Row(
+      child: Column(
         children: [
-          const Icon(
-            Icons.local_shipping_rounded,
-            color: AppTheme.white,
-            size: 28,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  plate,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppTheme.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                const Text(
-                  'Vehicle overview and telemetry details',
-                  style: TextStyle(color: AppTheme.white70, fontSize: 12),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    _pill(
-                      icon: Icons.favorite_rounded,
-                      label:
-                          '${healthStatus[0].toUpperCase()}${healthStatus.substring(1)} - $healthScore',
-                      color: healthColor,
-                    ),
-                    _pill(
-                      icon: Icons.sensors_rounded,
-                      label: _string(
-                        _view['isCommunicating'] == true ? 'Online' : 'Offline',
-                        fallback: 'Offline',
-                      ),
-                      color: _view['isCommunicating'] == true
-                          ? AppTheme.colorFF2ECC71
-                          : AppTheme.colorFFE74C3C,
-                    ),
-                  ],
-                ),
-                if (_view.containsKey('syncStatus')) ...[
-                  const SizedBox(height: 8),
-                  GeoTabSyncStatusBadge.fromEntity(_view, compact: true),
-                ],
-              ],
+          Center(
+            child: Container(
+              width: 42,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppTheme.white.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(999),
+              ),
             ),
           ),
+          const SizedBox(height: 18),
           Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              if (_isLoading) ...[
-                const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppTheme.white,
-                  ),
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: AppTheme.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                const SizedBox(width: 10),
-              ],
-              GestureDetector(
-                onTap: _isLoading
-                    ? null
-                    : () => _loadAssetDetails(forceRefresh: true),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: AppTheme.white.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.refresh_rounded,
-                    color: _isLoading
-                        ? AppTheme.white.withValues(alpha: 0.45)
-                        : AppTheme.white,
-                  ),
+                child: const Icon(
+                  Icons.local_shipping_rounded,
+                  color: AppTheme.white,
+                  size: 28,
                 ),
               ),
-              const SizedBox(width: 10),
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: AppTheme.white.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(Icons.close_rounded, color: AppTheme.white),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      plate,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      truckType,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.white.withValues(alpha: 0.78),
+                      ),
+                    ),
+                    if (_view.containsKey('syncStatus')) ...[
+                      const SizedBox(height: 8),
+                      GeoTabSyncStatusBadge.fromEntity(_view, compact: true),
+                    ],
+                  ],
                 ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_isLoading) ...[
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  GestureDetector(
+                    onTap: _isLoading
+                        ? null
+                        : () => _loadAssetDetails(forceRefresh: true),
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppTheme.white.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        Icons.refresh_rounded,
+                        color: _isLoading
+                            ? AppTheme.white.withValues(alpha: 0.45)
+                            : AppTheme.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppTheme.white.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _pill(
+                icon: Icons.favorite_rounded,
+                label:
+                    '${healthStatus[0].toUpperCase()}${healthStatus.substring(1)} - $healthScore',
+                color: healthColor,
+              ),
+              const SizedBox(width: 10),
+              _pill(
+                icon: Icons.sensors_rounded,
+                label: _string(
+                  _view['isCommunicating'] == true ? 'Online' : 'Offline',
+                  fallback: 'Offline',
+                ),
+                color: _view['isCommunicating'] == true
+                    ? AppTheme.colorFF2ECC71
+                    : AppTheme.colorFFE74C3C,
               ),
             ],
           ),
@@ -956,165 +959,36 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
   }
 
   Widget _buildDiagnosticsGrid(bool isDark) {
-    final fixtureReadings = DemoTelemetryFixtures.readingsForVehicle(_view);
-    final fixtureByKey = {
-      for (final reading in fixtureReadings) reading.key: reading,
-    };
-    final groups = <_TelemetryDiagnosticGroup>[
-      _TelemetryDiagnosticGroup(
-        title: 'Fuel',
-        subtitle: 'Current tank level and capacity reported by the vehicle.',
-        icon: Icons.local_gas_station_rounded,
-        readings: [
-          fixtureByKey['fuel']!,
-          _diagnosticReading(
-            'fuelTankCapacity',
-            label: 'Tank capacity',
-            unit: ' L',
-          ),
-        ],
-      ),
-      _TelemetryDiagnosticGroup(
-        title: 'Cold Chain',
-        subtitle: 'Cargo conditions shown only for sensor-equipped vehicles.',
-        icon: Icons.ac_unit_rounded,
-        readings: [fixtureByKey['temperature']!, fixtureByKey['humidity']!],
-      ),
-      _TelemetryDiagnosticGroup(
-        title: 'Powertrain',
-        subtitle: 'Engine measurements available from GeoTab diagnostics.',
-        icon: Icons.settings_suggest_rounded,
-        readings: [
-          _diagnosticReading(
-            'engineCoolantTemperature',
-            label: 'Coolant temperature',
-            unit: '\u00B0C',
-          ),
-          _diagnosticReading(
-            'engineCoolingFanSpeed',
-            label: 'Cooling fan speed',
-            unit: ' rpm',
-          ),
-        ],
-      ),
-      _TelemetryDiagnosticGroup(
-        title: 'Device Health',
-        subtitle: 'Electrical and distance readings used for readiness checks.',
-        icon: Icons.sensors_rounded,
-        readings: [
-          _diagnosticReading(
-            'batteryVoltage',
-            label: 'Battery voltage',
-            unit: ' V',
-          ),
-          _diagnosticReading('rawOdometer', label: 'Raw odometer', unit: ' km'),
-          _diagnosticReading(
-            'outsideTemperature',
-            label: 'Outside temperature',
-            unit: '\u00B0C',
-          ),
-        ],
-      ),
+    final aliases = <String>[
+      'fuelLevel',
+      'fuelTankCapacity',
+      'engineCoolantTemperature',
+      'outsideTemperature',
+      'relativeHumidity',
+      'engineCoolingFanSpeed',
+      'batteryVoltage',
+      'rawOdometer',
     ];
 
-    return Column(
-      children: groups.map((group) {
-        final visible = group.readings
-            .where(
-              (reading) =>
-                  reading.hasReading ||
-                  reading.availability == TelemetryAvailability.notEquipped,
-            )
-            .toList();
-        if (visible.isEmpty) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TelemetryGroupHeader(
-                title: group.title,
-                subtitle: group.subtitle,
-                icon: group.icon,
-              ),
-              const SizedBox(height: 12),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.maxWidth;
-                  final columns = width >= 720
-                      ? 3
-                      : width >= 460
-                      ? 2
-                      : 1;
-                  const gap = 12.0;
-                  final tileWidth = (width - gap * (columns - 1)) / columns;
-                  return Wrap(
-                    spacing: gap,
-                    runSpacing: gap,
-                    children: visible
-                        .map(
-                          (reading) => SizedBox(
-                            width: tileWidth,
-                            child: TelemetryReadingTile(
-                              reading: reading,
-                              icon: _telemetryIcon(reading.key),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  );
-                },
-              ),
-            ],
+    return Wrap(
+      spacing: 14,
+      runSpacing: 14,
+      children: aliases.map((alias) {
+        final diagnostic = _resolvedDiagnostic(alias);
+        final displayValue = _diagnosticDisplayValue(alias, diagnostic);
+        return SizedBox(
+          width: 220,
+          child: _metricTile(
+            isDark: isDark,
+            label: _string(diagnostic['label'], fallback: alias),
+            value: displayValue,
+            icon: _diagnosticIcon(alias),
+            accent: _diagnosticColor(alias),
           ),
         );
       }).toList(),
     );
   }
-
-  TelemetryReadingViewData _diagnosticReading(
-    String alias, {
-    required String label,
-    required String unit,
-  }) {
-    final diagnostic = _resolvedDiagnostic(alias);
-    final value = telemetryNumber(
-      diagnostic['value'] ??
-          diagnostic['numericValue'] ??
-          _diagnosticDisplayValue(alias, diagnostic),
-    );
-    if (value == null) {
-      return TelemetryReadingViewData.unavailable(
-        key: alias,
-        label: label,
-        unit: unit,
-      );
-    }
-    return TelemetryReadingViewData.fromMap(
-      key: alias,
-      label: label,
-      unit: unit,
-      data: {
-        ...diagnostic,
-        'value': value,
-        'source': _resolvedSource == _VehicleAssetSource.fresh
-            ? 'GeoTab'
-            : 'Cached GeoTab',
-      },
-    );
-  }
-
-  IconData _telemetryIcon(String key) => switch (key) {
-    'temperature' ||
-    'engineCoolantTemperature' ||
-    'outsideTemperature' => Icons.device_thermostat_rounded,
-    'humidity' => Icons.water_drop_rounded,
-    'fuel' || 'fuelTankCapacity' => Icons.local_gas_station_rounded,
-    'batteryVoltage' => Icons.battery_charging_full_rounded,
-    'rawOdometer' => Icons.speed_rounded,
-    'engineCoolingFanSpeed' => Icons.air_rounded,
-    _ => Icons.sensors_rounded,
-  };
 
   String _diagnosticDisplayValue(
     String alias,
@@ -1522,12 +1396,57 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
   }
 
   Widget _buildHistorySection(bool isDark) {
+    final workOrders = _listOfMaps(_view['openWorkOrders']);
+    final latestCompletedWorkOrder = _map(_view['latestCompletedWorkOrder']);
     final maintenance = _listOfMaps(_view['maintenanceHistory']);
     final fuel = _listOfMaps(_view['fuelConsumptionHistory']);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _subhead('Open work orders', isDark),
+        const SizedBox(height: 10),
+        if (workOrders.isEmpty)
+          _emptyText(isDark, 'No open maintenance work orders for this vehicle.')
+        else
+          ...workOrders
+              .take(4)
+              .map(
+                (row) => _historyRow(
+                  isDark,
+                  icon: Icons.assignment_rounded,
+                  title: _string(row['title'], fallback: 'Work order'),
+                  subtitle: _string(
+                    row['sourceLabel'] ?? row['sourceSummary'],
+                    fallback: 'PioneerPath work order',
+                  ),
+                  trailing: _string(
+                    row['statusLabel'] ?? row['status'],
+                    fallback: 'Open',
+                  ),
+                ),
+              ),
+        if (latestCompletedWorkOrder.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _historyRow(
+            isDark,
+            icon: Icons.verified_rounded,
+            title: _string(
+              latestCompletedWorkOrder['title'],
+              fallback: 'Latest completed work order',
+            ),
+            subtitle: _string(
+              latestCompletedWorkOrder['completedAt'] ??
+                  latestCompletedWorkOrder['verifiedAt'],
+              fallback: 'Completed maintenance proof available',
+            ),
+            trailing: _string(
+              latestCompletedWorkOrder['statusLabel'],
+              fallback: 'Completed',
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
         _subhead('Maintenance history', isDark),
         const SizedBox(height: 10),
         if (maintenance.isEmpty)
@@ -1660,7 +1579,6 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
     return AppTheme.colorFF2ECC71;
   }
 
-  // ignore: unused_element
   IconData _diagnosticIcon(String alias) {
     switch (alias) {
       case 'fuelLevel':
@@ -1680,7 +1598,6 @@ class _VehicleDetailsModalState extends State<VehicleDetailsModal> {
     }
   }
 
-  // ignore: unused_element
   Color _diagnosticColor(String alias) {
     switch (alias) {
       case 'fuelLevel':

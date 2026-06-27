@@ -862,6 +862,77 @@ class BackendApiService {
     );
   }
 
+  static void _clearFuelCaches() {
+    clearCache('/fleet/fuel');
+    clearCache('/fleet/fuel/transactions');
+    clearCache('/fleet/summary');
+    clearCache('/fleet/dashboard/summary');
+  }
+
+  static Future<Map<String, dynamic>> createManualFuelEvent(
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/fuel/events/manual',
+      payload,
+    );
+    _clearFuelCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> updateFuelEvent(
+    String eventId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'PATCH',
+      '/fleet/fuel/events/$eventId',
+      payload,
+    );
+    _clearFuelCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> confirmFuelEvent(
+    String eventId, {
+    String notes = '',
+  }) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/fuel/events/$eventId/confirm',
+      {'notes': notes},
+    );
+    _clearFuelCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> rejectFuelEvent(
+    String eventId, {
+    String reason = '',
+  }) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/fuel/events/$eventId/reject',
+      {'reason': reason},
+    );
+    _clearFuelCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> attachFuelEventReceipt(
+    String eventId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/fuel/events/$eventId/receipt',
+      payload,
+    );
+    _clearFuelCaches();
+    return response;
+  }
+
   static Future<List<Map<String, dynamic>>> getFleetEnergyCharges({
     bool forceRefresh = false,
   }) async {
@@ -1479,6 +1550,66 @@ class BackendApiService {
     clearCache('/fleet/summary/maintenance');
     clearCache('/fleet/summary');
     clearCache('/fleet/geotab/writeback/jobs');
+    return response;
+  }
+
+  static void _clearMaintenanceWorkOrderCaches() {
+    clearCache('/fleet/maintenance/work-orders');
+    clearCache('/fleet/maintenance');
+    clearCache('/fleet/summary/maintenance');
+    clearCache('/fleet/summary');
+    clearCache('/vehicles');
+    clearCache('/fleet/live');
+  }
+
+  static Future<Map<String, dynamic>> createMaintenanceWorkOrder(
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/maintenance/work-orders',
+      payload,
+    );
+    _clearMaintenanceWorkOrderCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> updateMaintenanceWorkOrder(
+    String workOrderId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'PATCH',
+      '/fleet/maintenance/work-orders/$workOrderId',
+      payload,
+    );
+    _clearMaintenanceWorkOrderCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> addMaintenanceWorkOrderAttachment(
+    String workOrderId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/maintenance/work-orders/$workOrderId/attachments',
+      payload,
+    );
+    _clearMaintenanceWorkOrderCaches();
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> deleteMaintenanceWorkOrderAttachment(
+    String workOrderId,
+    int index,
+  ) async {
+    final response = await _sendJsonRequest(
+      'DELETE',
+      '/fleet/maintenance/work-orders/$workOrderId/attachments/$index',
+      const {},
+    );
+    _clearMaintenanceWorkOrderCaches();
     return response;
   }
 

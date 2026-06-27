@@ -3,7 +3,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../config/pioneer_runtime_config.dart';
 import '../services/backend_api.dart';
-import '../services/demo_telemetry_fixtures.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/page_cache_service.dart';
 import '../services/vehicles_store.dart';
@@ -12,7 +11,6 @@ import '../utils/display_format.dart';
 import '../utils/form_validation.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
-import '../widgets/telemetry_widgets.dart';
 
 class FuelExpensesPage extends StatefulWidget {
   const FuelExpensesPage({super.key});
@@ -26,7 +24,6 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
 
   late Future<Map<String, dynamic>> _fuelFuture;
   final List<Map<String, dynamic>> _localEntries = [];
-  String _fuelSearch = '';
   String _selectedVehicle = '';
 
   @override
@@ -201,12 +198,15 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           final totals = _mapOf(data['totals']);
           final backendEvents = _listOfMaps(data['events']);
           final fuelTransactions = _listOfMaps(data['transactions']);
+          final normalizedEvents = _listOfMaps(data['normalizedEvents']);
           final chargeEvents = _listOfMaps(data['chargeEvents']);
           final realUsageByVehicle = _listOfMaps(
             data['usageByVehicle'],
           ).where((item) => _toDouble(item['fuelUsedLiters']) > 0).toList();
           final priceSettings = _mapOf(data['priceSettings']);
-          final preferredFuelRecords = fuelTransactions.isNotEmpty
+          final preferredFuelRecords = normalizedEvents.isNotEmpty
+              ? normalizedEvents
+              : fuelTransactions.isNotEmpty
               ? fuelTransactions
               : backendEvents;
           final visibleLocalEntries = _filterVehicleRows(_localEntries);
@@ -224,6 +224,13 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           final mergedEvents = usingSampleFuel
               ? _sampleFuelRecords()
               : realMergedEvents;
+          final reviewEvents = mergedEvents
+              .where(
+                (record) =>
+                    record['reviewStatus']?.toString().toLowerCase() ==
+                    'needs_review',
+              )
+              .toList();
 
           final totalSpend =
               _toDouble(totals['totalSpend']) +
@@ -242,19 +249,12 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
               chargeEvents.isNotEmpty ||
               energyUsedKwh > 0 ||
               chargingSessions > 0;
-          final filteredMergedEvents = _searchFuelRows(mergedEvents);
 
           return _FuelPageScaffold(
-            child: Column(
-              children: [
-                _buildFuelToolbar(context),
-                _buildFuelFilterBar(context, _vehicleFilterOptions(data)),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: () async => _reload(),
-                    child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(24),
+            child: RefreshIndicator(
+              onRefresh: () async => _reload(),
+              child: ListView(
+                padding: const EdgeInsets.all(20),
                 children: [
                   if (usingSampleFuel) ...[
                     Container(
@@ -279,33 +279,35 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
                       ),
                     ),
                   ],
-                  _buildFuelSummaryCards(
+                  _buildHero(
                     context,
                     totalSpend: totalSpend,
                     totalLiters: totalLiters,
                     avgPrice: avgPrice,
                     idleFuel: idleFuel,
                     abnormalCount: abnormal,
+                    energyUsedKwh: energyUsedKwh,
                     chargingSessions: chargingSessions,
-                        ).animate().fadeIn(duration: 300.ms),
-                        const SizedBox(height: AppTheme.space16),
-                        _buildFuelTelemetryReadiness(
-                          context,
-                          usageByVehicle,
-                        ).animate().fadeIn(duration: 350.ms),
-                        const SizedBox(height: AppTheme.space16),
-                        _buildUsagePanel(
+                  ).animate().fadeIn(duration: 350.ms),
+                  const SizedBox(height: AppTheme.space16),
+                  _buildVehicleFilter(context, _vehicleFilterOptions(data)),
+                  const SizedBox(height: AppTheme.space16),
+                  _buildUsagePanel(
                     context,
                     usageByVehicle,
                     isSample: usingSampleFuel,
                   ).animate().fadeIn(duration: 450.ms),
+                  if (reviewEvents.isNotEmpty) ...[
+                    const SizedBox(height: AppTheme.space16),
+                    _buildRefuelReviewPanel(context, reviewEvents),
+                  ],
                   const SizedBox(height: AppTheme.space16),
-                  if (filteredMergedEvents.isEmpty)
+                  if (mergedEvents.isEmpty)
                     _buildNoFuelRecordsPrompt(context)
                   else
                     _buildRecentEventsPanel(
                       context,
-                      filteredMergedEvents,
+                      mergedEvents,
                       priceSettings,
                     ).animate().fadeIn(duration: 475.ms),
                   if (hasEnergyData) ...[
@@ -318,302 +320,11 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
                     ).animate().fadeIn(duration: 500.ms),
                   ],
                 ],
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           );
         },
       ),
-    );
-  }
-
-  List<Map<String, dynamic>> _searchFuelRows(List<Map<String, dynamic>> rows) {
-    final query = _fuelSearch.trim().toLowerCase();
-    if (query.isEmpty) return rows;
-
-    return rows.where((row) {
-      final haystack = [
-        row['vehicle'],
-        row['plate'],
-        row['driver'],
-        row['station'],
-        row['siteName'],
-        row['source'],
-        row['displayDate'],
-        row['date'],
-      ].map((value) => value?.toString().toLowerCase() ?? '').join(' ');
-      return haystack.contains(query);
-    }).toList();
-  }
-
-  Widget _buildFuelToolbar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.sizeOf(context).width < 850;
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.fromLTRB(
-        isMobile ? 16 : 24,
-        16,
-        isMobile ? 16 : 24,
-        12,
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        border: Border(
-          bottom: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(14),
-          ),
-        ),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 720;
-          final search = _FuelSearchField(
-            hint: 'Search fuel records by vehicle, station, or driver...',
-            onChanged: (value) => setState(() => _fuelSearch = value),
-          );
-          final addButton = SizedBox(
-            height: 50,
-            width: compact ? double.infinity : 180,
-            child: FilledButton.icon(
-              onPressed: _addFuelRecord,
-              icon: const Icon(Icons.add_rounded),
-              label: Text(compact ? 'Add Record' : 'New Fuel Record'),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.colorFF10B981,
-                foregroundColor: AppTheme.white,
-                textStyle: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          );
-
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [search, const SizedBox(height: 12), addButton],
-            );
-          }
-
-          return Row(
-            children: [
-              Expanded(child: search),
-              const SizedBox(width: 14),
-              addButton,
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildFuelFilterBar(BuildContext context, List<String> vehicles) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.sizeOf(context).width < 850;
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.fromLTRB(
-        isMobile ? 16 : 24,
-        10,
-        isMobile ? 16 : 24,
-        12,
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        border: Border(
-          bottom: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(14),
-          ),
-        ),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            const _FuelResultChip(label: 'Fuel records'),
-            const SizedBox(width: 10),
-            PopupMenuButton<String>(
-              tooltip: 'Filter vehicle',
-              onSelected: (value) {
-                setState(() {
-                  _selectedVehicle = value == 'All vehicles' ? '' : value;
-                  _fuelFuture = _loadFuel(forceRefresh: true);
-                });
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'All vehicles',
-                  child: Text('All vehicles'),
-                ),
-                ...vehicles.map(
-                  (vehicle) => PopupMenuItem(
-                    value: vehicle,
-                    child: Text(vehicle),
-                  ),
-                ),
-              ],
-              child: _FuelFilterChip(
-                label:
-                    _selectedVehicle.isEmpty ? 'All vehicles' : _selectedVehicle,
-                icon: Icons.local_shipping_rounded,
-              ),
-            ),
-            if (_selectedVehicle.isNotEmpty || _fuelSearch.isNotEmpty) ...[
-              const SizedBox(width: 10),
-              OutlinedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _fuelSearch = '';
-                    _selectedVehicle = '';
-                    _fuelFuture = _loadFuel(forceRefresh: true);
-                  });
-                },
-                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
-                label: const Text('Clear'),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFuelSummaryCards(
-    BuildContext context, {
-    required double totalSpend,
-    required double totalLiters,
-    required double avgPrice,
-    required double idleFuel,
-    required int abnormalCount,
-    required int chargingSessions,
-  }) {
-    final cards = [
-      _FuelSummaryCard(
-        label: 'Total spend',
-        value: _money(totalSpend),
-        caption: 'Refuel cost',
-        icon: Icons.account_balance_wallet_rounded,
-        accent: AppTheme.colorFFD9B56D,
-      ),
-      _FuelSummaryCard(
-        label: 'Total liters',
-        value: '${totalLiters.toStringAsFixed(totalLiters >= 100 ? 0 : 1)} L',
-        caption: 'Fill-up volume',
-        icon: Icons.local_gas_station_rounded,
-        accent: AppTheme.colorFF00D4FF,
-      ),
-      _FuelSummaryCard(
-        label: 'Average price',
-        value: '₱${avgPrice.toStringAsFixed(2)}',
-        caption: 'Per liter',
-        icon: Icons.trending_up_rounded,
-        accent: AppTheme.colorFF10B981,
-      ),
-      _FuelSummaryCard(
-        label: 'Review flags',
-        value: '$abnormalCount',
-        caption: chargingSessions > 0
-            ? '$chargingSessions charge sessions'
-            : '${idleFuel.toStringAsFixed(idleFuel >= 100 ? 0 : 1)} L idle fuel',
-        icon: Icons.warning_amber_rounded,
-        accent: AppTheme.colorFFF59E0B,
-      ),
-    ];
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final gap = MediaQuery.sizeOf(context).width < 850 ? 12.0 : 16.0;
-        final width = constraints.maxWidth;
-        final columns = width >= 1000
-            ? 4
-            : width >= 620
-            ? 2
-            : 1;
-        final cardWidth = (width - (gap * (columns - 1))) / columns;
-
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final card in cards) SizedBox(width: cardWidth, child: card),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildFuelTelemetryReadiness(
-    BuildContext context,
-    List<Map<String, dynamic>> usageByVehicle,
-  ) {
-    final rows = usageByVehicle.take(4).map((row) {
-      final vehicle = <String, dynamic>{
-        ...row,
-        'plate': row['plate'] ?? row['vehicle'],
-      };
-      final fuel = DemoTelemetryFixtures.readingsForVehicle(vehicle)
-          .firstWhere((reading) => reading.key == 'fuel');
-      return (vehicle: vehicle, fuel: fuel);
-    }).toList();
-
-    return _ExecutivePanel(
-      title: 'Current fuel readiness',
-      subtitle:
-          'Latest tank levels are separate from transaction and cost history.',
-      child: rows.isEmpty
-          ? const _FuelEmptyState(
-              title: 'No current fuel readings',
-              message:
-                  'Fuel levels will appear when supported vehicle diagnostics report them.',
-            )
-          : LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 900 ? 4 : 2;
-                const gap = 12.0;
-                final width =
-                    (constraints.maxWidth - gap * (columns - 1)) / columns;
-                return Wrap(
-                  spacing: gap,
-                  runSpacing: gap,
-                  children: rows
-                      .map(
-                        (row) => SizedBox(
-                          width: width,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                formatValue(row.vehicle['vehicle']),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTheme.getBodyStyle(context).copyWith(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 7),
-                              TelemetryReadingTile(
-                                reading: row.fuel,
-                                icon: Icons.local_gas_station_rounded,
-                                compact: true,
-                                showHistory: false,
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                      .toList(),
-                );
-              },
-            ),
     );
   }
 
@@ -629,9 +340,315 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
       return;
     }
 
-    setState(() {
-      _localEntries.insert(0, record);
-    });
+    try {
+      await BackendApiService.createManualFuelEvent(record);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fuel record saved.')),
+      );
+      PageCacheService.invalidate(_filteredCacheKey);
+      _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            FormValidation.backendError(error, 'Fuel record could not be saved.'),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _confirmFuelEvent(Map<String, dynamic> record) async {
+    final id = record['id']?.toString() ?? '';
+    if (id.isEmpty || record['sourceType']?.toString().startsWith('geotab') == true) {
+      return;
+    }
+    try {
+      await BackendApiService.confirmFuelEvent(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fuel event confirmed.')),
+      );
+      PageCacheService.invalidate(_filteredCacheKey);
+      _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(FormValidation.backendError(error, 'Fuel event could not be confirmed.'))),
+      );
+    }
+  }
+
+  Future<void> _rejectFuelEvent(Map<String, dynamic> record) async {
+    final id = record['id']?.toString() ?? '';
+    if (id.isEmpty || record['sourceType']?.toString().startsWith('geotab') == true) {
+      return;
+    }
+    try {
+      await BackendApiService.rejectFuelEvent(
+        id,
+        reason: 'Rejected from Fuel & Energy review.',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fuel event rejected.')),
+      );
+      PageCacheService.invalidate(_filteredCacheKey);
+      _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(FormValidation.backendError(error, 'Fuel event could not be rejected.'))),
+      );
+    }
+  }
+
+  Widget _buildVehicleFilter(BuildContext context, List<String> vehicles) {
+    return _ExecutivePanel(
+      title: 'Report scope',
+      subtitle:
+          'Filter every fuel total and record by a specific fleet vehicle.',
+      child: Row(
+        children: [
+          const Icon(Icons.filter_alt_rounded, color: AppTheme.primaryBlue),
+          const SizedBox(width: AppTheme.space16),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              key: ValueKey(_selectedVehicle),
+              initialValue: _selectedVehicle,
+              decoration: const InputDecoration(labelText: 'Vehicle'),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('All vehicles')),
+                ...vehicles.map(
+                  (vehicle) =>
+                      DropdownMenuItem(value: vehicle, child: Text(vehicle)),
+                ),
+              ],
+              onChanged: (value) {
+                setState(() {
+                  _selectedVehicle = value ?? '';
+                  _fuelFuture = _loadFuel(forceRefresh: true);
+                });
+              },
+            ),
+          ),
+          if (_selectedVehicle.isNotEmpty) ...[
+            const SizedBox(width: 10),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _selectedVehicle = '';
+                  _fuelFuture = _loadFuel(forceRefresh: true);
+                });
+              },
+              icon: const Icon(Icons.close_rounded),
+              label: const Text('Clear'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHero(
+    BuildContext context, {
+    required double totalSpend,
+    required double totalLiters,
+    required double avgPrice,
+    required double idleFuel,
+    required int abnormalCount,
+    required double energyUsedKwh,
+    required int chargingSessions,
+  }) {
+    final cards = [
+      _HeroStat(
+        label: 'Total Spend',
+        value: _money(totalSpend),
+        caption: 'Refuel cost across synced events',
+        icon: Icons.account_balance_wallet_rounded,
+        accent: AppTheme.colorFFD9B56D,
+      ),
+      _HeroStat(
+        label: 'Total Liters',
+        value: '${totalLiters.toStringAsFixed(totalLiters >= 100 ? 0 : 1)} L',
+        caption: 'Combined fill-up volume',
+        icon: Icons.local_gas_station_rounded,
+        accent: AppTheme.colorFF00D4FF,
+      ),
+      _HeroStat(
+        label: 'Average Price / L',
+        value: 'PHP ${avgPrice.toStringAsFixed(2)}',
+        caption: 'Weighted by actual liters',
+        icon: Icons.trending_up_rounded,
+        accent: AppTheme.colorFF10B981,
+      ),
+      _HeroStat(
+        label: 'Idle Fuel',
+        value: '${idleFuel.toStringAsFixed(idleFuel >= 100 ? 0 : 1)} L',
+        caption: abnormalCount > 0
+            ? '$abnormalCount asset${abnormalCount == 1 ? '' : 's'} need review'
+            : 'No abnormal consumption flags',
+        icon: Icons.warning_amber_rounded,
+        accent: AppTheme.colorFFF59E0B,
+      ),
+      _HeroStat(
+        label: 'Charging Sessions',
+        value: '$chargingSessions',
+        caption: energyUsedKwh > 0
+            ? '${energyUsedKwh.toStringAsFixed(1)} kWh synced from EV assets'
+            : 'Ready for EV and hybrid fleets when charge data is available',
+        icon: Icons.ev_station_rounded,
+        accent: AppTheme.colorFF8B5CF6,
+      ),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: Theme.of(context).brightness == Brightness.dark
+              ? const [
+                  AppTheme.colorFF101827,
+                  AppTheme.colorFF18263D,
+                  AppTheme.colorFF111A28,
+                ]
+              : const [
+                  AppTheme.colorFFFFFFFF,
+                  AppTheme.colorFFF4F8FF,
+                  AppTheme.colorFFEAF2FF,
+                ],
+        ),
+        border: Border.all(color: AppTheme.getBorderColor(context)),
+        boxShadow: AppTheme.getElevatedShadow(context),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [AppTheme.goldAccent, AppTheme.primaryBlue],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.speed_rounded,
+                  color: AppTheme.white,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Fuel and energy command center',
+                      style: AppTheme.getHeadingStyle(context, fontSize: 28),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Live Geotab fuel usage, charge sessions, idling burn, and finance-ready refuel visibility.',
+                      style: AppTheme.getSubtitleStyle(context),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppTheme.space16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 980;
+              if (compact) {
+                return Column(
+                  children: cards
+                      .map(
+                        (card) => Padding(
+                          padding: const EdgeInsets.only(
+                            bottom: AppTheme.space16,
+                          ),
+                          child: _buildHeroCard(context, card),
+                        ),
+                      )
+                      .toList(),
+                );
+              }
+
+              return Row(
+                children: cards
+                    .map(
+                      (card) => Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            right: card == cards.last ? 0 : AppTheme.space16,
+                          ),
+                          child: _buildHeroCard(context, card),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeroCard(BuildContext context, _HeroStat stat) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        color: Theme.of(context).brightness == Brightness.dark
+            ? AppTheme.white.withValues(alpha: 0.03)
+            : AppTheme.white.withValues(alpha: 0.92),
+        border: Border.all(color: stat.accent.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: stat.accent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(stat.icon, color: stat.accent, size: 18),
+              ),
+              const Spacer(),
+              Text(
+                stat.label.toUpperCase(),
+                style: AppTheme.getCaptionStyle(
+                  context,
+                ).copyWith(letterSpacing: 0.8),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            stat.value,
+            style: AppTheme.getHeadingStyle(
+              context,
+              fontSize: 26,
+            ).copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 6),
+          Text(stat.caption, style: AppTheme.getSubtitleStyle(context)),
+        ],
+      ),
+    );
   }
 
   Widget _buildUsagePanel(
@@ -769,6 +786,82 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
     );
   }
 
+  Widget _buildRefuelReviewPanel(
+    BuildContext context,
+    List<Map<String, dynamic>> events,
+  ) {
+    return _ExecutivePanel(
+      title: 'Refuel review',
+      subtitle:
+          'Station-stop or manual fuel records that need confirmation before finance uses them.',
+      child: Column(
+        children: events.take(5).map((record) {
+          final vehicle =
+              formatValue(record['vehicle'] ?? record['vehiclePlate']);
+          final station =
+              formatValue(record['stationName'] ?? record['station']);
+          final liters = _toDouble(record['liters'] ?? record['volumeLiters']);
+          final confidence =
+              formatValue(record['confidenceLabel'] ?? record['confidence']);
+          final sourceType = record['sourceType']?.toString() ?? '';
+          final canReview =
+              record['id'] != null && !sourceType.startsWith('geotab');
+          return Container(
+            margin: const EdgeInsets.only(bottom: AppTheme.space10),
+            padding: const EdgeInsets.all(AppTheme.space12),
+            decoration: BoxDecoration(
+              color: AppTheme.getSecondaryBg(context),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+              border: Border.all(color: AppTheme.getBorderColor(context)),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.local_gas_station_rounded,
+                  color: AppTheme.colorFFF39C12,
+                ),
+                const SizedBox(width: AppTheme.space12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$vehicle at $station',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.getHeadingStyle(context, fontSize: 14),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${liters.toStringAsFixed(1)} L | $confidence | ${formatValue(record['sourceLabel'])}',
+                        style: AppTheme.getCaptionStyle(context),
+                      ),
+                    ],
+                  ),
+                ),
+                if (canReview) ...[
+                  TextButton(
+                    onPressed: () => _rejectFuelEvent(record),
+                    child: const Text('Reject'),
+                  ),
+                  const SizedBox(width: AppTheme.space8),
+                  FilledButton(
+                    onPressed: () => _confirmFuelEvent(record),
+                    child: const Text('Confirm'),
+                  ),
+                ] else
+                  Text(
+                    'Read-only',
+                    style: AppTheme.getCaptionStyle(context),
+                  ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildRecentEventsPanel(
     BuildContext context,
     List<Map<String, dynamic>> events,
@@ -853,10 +946,18 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
     final estimatedCost = recordedCost > 0
         ? _money(recordedCost)
         : (estimatedLabel == 'N/A' ? '-' : estimatedLabel);
-    final _rawSource = (record['source']?.toString().toLowerCase() ?? '');
-    final source = _rawSource.contains('manual')
-      ? 'Manual'
-      : (_rawSource.contains('sample') ? 'Sample' : 'GeoTab');
+    final source = formatValue(record['sourceLabel'] ?? record['source']);
+    final sourceType = record['sourceType']?.toString() ?? '';
+    final confidence = formatValue(
+      record['confidenceLabel'] ?? record['confidence'],
+    );
+    final reviewStatus = formatValue(
+      record['reviewStatusLabel'] ?? record['reviewStatus'],
+    );
+    final sourceNote = [
+      if (confidence != 'N/A') confidence,
+      if (reviewStatus != 'N/A') reviewStatus,
+    ].join(' | ');
 
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
@@ -876,7 +977,9 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           _FuelTableCell(
             value: station == 'N/A' ? 'Not recorded' : station,
             flex: 22,
-            note: (source == 'GeoTab' && station == 'N/A') ? 'Not reported by GeoTab' : null,
+            note: (sourceType.startsWith('geotab') && station == 'N/A')
+                ? 'Not reported by GeoTab'
+                : null,
           ),
           _FuelTableCell(
             value: '${liters.toStringAsFixed(1)} L',
@@ -894,7 +997,11 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
             numeric: true,
             emphasized: true,
           ),
-          _FuelTableCell(value: source, flex: 12),
+          _FuelTableCell(
+            value: source,
+            flex: 12,
+            note: sourceNote.isEmpty ? null : sourceNote,
+          ),
         ],
       ),
     );
@@ -1057,208 +1164,6 @@ class _FuelPageScaffold extends StatelessWidget {
   }
 }
 
-class _FuelSearchField extends StatelessWidget {
-  final String hint;
-  final ValueChanged<String> onChanged;
-
-  const _FuelSearchField({required this.hint, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return SizedBox(
-      height: 50,
-      child: TextField(
-        onChanged: onChanged,
-        style: AppTheme.getBodyStyle(context).copyWith(fontSize: 14),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: AppTheme.getSubtitleStyle(context).copyWith(fontSize: 14),
-          prefixIcon: Icon(
-            Icons.search_rounded,
-            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-          ),
-          filled: true,
-          fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 14,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(
-              color: isDark
-                  ? AppTheme.white.withAlpha(20)
-                  : AppTheme.black.withAlpha(18),
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(
-              color: isDark
-                  ? AppTheme.white.withAlpha(20)
-                  : AppTheme.black.withAlpha(18),
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: AppTheme.primaryBlue),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FuelResultChip extends StatelessWidget {
-  final String label;
-
-  const _FuelResultChip({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: AppTheme.colorFF00D4FF.withAlpha(18),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.colorFF00D4FF.withAlpha(70)),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: AppTheme.colorFF00D4FF,
-          fontSize: 13,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-}
-
-class _FuelFilterChip extends StatelessWidget {
-  final String label;
-  final IconData icon;
-
-  const _FuelFilterChip({required this.label, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withAlpha(20)
-              : AppTheme.black.withAlpha(18),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: AppTheme.gray400),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: AppTheme.getBodyStyle(
-              context,
-            ).copyWith(fontSize: 13, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(width: 8),
-          const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
-        ],
-      ),
-    );
-  }
-}
-
-class _FuelSummaryCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final String caption;
-  final IconData icon;
-  final Color accent;
-
-  const _FuelSummaryCard({
-    required this.label,
-    required this.value,
-    required this.caption,
-    required this.icon,
-    required this.accent,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      constraints: const BoxConstraints(minHeight: 112),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardBg(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: accent.withAlpha(isDark ? 92 : 115)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: accent.withAlpha(isDark ? 34 : 28),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: accent, size: 22),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.getCaptionStyle(context).copyWith(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.getHeadingStyle(
-                    context,
-                    fontSize: 24,
-                  ).copyWith(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  caption,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.getSubtitleStyle(
-                    context,
-                  ).copyWith(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _ExecutivePanel extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -1369,9 +1274,7 @@ class _FuelTableCell extends StatelessWidget {
     return Expanded(
       flex: flex,
       child: Column(
-        crossAxisAlignment: numeric
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             value,
@@ -1639,13 +1542,22 @@ class _AddFuelRecordSheetState extends State<_AddFuelRecordSheet> {
                       final total = liters * price;
 
                       Navigator.pop(context, {
-                        'vehicle': _selectedVehiclePlate ?? 'Unknown',
-                        'driver': selectedVehicle?['driver'] ?? 'Unassigned',
+                        'vehiclePlate': _selectedVehiclePlate ?? 'Unknown',
+                        'vehicleGeotabId':
+                            selectedVehicle?['geotabId']?.toString() ?? '',
+                        'driverName':
+                            selectedVehicle?['driver']?.toString() ??
+                            'Unassigned',
+                        'stationName': _stationController.text.trim(),
                         'station': _stationController.text.trim(),
                         'date': _displayDate(DateTime.now()),
+                        'eventAt': DateTime.now().toIso8601String(),
                         'liters': liters,
                         'volumeLiters': liters,
                         'pricePerLiter': price,
+                        'fuelType':
+                            selectedVehicle?['fuelType']?.toString() ??
+                            'diesel',
                         'cost': total,
                         'totalCost': total,
                         'source': 'Manual',
@@ -1663,13 +1575,29 @@ class _AddFuelRecordSheetState extends State<_AddFuelRecordSheet> {
   }
 }
 
+class _HeroStat {
+  final String label;
+  final String value;
+  final String caption;
+  final IconData icon;
+  final Color accent;
+
+  const _HeroStat({
+    required this.label,
+    required this.value,
+    required this.caption,
+    required this.icon,
+    required this.accent,
+  });
+}
+
 List<Map<String, dynamic>> _sampleFuelUsageByVehicle() {
   return [
-    {'vehicle': 'TRK-001', 'fuelUsedLiters': 120.4, 'fuelLevelRatio': 0.68, 'abnormalConsumption': false},
-    {'vehicle': 'TRK-002', 'fuelUsedLiters': 95.2, 'fuelLevelRatio': 0.31, 'abnormalConsumption': false},
-    {'vehicle': 'TRK-003', 'fuelUsedLiters': 45.8, 'fuelLevelRatio': 0.18, 'abnormalConsumption': true},
-    {'vehicle': 'TRK-004', 'fuelUsedLiters': 12.6, 'fuelLevelRatio': 0.82, 'abnormalConsumption': false},
-    {'vehicle': 'TRK-005', 'fuelUsedLiters': 78.0, 'fuelLevelRatio': 0.54, 'abnormalConsumption': false},
+    {'vehicle': 'TRK-001', 'fuelUsedLiters': 120.4, 'abnormalConsumption': false},
+    {'vehicle': 'TRK-002', 'fuelUsedLiters': 95.2, 'abnormalConsumption': false},
+    {'vehicle': 'TRK-003', 'fuelUsedLiters': 45.8, 'abnormalConsumption': true},
+    {'vehicle': 'TRK-004', 'fuelUsedLiters': 12.6, 'abnormalConsumption': false},
+    {'vehicle': 'TRK-005', 'fuelUsedLiters': 78.0, 'abnormalConsumption': false},
   ];
 }
 

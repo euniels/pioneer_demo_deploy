@@ -187,6 +187,8 @@ class FleetCrudPermissionMiddleware
 
         return str_starts_with($path, 'fleet/vehicles/manual')
             || str_starts_with($path, 'fleet/maintenance/history')
+            || str_starts_with($path, 'fleet/maintenance/work-orders')
+            || str_starts_with($path, 'fleet/fuel/events')
             || str_starts_with($path, 'fleet/routes')
             || str_starts_with($path, 'fleet/zones')
             || str_starts_with($path, 'fleet/geotab/routes')

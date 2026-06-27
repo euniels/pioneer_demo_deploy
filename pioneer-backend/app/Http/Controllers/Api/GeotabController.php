@@ -12,12 +12,14 @@ use App\Models\FleetRoute;
 use App\Models\FleetRouteStop;
 use App\Models\FleetTrip;
 use App\Models\FleetZone;
+use App\Models\FuelEvent;
 use App\Models\GeotabFeedCheckpoint;
 use App\Models\GeotabFeedRow;
 use App\Models\GeotabWriteJob;
 use App\Models\GpsLog;
 use App\Models\LoginAttemptLog;
 use App\Models\MaintenanceHistory;
+use App\Models\MaintenanceWorkOrder;
 use App\Models\ManualDriver;
 use App\Models\ManualVehicle;
 use App\Models\NotificationHistory;
@@ -607,8 +609,6 @@ class GeotabController extends Controller
         ];
         $health['sse']['active'] = ($health['sse']['enabled'] ?? false) && ($health['sse']['mode'] ?? '') === 'stream';
         $health['sse']['active_clients'] = $health['sse']['activeClients'] ?? 0;
-        $health['apiPressure'] = $this->apiPressureDiagnostic();
-        $health['rateLimits'] = $this->rateLimitDiagnostic();
 
         return $this->respondData($health);
     }
@@ -722,63 +722,6 @@ class GeotabController extends Controller
             'status' => $healthy ? 'ok' : 'degraded',
             'generatedAt' => now()->toIso8601String(),
             'checks' => $checks,
-            'apiPressure' => $this->apiPressureDiagnostic(),
-            'rateLimits' => $this->rateLimitDiagnostic(),
-        ];
-    }
-
-    private function apiPressureDiagnostic(): array
-    {
-        $today = now()->toDateString();
-        $categories = ['login', 'client_errors', 'writeback', 'mutations', 'reads', 'live'];
-        $byCategory = [];
-
-        foreach ($categories as $category) {
-            $key = 'pioneer_rate_limit_429:'.$today.':'.$category;
-            $count = (int) Cache::get($key, 0);
-            if ($count <= 0) {
-                continue;
-            }
-            $byCategory[$category] = [
-                'count' => $count,
-                'lastAt' => Cache::get($key.':last_at'),
-            ];
-        }
-
-        return [
-            'status' => $byCategory === [] ? 'ok' : 'throttling_detected',
-            'date' => $today,
-            'cacheDriver' => config('cache.default'),
-            'recent429Count' => (int) Cache::get('pioneer_rate_limit_429:'.$today.':total', 0),
-            'last429At' => Cache::get('pioneer_rate_limit_429:last_at'),
-            'last429Category' => Cache::get('pioneer_rate_limit_429:last_category'),
-            'byCategory' => $byCategory,
-        ];
-    }
-
-    private function rateLimitDiagnostic(): array
-    {
-        $limits = (array) config('pioneer.rate_limits', []);
-
-        return [
-            'cacheDriver' => config('cache.default'),
-            'login' => $this->rateLimitBucketDiagnostic($limits['login'] ?? []),
-            'clientErrors' => $this->rateLimitBucketDiagnostic($limits['client_errors'] ?? []),
-            'writeback' => $this->rateLimitBucketDiagnostic($limits['writeback'] ?? []),
-            'mutations' => $this->rateLimitBucketDiagnostic($limits['mutations'] ?? []),
-            'reads' => $this->rateLimitBucketDiagnostic($limits['reads'] ?? []),
-            'live' => $this->rateLimitBucketDiagnostic($limits['live'] ?? []),
-            'sseClientsPerUser' => (int) ($limits['sse_clients_per_user'] ?? 5),
-        ];
-    }
-
-    private function rateLimitBucketDiagnostic(mixed $bucket): array
-    {
-        $bucket = is_array($bucket) ? $bucket : [];
-
-        return [
-            'maxAttempts' => (int) ($bucket['max_attempts'] ?? 0),
-            'windowSeconds' => (int) ($bucket['window_seconds'] ?? 60),
         ];
     }
 
@@ -2257,6 +2200,179 @@ class GeotabController extends Controller
         $this->clearFleetCaches();
 
         return $this->respondData($this->formatMaintenanceHistory($history));
+    }
+
+    public function maintenanceWorkOrderRecord(string $workOrderId): JsonResponse
+    {
+        if (! $this->maintenanceWorkOrderTableAvailable()) {
+            return $this->respondError('Maintenance work order table is not available.', 503);
+        }
+
+        $workOrder = MaintenanceWorkOrder::query()->find($workOrderId);
+        if ($workOrder === null) {
+            return $this->respondError('Maintenance work order not found.', 404);
+        }
+
+        return $this->respondData($this->formatMaintenanceWorkOrder($workOrder));
+    }
+
+    public function storeMaintenanceWorkOrder(Request $request): JsonResponse
+    {
+        if (! $this->maintenanceWorkOrderTableAvailable()) {
+            return $this->respondError('Maintenance work order table is not available.', 503);
+        }
+
+        $validated = $this->validateMaintenanceWorkOrderPayload($request);
+        $sourceType = $this->normalizeWorkOrderSource((string) ($validated['sourceType'] ?? 'manual'));
+        $sourceRecordId = $this->nullableCleanText($validated['sourceRecordId'] ?? '');
+
+        if ($sourceRecordId !== null && $sourceType !== 'manual') {
+            $existing = MaintenanceWorkOrder::query()
+                ->where('source_type', $sourceType)
+                ->where('source_record_id', $sourceRecordId)
+                ->first();
+            if ($existing !== null) {
+                return $this->respondData($this->formatMaintenanceWorkOrder($existing));
+            }
+        }
+
+        $attributes = $this->maintenanceWorkOrderAttributes($validated);
+        $attributes['source_type'] = $sourceType;
+        $attributes['source_record_id'] = $sourceRecordId;
+        $attributes['audit_trail'] = [
+            $this->maintenanceWorkOrderAudit('created', $this->maintenanceWorkOrderActor($request), [
+                'status' => $attributes['status'] ?? 'open',
+                'sourceType' => $sourceType,
+                'sourceRecordId' => $sourceRecordId,
+            ]),
+        ];
+
+        $workOrder = MaintenanceWorkOrder::query()->create($attributes);
+        $this->storeCustomNotification(
+            'maintenance',
+            'Work Order Created',
+            ($workOrder->vehicle_plate ?: 'Vehicle').' has a new maintenance work order.',
+            ['workOrderId' => $workOrder->id, 'url' => '/maintenance'],
+        );
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatMaintenanceWorkOrder($workOrder));
+    }
+
+    public function updateMaintenanceWorkOrder(Request $request, string $workOrderId): JsonResponse
+    {
+        if (! $this->maintenanceWorkOrderTableAvailable()) {
+            return $this->respondError('Maintenance work order table is not available.', 503);
+        }
+
+        $workOrder = MaintenanceWorkOrder::query()->find($workOrderId);
+        if ($workOrder === null) {
+            return $this->respondError('Maintenance work order not found.', 404);
+        }
+
+        if ($workOrder->status === 'voided') {
+            return $this->respondError('Voided work orders are read-only.', 423);
+        }
+
+        $validated = $this->validateMaintenanceWorkOrderPayload($request, partial: true);
+        $nextStatus = array_key_exists('status', $validated)
+            ? $this->normalizeWorkOrderStatus((string) ($validated['status'] ?? $workOrder->status))
+            : $workOrder->status;
+        $lockedFinancially = in_array($workOrder->status, ['completed', 'verified'], true);
+        if ($lockedFinancially) {
+            $allowed = array_intersect_key($validated, array_flip(['notes', 'attachments', 'status', 'actualCost']));
+            if ($allowed === []) {
+                return $this->respondError('Completed work orders only allow notes, proof attachments, actual cost, or verification changes.', 423);
+            }
+            $validated = $allowed;
+        }
+
+        $beforeStatus = $workOrder->status;
+        $workOrder->fill($this->maintenanceWorkOrderAttributes($validated, $workOrder));
+        $this->applyWorkOrderStatusTimestamps($workOrder, $beforeStatus, $nextStatus);
+        $trail = is_array($workOrder->audit_trail) ? $workOrder->audit_trail : [];
+        $trail[] = $this->maintenanceWorkOrderAudit(
+            $beforeStatus === $nextStatus ? 'updated' : 'status_changed',
+            $this->maintenanceWorkOrderActor($request),
+            ['from' => $beforeStatus, 'to' => $nextStatus],
+        );
+        $workOrder->audit_trail = array_slice($trail, -100);
+        $workOrder->save();
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatMaintenanceWorkOrder($workOrder));
+    }
+
+    public function storeMaintenanceWorkOrderAttachment(Request $request, string $workOrderId): JsonResponse
+    {
+        if (! $this->maintenanceWorkOrderTableAvailable()) {
+            return $this->respondError('Maintenance work order table is not available.', 503);
+        }
+
+        $workOrder = MaintenanceWorkOrder::query()->find($workOrderId);
+        if ($workOrder === null) {
+            return $this->respondError('Maintenance work order not found.', 404);
+        }
+
+        $validated = $request->validate([
+            'fileName' => ['required', 'string', 'max:255'],
+            'fileType' => ['required', 'string', 'max:80'],
+            'dataUrl' => ['required', 'string', 'max:14000000'],
+            'kind' => ['nullable', 'string', 'max:80'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+            'actor' => ['nullable', 'string', 'max:255'],
+        ]);
+        $this->validateProofDataUrl($validated['dataUrl'], 'dataUrl', requireDataUrl: true);
+
+        $attachments = is_array($workOrder->attachments) ? $workOrder->attachments : [];
+        $attachments[] = [
+            'fileName' => $this->sanitizeText($validated['fileName'], 'attachment'),
+            'fileType' => $this->sanitizeText($validated['fileType'], 'application/octet-stream'),
+            'dataUrl' => $validated['dataUrl'],
+            'kind' => $this->sanitizeText($validated['kind'] ?? 'proof', 'proof'),
+            'notes' => $this->nullableCleanText($validated['notes'] ?? ''),
+            'uploadedAt' => now()->toIso8601String(),
+        ];
+        $workOrder->attachments = $attachments;
+        $trail = is_array($workOrder->audit_trail) ? $workOrder->audit_trail : [];
+        $trail[] = $this->maintenanceWorkOrderAudit('attachment_added', $this->maintenanceWorkOrderActor($request), [
+            'fileName' => $validated['fileName'],
+        ]);
+        $workOrder->audit_trail = array_slice($trail, -100);
+        $workOrder->save();
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatMaintenanceWorkOrder($workOrder));
+    }
+
+    public function deleteMaintenanceWorkOrderAttachment(Request $request, string $workOrderId, int $index): JsonResponse
+    {
+        if (! $this->maintenanceWorkOrderTableAvailable()) {
+            return $this->respondError('Maintenance work order table is not available.', 503);
+        }
+
+        $workOrder = MaintenanceWorkOrder::query()->find($workOrderId);
+        if ($workOrder === null) {
+            return $this->respondError('Maintenance work order not found.', 404);
+        }
+
+        $attachments = is_array($workOrder->attachments) ? array_values($workOrder->attachments) : [];
+        if (! array_key_exists($index, $attachments)) {
+            return $this->respondError('Work order attachment not found.', 404);
+        }
+
+        $removed = $attachments[$index];
+        array_splice($attachments, $index, 1);
+        $workOrder->attachments = $attachments;
+        $trail = is_array($workOrder->audit_trail) ? $workOrder->audit_trail : [];
+        $trail[] = $this->maintenanceWorkOrderAudit('attachment_removed', $this->maintenanceWorkOrderActor($request), [
+            'fileName' => $removed['fileName'] ?? 'attachment',
+        ]);
+        $workOrder->audit_trail = array_slice($trail, -100);
+        $workOrder->save();
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatMaintenanceWorkOrder($workOrder));
     }
 
     public function notificationPreferences(): JsonResponse
@@ -4077,13 +4193,16 @@ class GeotabController extends Controller
     public function maintenance(): JsonResponse
     {
         $snapshot = $this->snapshot();
+        $workOrders = $this->mergeNativeMaintenanceWorkOrders($snapshot['maintenanceWorkOrders'] ?? []);
+        $overview = $snapshot['maintenanceOverview'];
+        $overview['workOrders'] = count($workOrders);
 
         return $this->respondData([
-            'overview' => $snapshot['maintenanceOverview'],
+            'overview' => $overview,
             'alerts' => $snapshot['maintenance'],
             'faults' => $snapshot['maintenanceFaults'],
             'dvir' => $snapshot['maintenanceDvir'],
-            'workOrders' => $snapshot['maintenanceWorkOrders'],
+            'workOrders' => $workOrders,
             'measurements' => $snapshot['maintenanceMeasurements'],
         ]);
     }
@@ -4100,14 +4219,16 @@ class GeotabController extends Controller
 
     public function maintenanceWorkOrders(): JsonResponse
     {
-        return $this->respondData($this->snapshot()['maintenanceWorkOrders']);
+        return $this->respondData(
+            $this->mergeNativeMaintenanceWorkOrders($this->snapshot()['maintenanceWorkOrders'] ?? [])
+        );
     }
 
     public function fuel(Request $request): JsonResponse
     {
         return $this->respondData(
             $this->filterFuelPayloadByVehicle(
-                $this->snapshot()['fuel'],
+                $this->mergeNativeFuelEvents($this->snapshot()['fuel']),
                 (string) $request->query('vehicle', ''),
             )
         );
@@ -4116,11 +4237,88 @@ class GeotabController extends Controller
     public function fuelTransactions(Request $request): JsonResponse
     {
         $fuel = $this->filterFuelPayloadByVehicle(
-            $this->snapshot()['fuel'],
+            $this->mergeNativeFuelEvents($this->snapshot()['fuel']),
             (string) $request->query('vehicle', ''),
         );
 
-        return $this->respondData($fuel['transactions'] ?? []);
+        return $this->respondData($fuel['normalizedEvents'] ?? $fuel['transactions'] ?? []);
+    }
+
+    public function storeManualFuelEvent(Request $request): JsonResponse
+    {
+        if (! $this->fuelEventTableAvailable()) {
+            return $this->respondError('Fuel event table is not available.', 503);
+        }
+
+        $fuelEvent = FuelEvent::query()->create($this->fuelEventAttributes(
+            $this->validateFuelEventPayload($request),
+            defaults: [
+                'event_type' => 'manual_record',
+                'source_type' => 'manual',
+                'review_status' => 'confirmed',
+                'confidence' => 'manual',
+            ],
+        ));
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatFuelEvent($fuelEvent));
+    }
+
+    public function updateFuelEvent(Request $request, string $eventId): JsonResponse
+    {
+        if (! $this->fuelEventTableAvailable()) {
+            return $this->respondError('Fuel event table is not available.', 503);
+        }
+
+        $fuelEvent = FuelEvent::query()->find($eventId);
+        if ($fuelEvent === null) {
+            return $this->respondError('Fuel event not found.', 404);
+        }
+
+        $fuelEvent->fill($this->fuelEventAttributes($this->validateFuelEventPayload($request, partial: true), $fuelEvent));
+        $fuelEvent->save();
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatFuelEvent($fuelEvent));
+    }
+
+    public function confirmFuelEvent(Request $request, string $eventId): JsonResponse
+    {
+        return $this->setFuelEventReviewStatus($request, $eventId, 'confirmed');
+    }
+
+    public function rejectFuelEvent(Request $request, string $eventId): JsonResponse
+    {
+        return $this->setFuelEventReviewStatus($request, $eventId, 'rejected');
+    }
+
+    public function storeFuelEventReceipt(Request $request, string $eventId): JsonResponse
+    {
+        if (! $this->fuelEventTableAvailable()) {
+            return $this->respondError('Fuel event table is not available.', 503);
+        }
+
+        $fuelEvent = FuelEvent::query()->find($eventId);
+        if ($fuelEvent === null) {
+            return $this->respondError('Fuel event not found.', 404);
+        }
+
+        $validated = $request->validate([
+            'fileName' => ['required', 'string', 'max:255'],
+            'fileType' => ['required', 'string', 'max:120'],
+            'dataUrl' => ['required', 'string', 'max:14000000'],
+        ]);
+        $this->validateProofDataUrl($validated['dataUrl'], 'dataUrl', requireDataUrl: true);
+
+        $fuelEvent->fill([
+            'receipt_file_name' => $this->sanitizeText($validated['fileName'], 'receipt'),
+            'receipt_file_type' => $this->sanitizeText($validated['fileType'], 'application/octet-stream'),
+            'receipt_file_data' => $validated['dataUrl'],
+        ]);
+        $fuelEvent->save();
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatFuelEvent($fuelEvent));
     }
 
     public function fuelPriceSettings(): JsonResponse
@@ -5044,13 +5242,7 @@ class GeotabController extends Controller
         }
 
         $pod = ProofOfDelivery::query()->where('trip_id', $tripId)->first();
-        $attachments = [];
-        foreach ((array) ($pod?->attachments ?? []) as $attachment) {
-            $path = $this->podAttachmentPath($attachment);
-            if ($path !== null) {
-                $attachments[] = $path;
-            }
-        }
+        $attachments = array_values(array_filter((array) ($pod?->attachments ?? []), 'is_string'));
         $path = $attachments[$index] ?? null;
 
         if ($pod === null || $path === null || ! Storage::disk('local')->exists($path)) {
@@ -6380,15 +6572,22 @@ class GeotabController extends Controller
             $volume = (float) data_get($fillUp, 'volume', data_get($fillUp, 'derivedVolume', 0));
             $cost = (float) data_get($fillUp, 'cost', 0);
             $pricePerLiter = $volume > 0 ? round($cost / $volume, 2) : 0.0;
+            $coordinate = $this->coordinateParts(data_get($fillUp, 'location'));
 
             $fillUpEvents[] = $this->withFuelEstimate([
+                'id' => $this->idFromValue($fillUp) ?: 'fillup-'.substr(md5(json_encode($fillUp)), 0, 12),
+                'sourceRecordId' => $this->idFromValue($fillUp) ?: substr(md5(json_encode($fillUp)), 0, 12),
                 'vehicle' => $this->plateForDevice($device),
+                'vehicleGeotabId' => $deviceId ?: null,
                 'driver' => $this->userDisplayName(data_get($fillUp, 'driver')),
                 'station' => $this->sanitizeText(data_get($fillUp, 'vendorName', ''), '') !== ''
                     ? $this->sanitizeText(data_get($fillUp, 'vendorName', ''), '')
                     : 'Geotab fuel event',
+                'stationName' => $this->sanitizeText(data_get($fillUp, 'vendorName', ''), '') ?: null,
                 'date' => $this->displayDate($date),
                 'dateTime' => $date?->toIso8601String(),
+                'latitude' => $coordinate['latitude'] ?? null,
+                'longitude' => $coordinate['longitude'] ?? null,
                 'volumeLiters' => round($volume, 2),
                 'liters' => round($volume, 2),
                 'pricePerLiter' => $pricePerLiter,
@@ -6637,6 +6836,7 @@ class GeotabController extends Controller
 
             $maintenance[] = [
                 'vehicle' => $vehicle['plate'],
+                'geotabId' => $vehicle['geotabId'] ?? null,
                 'type' => $offline
                     ? 'Connectivity Check'
                     : ($serviceDue ? 'Preventive Maintenance' : 'Fuel Attention'),
@@ -6650,6 +6850,9 @@ class GeotabController extends Controller
                 'date' => substr((string) ($vehicle['lastUpdated'] ?? now()->toIso8601String()), 0, 10),
                 'mileage' => $vehicle['mileage'],
                 'priority' => $offline ? 'High' : ($serviceDue ? 'Medium' : 'Low'),
+                'sourceType' => $offline ? 'geotab_status' : ($serviceDue ? 'service_threshold' : 'geotab_status'),
+                'sourceRecordId' => ($vehicle['geotabId'] ?? $vehicle['plate'] ?? 'vehicle').'-'.($offline ? 'offline' : ($serviceDue ? 'service' : 'fuel')),
+                'sourceSummary' => $offline ? 'DeviceStatusInfo reports the asset is not communicating.' : 'Generated from GeoTab telemetry thresholds.',
             ];
         }
 
@@ -6679,30 +6882,93 @@ class GeotabController extends Controller
         usort($maintenanceDvir, fn (array $a, array $b) => strcmp((string) ($b['dateTime'] ?? ''), (string) ($a['dateTime'] ?? '')));
 
         $maintenanceWorkOrders = array_values(array_map(function (array $record, int $index): array {
+            $sourceType = $this->normalizeWorkOrderSource((string) ($record['sourceType'] ?? 'service_threshold'));
+            $sourceRecordId = (string) ($record['sourceRecordId'] ?? ('maintenance-alert-'.md5(json_encode($record))));
+
             return [
                 'id' => 'WO-'.str_pad((string) ($index + 1), 4, '0', STR_PAD_LEFT),
+                'workOrderId' => 'WO-'.str_pad((string) ($index + 1), 4, '0', STR_PAD_LEFT),
                 'vehicle' => $record['vehicle'],
+                'vehiclePlate' => $record['vehicle'],
+                'vehicleGeotabId' => $record['geotabId'] ?? null,
                 'title' => $record['type'],
                 'description' => $record['description'],
                 'status' => $record['status'],
+                'statusLabel' => $this->workOrderStatusLabel((string) ($record['status'] ?? 'open')),
                 'priority' => $record['priority'],
                 'scheduledDate' => $record['date'],
                 'cost' => $record['cost'],
+                'sourceType' => $sourceType,
+                'sourceLabel' => $this->workOrderSourceLabel($sourceType),
+                'sourceRecordId' => $sourceRecordId,
+                'sourceSummary' => $record['sourceSummary'] ?? $record['description'],
+                'isNativeWorkOrder' => false,
+                'isDerivedWorkOrder' => true,
+                'isGeotabBacked' => $sourceType !== 'manual',
+                'assignedTo' => 'Unassigned',
+                'attachmentCount' => 0,
+                'attachments' => [],
             ];
         }, $maintenance, array_keys($maintenance)));
 
         foreach (array_slice($maintenanceDvir, 0, 8) as $dvir) {
+            $sourceRecordId = (string) ($dvir['id'] ?? $dvir['geotabId'] ?? substr(md5(json_encode($dvir)), 0, 12));
             $maintenanceWorkOrders[] = [
                 'id' => 'DVIR-'.substr(md5(json_encode($dvir)), 0, 8),
+                'workOrderId' => 'DVIR-'.substr(md5(json_encode($dvir)), 0, 8),
                 'vehicle' => $dvir['vehicle'],
+                'vehiclePlate' => $dvir['vehicle'],
+                'vehicleGeotabId' => $dvir['geotabId'] ?? null,
                 'title' => 'DVIR Inspection',
                 'description' => $dvir['driverRemark'] !== '' ? $dvir['driverRemark'] : 'Driver inspection log synced from Geotab.',
                 'status' => $dvir['isSafeToOperate'] ? 'scheduled' : 'in progress',
+                'statusLabel' => $this->workOrderStatusLabel($dvir['isSafeToOperate'] ? 'open' : 'in_progress'),
                 'priority' => $dvir['isSafeToOperate'] ? 'Medium' : 'High',
                 'scheduledDate' => $dvir['displayDate'],
                 'cost' => 'N/A',
+                'sourceType' => 'geotab_dvir',
+                'sourceLabel' => $this->workOrderSourceLabel('geotab_dvir'),
+                'sourceRecordId' => $sourceRecordId,
+                'sourceSummary' => 'Derived from GeoTab DVIR inspection evidence.',
+                'isNativeWorkOrder' => false,
+                'isDerivedWorkOrder' => true,
+                'isGeotabBacked' => true,
+                'assignedTo' => 'Unassigned',
+                'attachmentCount' => 0,
+                'attachments' => [],
             ];
         }
+
+        foreach (array_slice($maintenanceFaults, 0, 12) as $fault) {
+            $sourceRecordId = (string) ($fault['id'] ?? $fault['geotabId'] ?? $fault['faultCode'] ?? substr(md5(json_encode($fault)), 0, 12));
+            $maintenanceWorkOrders[] = [
+                'id' => 'FAULT-'.substr(md5(json_encode($fault)), 0, 8),
+                'workOrderId' => 'FAULT-'.substr(md5(json_encode($fault)), 0, 8),
+                'vehicle' => $fault['vehicle'] ?? 'Unknown',
+                'vehiclePlate' => $fault['vehicle'] ?? 'Unknown',
+                'vehicleGeotabId' => $fault['geotabId'] ?? null,
+                'title' => 'Inspect '.$this->sanitizeText($fault['faultCode'] ?? $fault['code'] ?? 'GeoTab Fault', 'GeoTab Fault'),
+                'description' => $this->sanitizeText($fault['description'] ?? $fault['failureMode'] ?? 'Diagnostic fault requires maintenance review.', 'Diagnostic fault requires maintenance review.'),
+                'status' => 'open',
+                'statusLabel' => $this->workOrderStatusLabel('open'),
+                'priority' => $this->sanitizeText($fault['severity'] ?? 'High', 'High'),
+                'scheduledDate' => $fault['displayDate'] ?? substr((string) ($fault['dateTime'] ?? now()->toIso8601String()), 0, 10),
+                'cost' => 'N/A',
+                'sourceType' => 'geotab_fault',
+                'sourceLabel' => $this->workOrderSourceLabel('geotab_fault'),
+                'sourceRecordId' => $sourceRecordId,
+                'sourceSummary' => 'Derived from GeoTab FaultData.',
+                'isNativeWorkOrder' => false,
+                'isDerivedWorkOrder' => true,
+                'isGeotabBacked' => true,
+                'assignedTo' => 'Unassigned',
+                'attachmentCount' => 0,
+                'attachments' => [],
+            ];
+        }
+
+        $maintenanceWorkOrders = $this->mergeNativeMaintenanceWorkOrders($maintenanceWorkOrders);
+        $vehicles = $this->attachMaintenanceWorkOrdersToVehicles($vehicles, $maintenanceWorkOrders);
 
         $maintenanceMeasurements = array_values(array_map(function (array $vehicle): array {
             return [
@@ -8474,6 +8740,345 @@ class GeotabController extends Controller
         return $groupId === '' ? [] : [['id' => $groupId]];
     }
 
+    private function setFuelEventReviewStatus(Request $request, string $eventId, string $status): JsonResponse
+    {
+        if (! $this->fuelEventTableAvailable()) {
+            return $this->respondError('Fuel event table is not available.', 503);
+        }
+
+        $fuelEvent = FuelEvent::query()->find($eventId);
+        if ($fuelEvent === null) {
+            return $this->respondError('Fuel event not found.', 404);
+        }
+
+        $validated = $request->validate([
+            'notes' => ['nullable', 'string', 'max:5000'],
+            'reason' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $fuelEvent->review_status = $status;
+        if ($status === 'rejected') {
+            $fuelEvent->rejection_reason = $this->sanitizeText($validated['reason'] ?? $validated['notes'] ?? '', 'Rejected by fuel review.');
+        }
+        if (array_key_exists('notes', $validated)) {
+            $fuelEvent->notes = $this->nullableCleanText($validated['notes'] ?? '');
+        }
+        $fuelEvent->save();
+        $this->clearFleetCaches();
+
+        return $this->respondData($this->formatFuelEvent($fuelEvent));
+    }
+
+    private function validateFuelEventPayload(Request $request, bool $partial = false): array
+    {
+        $validated = $request->validate([
+            'vehicleGeotabId' => ['nullable', 'string', 'max:120'],
+            'vehiclePlate' => [$partial ? 'sometimes' : 'required', 'string', 'max:120'],
+            'driverName' => ['nullable', 'string', 'max:255'],
+            'eventType' => ['nullable', 'string', 'max:60'],
+            'sourceType' => ['nullable', 'string', 'max:60'],
+            'sourceRecordId' => ['nullable', 'string', 'max:255'],
+            'reviewStatus' => ['nullable', 'string', 'max:60'],
+            'confidence' => ['nullable', 'string', 'max:40'],
+            'stationName' => ['nullable', 'string', 'max:255'],
+            'stationProvider' => ['nullable', 'string', 'max:255'],
+            'stationPlaceId' => ['nullable', 'string', 'max:255'],
+            'stationAddress' => ['nullable', 'string', 'max:255'],
+            'stationDistanceMeters' => ['nullable', 'numeric', 'min:0'],
+            'fuelType' => ['nullable', 'string', 'max:40'],
+            'eventAt' => [$partial ? 'sometimes' : 'required', 'date'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'liters' => [$partial ? 'sometimes' : 'required', 'numeric', 'min:0'],
+            'pricePerLiter' => ['nullable', 'numeric', 'min:0'],
+            'totalCost' => ['nullable', 'numeric', 'min:0'],
+            'odometerKm' => ['nullable', 'numeric', 'min:0'],
+            'notes' => ['nullable', 'string', 'max:5000'],
+            'meta' => ['nullable', 'array'],
+        ]);
+
+        return $validated;
+    }
+
+    private function fuelEventAttributes(array $validated, ?FuelEvent $fuelEvent = null, array $defaults = []): array
+    {
+        $attributes = $defaults;
+        foreach ([
+            'vehicleGeotabId' => 'vehicle_geotab_id',
+            'driverName' => 'driver_name',
+            'sourceRecordId' => 'source_record_id',
+            'stationName' => 'station_name',
+            'stationProvider' => 'station_provider',
+            'stationPlaceId' => 'station_place_id',
+            'stationAddress' => 'station_address',
+            'notes' => 'notes',
+        ] as $incoming => $column) {
+            if (array_key_exists($incoming, $validated)) {
+                $attributes[$column] = $this->nullableCleanText($validated[$incoming] ?? '');
+            }
+        }
+        if (array_key_exists('vehiclePlate', $validated)) {
+            $attributes['vehicle_plate'] = strtoupper(trim((string) ($validated['vehiclePlate'] ?? ''))) ?: null;
+        }
+        foreach ([
+            'eventType' => 'event_type',
+            'sourceType' => 'source_type',
+            'reviewStatus' => 'review_status',
+            'confidence' => 'confidence',
+            'fuelType' => 'fuel_type',
+        ] as $incoming => $column) {
+            if (array_key_exists($incoming, $validated)) {
+                $attributes[$column] = $this->normalizeFuelToken((string) ($validated[$incoming] ?? ''));
+            }
+        }
+        if (array_key_exists('eventAt', $validated)) {
+            $attributes['event_at'] = Carbon::parse($validated['eventAt']);
+        }
+        foreach ([
+            'stationDistanceMeters' => 'station_distance_meters',
+            'latitude' => 'latitude',
+            'longitude' => 'longitude',
+            'liters' => 'liters',
+            'pricePerLiter' => 'price_per_liter',
+            'totalCost' => 'total_cost',
+            'odometerKm' => 'odometer_km',
+        ] as $incoming => $column) {
+            if (array_key_exists($incoming, $validated)) {
+                $attributes[$column] = $validated[$incoming] ?? null;
+            }
+        }
+        if (array_key_exists('meta', $validated)) {
+            $attributes['meta'] = [
+                ...(is_array($fuelEvent?->meta) ? $fuelEvent->meta : []),
+                ...($validated['meta'] ?? []),
+            ];
+        }
+
+        $stationName = trim((string) ($attributes['station_name'] ?? $fuelEvent?->station_name ?? ''));
+        $latitude = $attributes['latitude'] ?? $fuelEvent?->latitude;
+        $longitude = $attributes['longitude'] ?? $fuelEvent?->longitude;
+        if ($stationName === '' && is_numeric($latitude) && is_numeric($longitude)) {
+            $station = app(GoogleMapsEnrichmentService::class)->nearestFuelStation([
+                'latitude' => (float) $latitude,
+                'longitude' => (float) $longitude,
+            ]);
+            if ($station !== null) {
+                $attributes['station_name'] = $station['name'] ?? null;
+                $attributes['station_place_id'] = $station['placeId'] ?? null;
+                $attributes['station_address'] = $station['address'] ?? null;
+                $attributes['station_distance_meters'] = $station['distanceMeters'] ?? null;
+                $attributes['confidence'] = $attributes['confidence'] ?? ($station['confidence'] ?? 'uncertain');
+            }
+        }
+
+        return $attributes;
+    }
+
+    private function normalizeFuelToken(string $value): string
+    {
+        $token = strtolower(str_replace([' ', '-'], '_', trim($value)));
+
+        return $token !== '' ? $token : 'manual';
+    }
+
+    private function mergeNativeFuelEvents(array $fuel): array
+    {
+        $events = array_values(array_map(
+            fn (array $row): array => $this->normalizeFuelPayloadRow($row, 'derived_fill_up', 'geotab_fill_up', 'verified', 'derived'),
+            is_array($fuel['events'] ?? null) ? $fuel['events'] : [],
+        ));
+        $transactions = array_values(array_map(
+            fn (array $row): array => $this->normalizeFuelPayloadRow($row, 'confirmed_transaction', 'geotab_transaction', 'confirmed', 'exact'),
+            is_array($fuel['transactions'] ?? null) ? $fuel['transactions'] : [],
+        ));
+        $native = $this->loadNativeFuelEvents();
+
+        $sourceKeys = [];
+        foreach ([...$transactions, ...$events] as $row) {
+            $key = $this->fuelSourceKey($row);
+            if ($key !== null) {
+                $sourceKeys[$key] = true;
+            }
+        }
+        foreach ($native as $row) {
+            $key = $this->fuelSourceKey($row);
+            if ($key !== null && isset($sourceKeys[$key])) {
+                continue;
+            }
+            if (($row['reviewStatus'] ?? '') === 'confirmed') {
+                $transactions[] = $row;
+            } else {
+                $events[] = $row;
+            }
+        }
+
+        $normalized = [...$transactions, ...$events];
+        usort($normalized, fn (array $a, array $b): int => strcmp((string) ($b['dateTime'] ?? ''), (string) ($a['dateTime'] ?? '')));
+
+        return [
+            ...$fuel,
+            'events' => $events,
+            'transactions' => $transactions,
+            'normalizedEvents' => $normalized,
+            'confirmedEvents' => array_values(array_filter($normalized, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'confirmed')),
+            'suggestedEvents' => array_values(array_filter($normalized, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'needs_review')),
+            'stationMatches' => array_values(array_filter($normalized, fn (array $row): bool => filled($row['stationPlaceId'] ?? null))),
+            'reviewSummary' => [
+                'confirmed' => count(array_filter($normalized, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'confirmed')),
+                'needsReview' => count(array_filter($normalized, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'needs_review')),
+                'rejected' => count(array_filter($normalized, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'rejected')),
+                'exactTransactions' => count(array_filter($normalized, fn (array $row): bool => ($row['eventType'] ?? '') === 'confirmed_transaction')),
+            ],
+            'totals' => $this->fuelTotalsFromRows($fuel, $transactions, is_array($fuel['usageByVehicle'] ?? null) ? $fuel['usageByVehicle'] : [], is_array($fuel['chargeEvents'] ?? null) ? $fuel['chargeEvents'] : []),
+        ];
+    }
+
+    private function normalizeFuelPayloadRow(array $row, string $eventType, string $sourceType, string $reviewStatus, string $confidence): array
+    {
+        $sourceRecordId = (string) ($row['sourceRecordId'] ?? $row['id'] ?? $row['geotabId'] ?? substr(md5(json_encode($row)), 0, 12));
+        $liters = (float) ($row['liters'] ?? $row['volumeLiters'] ?? 0);
+        $cost = (float) ($row['totalCost'] ?? $row['cost'] ?? $row['estimatedCost'] ?? 0);
+        $price = (float) ($row['pricePerLiter'] ?? $row['fuelPricePerLiter'] ?? ($liters > 0 ? $cost / $liters : 0));
+        $station = $this->nullableCleanText($row['station'] ?? $row['siteName'] ?? null);
+
+        return [
+            ...$row,
+            'eventType' => $eventType,
+            'sourceType' => $sourceType,
+            'sourceRecordId' => $sourceRecordId,
+            'reviewStatus' => $row['reviewStatus'] ?? $reviewStatus,
+            'confidence' => $row['confidence'] ?? $confidence,
+            'source' => $row['source'] ?? ($sourceType === 'manual' ? 'Manual' : 'GeoTab'),
+            'sourceLabel' => $this->fuelSourceLabel($sourceType),
+            'confidenceLabel' => $this->fuelConfidenceLabel((string) ($row['confidence'] ?? $confidence)),
+            'reviewStatusLabel' => $this->fuelReviewStatusLabel((string) ($row['reviewStatus'] ?? $reviewStatus)),
+            'station' => $station ?: 'Not reported',
+            'stationName' => $station,
+            'stationProvider' => $row['stationProvider'] ?? $row['provider'] ?? null,
+            'stationPlaceId' => $row['stationPlaceId'] ?? null,
+            'stationAddress' => $row['stationAddress'] ?? null,
+            'stationDistanceMeters' => $row['stationDistanceMeters'] ?? null,
+            'liters' => round($liters, 2),
+            'volumeLiters' => round($liters, 2),
+            'pricePerLiter' => round($price, 2),
+            'fuelPricePerLiter' => round($price, 2),
+            'totalCost' => round($cost, 2),
+            'cost' => round($cost, 2),
+            'costLabel' => $cost > 0 ? $this->money($cost) : ($row['costLabel'] ?? 'N/A'),
+            'date' => $row['date'] ?? $row['displayDate'] ?? null,
+            'dateTime' => $row['dateTime'] ?? $row['eventAt'] ?? null,
+        ];
+    }
+
+    private function loadNativeFuelEvents(): array
+    {
+        if (! $this->fuelEventTableAvailable()) {
+            return [];
+        }
+
+        return array_values(array_map(
+            fn (FuelEvent $event): array => $this->formatFuelEvent($event),
+            FuelEvent::query()->orderByDesc('event_at')->orderByDesc('id')->limit(500)->get()->all(),
+        ));
+    }
+
+    private function formatFuelEvent(FuelEvent $event): array
+    {
+        $liters = (float) ($event->liters ?? 0);
+        $cost = (float) ($event->total_cost ?? 0);
+        $price = (float) ($event->price_per_liter ?? ($liters > 0 ? $cost / $liters : 0));
+
+        return $this->normalizeFuelPayloadRow([
+            'id' => (string) $event->id,
+            'sourceRecordId' => $event->source_record_id,
+            'vehicle' => $event->vehicle_plate ?: 'N/A',
+            'vehiclePlate' => $event->vehicle_plate,
+            'vehicleGeotabId' => $event->vehicle_geotab_id,
+            'driver' => $event->driver_name ?: 'Unassigned',
+            'station' => $event->station_name,
+            'stationName' => $event->station_name,
+            'stationProvider' => $event->station_provider,
+            'stationPlaceId' => $event->station_place_id,
+            'stationAddress' => $event->station_address,
+            'stationDistanceMeters' => $event->station_distance_meters,
+            'fuelType' => $event->fuel_type,
+            'dateTime' => $event->event_at?->toIso8601String(),
+            'displayDate' => $this->displayDate($event->event_at),
+            'date' => $this->displayDate($event->event_at),
+            'liters' => $liters,
+            'volumeLiters' => $liters,
+            'pricePerLiter' => $price,
+            'cost' => $cost,
+            'totalCost' => $cost,
+            'odometerKm' => $event->odometer_km,
+            'source' => $event->source_type === 'manual' ? 'Manual' : 'PioneerPath',
+            'hasReceipt' => filled($event->receipt_file_data),
+            'receiptFileName' => $event->receipt_file_name,
+            'notes' => $event->notes,
+            'rejectionReason' => $event->rejection_reason,
+            'meta' => $event->meta ?? [],
+        ], $event->event_type, $event->source_type, $event->review_status, $event->confidence);
+    }
+
+    private function fuelSourceKey(array $row): ?string
+    {
+        $sourceType = trim((string) ($row['sourceType'] ?? ''));
+        $sourceRecordId = trim((string) ($row['sourceRecordId'] ?? ''));
+        if ($sourceType === '' || $sourceRecordId === '' || $sourceType === 'manual') {
+            return null;
+        }
+
+        return $sourceType.'|'.$sourceRecordId;
+    }
+
+    private function fuelTotalsFromRows(array $fuel, array $spendRows, array $usage, array $chargeEvents): array
+    {
+        $totalSpend = round(array_sum(array_map(fn (array $row): float => (float) ($row['totalCost'] ?? $row['cost'] ?? 0), $spendRows)), 2);
+        $totalLiters = round(array_sum(array_map(fn (array $row): float => (float) ($row['liters'] ?? $row['volumeLiters'] ?? 0), $spendRows)), 2);
+
+        return [
+            ...(is_array($fuel['totals'] ?? null) ? $fuel['totals'] : []),
+            'totalSpend' => $totalSpend,
+            'totalLiters' => $totalLiters,
+            'avgPricePerLiter' => $this->safeDivide($totalSpend, $totalLiters),
+            'fuelUsedLiters' => round(array_sum(array_map(fn (array $row): float => (float) ($row['fuelUsedLiters'] ?? 0), $usage)), 2),
+            'idlingFuelUsedLiters' => round(array_sum(array_map(fn (array $row): float => (float) ($row['idlingFuelUsedLiters'] ?? 0), $usage)), 2),
+            'energyUsedKwh' => round(array_sum(array_map(fn (array $row): float => (float) ($row['energyUsedKwh'] ?? 0), $usage)), 2),
+            'chargingSessions' => count($chargeEvents),
+            'vehiclesReporting' => count(array_filter($usage, fn (array $row): bool => (float) ($row['fuelUsedLiters'] ?? 0) > 0)),
+        ];
+    }
+
+    private function fuelSourceLabel(string $sourceType): string
+    {
+        return match ($sourceType) {
+            'geotab_transaction' => 'Exact GeoTab Transaction',
+            'geotab_fill_up' => 'GeoTab Fill-Up',
+            'station_stop' => 'Station Match',
+            default => 'Manual Record',
+        };
+    }
+
+    private function fuelConfidenceLabel(string $confidence): string
+    {
+        return match ($confidence) {
+            'exact' => 'Exact',
+            'derived' => 'Derived',
+            'likely' => 'Likely',
+            'uncertain' => 'Uncertain',
+            default => 'Manual',
+        };
+    }
+
+    private function fuelReviewStatusLabel(string $status): string
+    {
+        return match ($status) {
+            'confirmed' => 'Confirmed',
+            'rejected' => 'Rejected',
+            default => 'Needs Review',
+        };
+    }
+
     private function withFuelEstimate(array $record, array $settings): array
     {
         $volume = (float) ($record['volumeLiters'] ?? $record['liters'] ?? 0);
@@ -8532,9 +9137,14 @@ class GeotabController extends Controller
         return [
             'id' => $this->idFromValue($transaction),
             'geotabId' => $this->idFromValue(data_get($transaction, 'device')),
+            'sourceRecordId' => $this->idFromValue($transaction) ?: substr(md5(json_encode($transaction)), 0, 12),
             'vehicle' => $this->plateForDevice($device),
+            'vehicleGeotabId' => $this->idFromValue(data_get($transaction, 'device')),
             'driver' => $this->userDisplayName(data_get($transaction, 'driver')),
             'siteName' => $this->sanitizeText(data_get($transaction, 'siteName', ''), 'Unknown Station'),
+            'station' => $this->sanitizeText(data_get($transaction, 'siteName', ''), 'Unknown Station'),
+            'stationName' => $this->sanitizeText(data_get($transaction, 'siteName', ''), 'Unknown Station'),
+            'stationProvider' => $this->stringValue(data_get($transaction, 'provider')),
             'provider' => $this->stringValue(data_get($transaction, 'provider')),
             'productType' => $this->stringValue(data_get($transaction, 'productType')) ?: 'N/A',
             'dateTime' => $date?->toIso8601String(),
@@ -8646,7 +9256,7 @@ class GeotabController extends Controller
         $distanceKm = round((float) ($trip['distanceKm'] ?? 0), 2);
         $status = $this->normalizeWorkflowStatus($trip['status'] ?? 'pending');
         $fulfillmentMethod = $this->fulfillmentMethodForTrip($trip, $orderValue, $distanceKm);
-        $workflow = $this->deliveryWorkflowForTrip($trip, $status, $fulfillmentMethod, $orderValue);
+        $workflow = $this->salesDeliveryWorkflowForTrip($trip, $status, $fulfillmentMethod, $orderValue);
         $routeFallback = $this->tripCoordinateFallback($trip);
         $origin = $this->sanitizeText($trip['origin'] ?? '', '');
         $destination = $this->sanitizeText($trip['destination'] ?? '', '');
@@ -8866,146 +9476,119 @@ class GeotabController extends Controller
         };
     }
 
-    private function deliveryWorkflowForTrip(
+    private function salesDeliveryWorkflowForTrip(
         array $trip,
         string $status,
         string $fulfillmentMethod,
         float $orderValue,
     ): array {
-        $tripId = trim((string) ($trip['tripId'] ?? ''));
-        $hasTripDetails = trim((string) ($trip['customer'] ?? '')) !== ''
-            && trim((string) ($trip['origin'] ?? '')) !== ''
-            && trim((string) ($trip['destination'] ?? '')) !== '';
-        $hasVehicle = trim((string) ($trip['vehicle'] ?? '')) !== '';
-        $hasDriver = trim((string) ($trip['driver'] ?? '')) !== '';
-        $hasAssignment = $hasVehicle && $hasDriver;
+        $poReceived = ($trip['poReceived'] ?? true) !== false;
+        $hasAssignment = trim((string) ($trip['vehicle'] ?? '')) !== '' || trim((string) ($trip['driver'] ?? '')) !== '';
         $isCompleted = $status === 'completed';
-        $isArrived = in_array($status, ['arrived', 'completed'], true);
-        $isDispatched = in_array($status, ['dispatched', 'active', 'in_progress', 'in progress', 'on trip', 'arrived', 'completed'], true);
+        $isDispatched = $status === 'dispatched';
         $isDelivery = in_array($fulfillmentMethod, ['free_delivery', 'paid_delivery'], true);
-        $pod = $tripId !== '' ? $this->loadPod($tripId) : null;
-        $podSubmitted = is_array($pod);
-        $podVerified = $podSubmitted
-            && in_array(strtolower((string) ($pod['status'] ?? '')), ['delivered', 'completed', 'verified'], true)
-            && ((bool) ($pod['hasSignature'] ?? false) || count((array) ($pod['attachments'] ?? [])) > 0);
-        $invoiceStatus = $this->billingReferenceStatusForTrip($tripId);
-        $invoiceDrafted = $invoiceStatus !== null || ($isCompleted && $podVerified);
-        $accountingReviewed = in_array($invoiceStatus, ['approved', 'issued', 'sent', 'paid', 'overdue', 'voided'], true);
         $explicitPhaseNumber = ($trip['workflowPhaseLocked'] ?? false) === true && isset($trip['workflowPhaseNumber'])
             ? max(1, min(12, (int) $trip['workflowPhaseNumber']))
             : null;
 
         $steps = [
             [
-                'key' => 'trip_request',
-                'label' => 'Trip request created',
-                'phase' => 'request',
+                'key' => 'inquiry',
+                'label' => 'Inquiry received',
+                'phase' => 'sales',
                 'status' => 'done',
-                'owner' => 'Dispatch',
-                'detail' => 'Delivery request is recorded with trip reference '.$this->sanitizeText($tripId, 'TBA').'.',
+                'owner' => 'Sales',
+                'detail' => 'Client inquiry captured from Viber or sales channel.',
             ],
             [
-                'key' => 'trip_details',
-                'label' => 'Required trip details completed',
-                'phase' => 'request',
-                'status' => $hasTripDetails ? 'done' : 'active',
-                'owner' => 'Dispatch',
-                'detail' => $hasTripDetails
-                    ? 'Client, origin, destination, and delivery amount are ready for dispatch review.'
-                    : 'Complete client, origin, and destination details before assignment.',
+                'key' => 'stock_check',
+                'label' => 'Stock availability checked',
+                'phase' => 'sales',
+                'status' => 'done',
+                'owner' => 'Sales',
+                'detail' => 'Availability confirmed before quotation.',
             ],
             [
-                'key' => 'vehicle_availability',
-                'label' => 'Vehicle availability checked',
-                'phase' => 'dispatch',
-                'status' => $hasVehicle ? 'done' : ($hasTripDetails ? 'active' : 'pending'),
-                'owner' => 'Fleet Manager',
-                'detail' => $hasVehicle ? 'Assigned vehicle is available for this delivery.' : 'Select an available vehicle with suitable capacity.',
+                'key' => 'quotation',
+                'label' => 'Quotation sent',
+                'phase' => 'sales',
+                'status' => $poReceived ? 'done' : 'active',
+                'owner' => 'Sales',
+                'detail' => 'Quotation is sent through Viber and waits for PO confirmation.',
             ],
             [
-                'key' => 'driver_availability',
-                'label' => 'Driver availability checked',
-                'phase' => 'dispatch',
-                'status' => $hasDriver ? 'done' : ($hasVehicle ? 'active' : 'pending'),
-                'owner' => 'Dispatcher',
-                'detail' => $hasDriver ? 'Assigned driver is available for this delivery.' : 'Select an available driver before dispatch.',
+                'key' => 'po_confirmation',
+                'label' => 'PO received',
+                'phase' => 'sales',
+                'status' => $poReceived ? 'done' : 'blocked',
+                'owner' => 'Sales',
+                'detail' => $poReceived ? 'Order confirmed for fulfillment.' : 'Follow up or revise quote.',
+            ],
+            [
+                'key' => 'fulfillment_strategy',
+                'label' => 'Fulfillment method selected',
+                'phase' => 'logistics',
+                'status' => $poReceived ? 'done' : 'pending',
+                'owner' => 'Logistics',
+                'detail' => $this->fulfillmentLabel($fulfillmentMethod).' based on order value '.$this->money($orderValue).'.',
+            ],
+            [
+                'key' => 'service_advisor_request',
+                'label' => 'Delivery request to Service Advisor',
+                'phase' => 'logistics',
+                'status' => $isDelivery ? ($hasAssignment || $isDispatched || $isCompleted ? 'done' : 'active') : 'not_required',
+                'owner' => 'Service Advisor',
+                'detail' => 'Client, address, date, amount, weight, vehicle, and driver should be confirmed.',
             ],
             [
                 'key' => 'assignment',
                 'label' => 'Vehicle and driver assigned',
-                'phase' => 'dispatch',
-                'status' => $hasAssignment ? 'done' : (($hasVehicle || $hasDriver) ? 'active' : 'pending'),
-                'owner' => 'Dispatcher',
-                'detail' => $hasAssignment ? 'Vehicle and driver are assigned.' : 'Both vehicle and driver must be assigned.',
+                'phase' => 'logistics',
+                'status' => $hasAssignment ? 'done' : ($isDelivery ? 'active' : 'not_required'),
+                'owner' => 'Dispatch',
+                'detail' => $hasAssignment ? 'Assigned resources are ready.' : 'Vehicle and driver are still TBA.',
             ],
             [
-                'key' => 'driver_notification',
-                'label' => 'Driver notified',
-                'phase' => 'dispatch',
-                'status' => $hasAssignment ? 'done' : ($isDelivery ? 'pending' : 'not_required'),
-                'owner' => 'Dispatcher',
-                'detail' => $hasAssignment ? 'Driver can view the assigned trip.' : 'Notify the driver after assignment.',
+                'key' => 'client_eta',
+                'label' => 'ETA and receiving schedule confirmed',
+                'phase' => 'execution',
+                'status' => $isDispatched || $isCompleted ? 'done' : ($hasAssignment ? 'active' : 'pending'),
+                'owner' => 'Coordinator',
+                'detail' => 'Coordinate departure time and confirm preferred receiving schedule.',
             ],
             [
-                'key' => 'in_transit',
-                'label' => 'Delivery in transit',
-                'phase' => 'transit',
-                'status' => $isArrived ? 'done' : ($hasAssignment ? 'active' : 'pending'),
+                'key' => 'driver_briefing',
+                'label' => 'Driver briefing and invoice handoff',
+                'phase' => 'execution',
+                'status' => $isDispatched || $isCompleted ? 'done' : ($hasAssignment ? 'active' : 'pending'),
+                'owner' => 'Dispatch',
+                'detail' => 'Provide invoice, signing requirements, and document copy instructions.',
+            ],
+            [
+                'key' => 'dispatch',
+                'label' => 'Delivery dispatched',
+                'phase' => 'execution',
+                'status' => $isDispatched || $isCompleted ? 'done' : ($isDelivery ? 'pending' : 'not_required'),
                 'owner' => 'Driver',
-                'detail' => $isDispatched ? 'Live tracking is active for this trip.' : 'Dispatch the truck and begin live tracking.',
+                'detail' => 'Driver departs and live tracking begins.',
             ],
             [
                 'key' => 'arrival',
-                'label' => 'Arrived at destination',
-                'phase' => 'transit',
-                'status' => $isArrived ? 'done' : 'pending',
+                'label' => 'Arrival at client location',
+                'phase' => 'execution',
+                'status' => $isCompleted ? 'done' : ($isDispatched ? 'active' : 'pending'),
                 'owner' => 'Driver',
-                'detail' => $isArrived ? 'Driver has reached the delivery destination.' : 'Confirm arrival at the destination.',
+                'detail' => 'Sales notifies client through Viber on arrival.',
             ],
             [
-                'key' => 'pod_submitted',
-                'label' => 'POD submitted',
-                'phase' => 'pod',
-                'status' => $podSubmitted ? 'done' : (($isArrived || $isCompleted) ? 'active' : 'pending'),
-                'owner' => 'Driver',
-                'detail' => $podSubmitted ? 'Proof-of-delivery evidence has been submitted.' : 'Upload photo, recipient, signature, or delivery confirmation.',
-            ],
-            [
-                'key' => 'pod_verified',
-                'label' => 'POD verified',
-                'phase' => 'pod',
-                'status' => $podVerified ? 'done' : ($podSubmitted ? 'active' : 'pending'),
-                'owner' => 'Accounting',
-                'detail' => $podVerified ? 'POD is complete enough for billing review.' : 'Verify POD evidence before issuing an invoice.',
-            ],
-            [
-                'key' => 'invoice_draft',
-                'label' => 'Invoice draft generated',
-                'phase' => 'billing',
-                'status' => $invoiceDrafted ? 'done' : ($podVerified ? 'active' : 'pending'),
-                'owner' => 'Accounting',
-                'detail' => $invoiceDrafted ? 'Trip-linked invoice draft is available.' : 'Generate the invoice draft from completed trip and POD evidence.',
-            ],
-            [
-                'key' => 'accounting_review',
-                'label' => 'Accounting reviewed',
-                'phase' => 'billing',
-                'status' => $accountingReviewed ? 'done' : ($invoiceDrafted ? 'active' : 'pending'),
-                'owner' => 'Accounting',
-                'detail' => $accountingReviewed ? 'Invoice has passed accounting review.' : 'Approve, issue, or reject the invoice after review.',
+                'key' => 'pod',
+                'label' => 'Delivery complete and POD confirmed',
+                'phase' => 'completion',
+                'status' => $isCompleted ? 'done' : 'pending',
+                'owner' => 'Client / Driver',
+                'detail' => 'Client receives and signs documents, driver confirms completion to Sales, and POD is recorded.',
             ],
         ];
-
-        if ($isCompleted && ! $podSubmitted) {
-            $steps[8]['status'] = 'active';
-            $steps[9]['status'] = 'pending';
-            $steps[10]['status'] = 'pending';
-            $steps[11]['status'] = 'pending';
-        }
-
-        if ($isCompleted && $podVerified && ! $invoiceDrafted) {
-            $steps[10]['status'] = 'active';
-        }
 
         if ($explicitPhaseNumber !== null) {
             foreach ($steps as $index => &$step) {
@@ -9021,7 +9604,7 @@ class GeotabController extends Controller
 
         $active = collect($steps)->first(fn (array $step): bool => in_array($step['status'], ['blocked', 'active'], true));
         $phaseNumber = $explicitPhaseNumber ?? $this->workflowPhaseNumberFromSteps($steps, $isCompleted);
-        $phase = $this->workflowPhaseSlug($phaseNumber, (string) ($active['phase'] ?? ($isCompleted ? 'billing' : 'dispatch')));
+        $phase = $this->workflowPhaseSlug($phaseNumber, (string) ($active['phase'] ?? ($isCompleted ? 'completion' : 'logistics')));
         $nextAction = (string) ($active['detail'] ?? $this->workflowPhaseMilestone($phaseNumber));
 
         return [
@@ -9029,11 +9612,10 @@ class GeotabController extends Controller
             'phaseNumber' => $phaseNumber,
             'group' => $this->workflowGroupForPhase($phaseNumber),
             'phaseLabel' => match ($phase) {
-                'request' => 'Trip request',
-                'dispatch' => 'Dispatch assignment',
-                'transit' => 'Delivery execution',
-                'pod' => 'POD verification',
-                default => 'Billing review',
+                'sales' => 'Inquiry & quotation',
+                'execution' => 'Delivery execution',
+                'completion' => 'Completion & POD',
+                default => 'Fulfillment strategy',
             },
             'nextAction' => $nextAction,
             'clientStatus' => $this->clientWorkflowStatus($phaseNumber),
@@ -9042,38 +9624,28 @@ class GeotabController extends Controller
         ];
     }
 
-    private function billingReferenceStatusForTrip(string $tripId): ?string
-    {
-        if ($tripId === '' || ! $this->billingInvoiceReferencesTableAvailable()) {
-            return null;
-        }
-
-        $status = BillingInvoiceReference::query()
-            ->where('trip_id', $tripId)
-            ->value('status');
-
-        return is_string($status) && trim($status) !== '' ? strtolower(trim($status)) : null;
-    }
-
     private function workflowPhaseNumberFromSteps(array $steps, bool $isCompleted): int
     {
+        if ($isCompleted) {
+            return 12;
+        }
+
         foreach ($steps as $index => $step) {
             if (in_array((string) ($step['status'] ?? ''), ['blocked', 'active'], true)) {
                 return min($index + 1, 12);
             }
         }
 
-        return $isCompleted ? 12 : 5;
+        return 7;
     }
 
     private function workflowPhaseSlug(int $phaseNumber, string $fallback): string
     {
         return match (true) {
-            $phaseNumber <= 2 => 'request',
-            $phaseNumber <= 6 => 'dispatch',
-            $phaseNumber <= 8 => 'transit',
-            $phaseNumber <= 10 => 'pod',
-            $phaseNumber >= 11 => 'billing',
+            $phaseNumber <= 6 => 'sales',
+            $phaseNumber <= 9 => 'logistics',
+            $phaseNumber <= 11 => 'execution',
+            $phaseNumber >= 12 => 'completion',
             default => $fallback,
         };
     }
@@ -9081,36 +9653,31 @@ class GeotabController extends Controller
     private function workflowGroupForPhase(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 2 => 'Pending Details',
             $phaseNumber <= 6 => 'Pending Assignment',
-            $phaseNumber === 7 => 'In Transit',
-            $phaseNumber === 8 => 'Arrived',
-            $phaseNumber <= 10 => 'Pending POD',
-            default => 'Billing Review',
+            $phaseNumber <= 9 => 'Ready to Dispatch',
+            $phaseNumber <= 11 => 'In Transit',
+            default => 'Completed',
         };
     }
 
     private function workflowPhaseMilestone(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 2 => 'Complete the delivery trip details.',
-            $phaseNumber <= 6 => 'Assign the vehicle, driver, and dispatch notification.',
-            $phaseNumber === 7 => 'Dispatch the truck and start live tracking.',
-            $phaseNumber === 8 => 'Confirm arrival at the delivery destination.',
-            $phaseNumber <= 10 => 'Submit and verify proof of delivery.',
-            default => 'Review, issue, or settle the trip-linked invoice.',
+            $phaseNumber <= 6 => 'Order details and quotation are being confirmed.',
+            $phaseNumber <= 9 => 'Delivery resources and receiving schedule are being arranged.',
+            $phaseNumber === 10 => 'Delivery is ready to leave the warehouse.',
+            $phaseNumber === 11 => 'Driver is arriving at the client location.',
+            default => 'Delivery is complete.',
         };
     }
 
     private function clientWorkflowStatus(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 2 => 'Your delivery request is being prepared',
-            $phaseNumber <= 6 => 'Your delivery is being assigned',
-            $phaseNumber === 7 => 'Your delivery is on its way',
-            $phaseNumber === 8 => 'Your delivery has arrived',
-            $phaseNumber <= 10 => 'Proof of delivery is being confirmed',
-            $phaseNumber === 11 => 'Your invoice is being prepared',
+            $phaseNumber <= 6 => 'Your order is being prepared',
+            $phaseNumber <= 9 => 'Your delivery is being arranged',
+            $phaseNumber === 10 => 'Your delivery is on its way',
+            $phaseNumber === 11 => 'Your delivery has arrived',
             default => 'Delivery complete',
         };
     }
@@ -9118,13 +9685,11 @@ class GeotabController extends Controller
     private function clientWorkflowMilestone(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 2 => 'Next: Pioneer completes the trip reference and delivery details.',
-            $phaseNumber <= 6 => 'Next: Pioneer assigns the vehicle, driver, and dispatch schedule.',
-            $phaseNumber === 7 => 'Next: Track the truck as it travels to your destination.',
-            $phaseNumber === 8 => 'Next: Receive the delivery and confirm arrival.',
-            $phaseNumber <= 10 => 'Next: Driver submits and Pioneer verifies proof of delivery.',
-            $phaseNumber === 11 => 'Next: Accounting prepares the delivery invoice.',
-            default => 'Thank you. Delivery and billing review are complete.',
+            $phaseNumber <= 6 => 'Next: Pioneer confirms items, quotation, and order details.',
+            $phaseNumber <= 9 => 'Next: Pioneer assigns the vehicle, driver, and delivery schedule.',
+            $phaseNumber === 10 => 'Next: Track the truck as it travels to your location.',
+            $phaseNumber === 11 => 'Next: Receive, sign, and confirm delivery documents.',
+            default => 'Thank you. Proof of delivery has been recorded.',
         };
     }
 
@@ -12625,15 +13190,20 @@ class GeotabController extends Controller
             is_array($fuel['chargeEvents'] ?? null) ? $fuel['chargeEvents'] : [],
             $matchesVehicle,
         ));
+        $normalizedEvents = array_values(array_filter(
+            is_array($fuel['normalizedEvents'] ?? null) ? $fuel['normalizedEvents'] : [],
+            $matchesVehicle,
+        ));
+        $confirmedEvents = array_values(array_filter(
+            is_array($fuel['confirmedEvents'] ?? null) ? $fuel['confirmedEvents'] : [],
+            $matchesVehicle,
+        ));
+        $suggestedEvents = array_values(array_filter(
+            is_array($fuel['suggestedEvents'] ?? null) ? $fuel['suggestedEvents'] : [],
+            $matchesVehicle,
+        ));
         $spendRows = $transactions !== [] ? $transactions : $events;
-        $totalSpend = round(array_sum(array_map(
-            fn (array $row): float => (float) ($row['totalCost'] ?? $row['cost'] ?? $row['estimatedCost'] ?? 0),
-            $spendRows,
-        )), 2);
-        $totalLiters = round(array_sum(array_map(
-            fn (array $row): float => (float) ($row['liters'] ?? $row['volumeLiters'] ?? 0),
-            $spendRows,
-        )), 2);
+        $totals = $this->fuelTotalsFromRows($fuel, $spendRows, $usage, $chargeEvents);
 
         return [
             ...$fuel,
@@ -12641,17 +13211,17 @@ class GeotabController extends Controller
             'usageByVehicle' => $usage,
             'transactions' => $transactions,
             'chargeEvents' => $chargeEvents,
-            'totals' => [
-                ...(is_array($fuel['totals'] ?? null) ? $fuel['totals'] : []),
-                'totalSpend' => $totalSpend,
-                'totalLiters' => $totalLiters,
-                'avgPricePerLiter' => $this->safeDivide($totalSpend, $totalLiters),
-                'fuelUsedLiters' => round(array_sum(array_map(fn (array $row): float => (float) ($row['fuelUsedLiters'] ?? 0), $usage)), 2),
-                'idlingFuelUsedLiters' => round(array_sum(array_map(fn (array $row): float => (float) ($row['idlingFuelUsedLiters'] ?? 0), $usage)), 2),
-                'energyUsedKwh' => round(array_sum(array_map(fn (array $row): float => (float) ($row['energyUsedKwh'] ?? 0), $usage)), 2),
-                'chargingSessions' => count($chargeEvents),
-                'vehiclesReporting' => count(array_filter($usage, fn (array $row): bool => (float) ($row['fuelUsedLiters'] ?? 0) > 0)),
+            'normalizedEvents' => $normalizedEvents,
+            'confirmedEvents' => $confirmedEvents,
+            'suggestedEvents' => $suggestedEvents,
+            'stationMatches' => array_values(array_filter($normalizedEvents, fn (array $row): bool => filled($row['stationPlaceId'] ?? null))),
+            'reviewSummary' => [
+                'confirmed' => count(array_filter($normalizedEvents, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'confirmed')),
+                'needsReview' => count(array_filter($normalizedEvents, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'needs_review')),
+                'rejected' => count(array_filter($normalizedEvents, fn (array $row): bool => ($row['reviewStatus'] ?? '') === 'rejected')),
+                'exactTransactions' => count(array_filter($normalizedEvents, fn (array $row): bool => ($row['eventType'] ?? '') === 'confirmed_transaction')),
             ],
+            'totals' => $totals,
             'selectedVehicle' => $selectedVehicle,
         ];
     }
@@ -12822,6 +13392,415 @@ class GeotabController extends Controller
     private function normalizeMaintenanceSource(string $source): string
     {
         return str_starts_with(strtolower(trim($source)), 'geotab') ? 'geotab' : 'manual';
+    }
+
+    private function validateMaintenanceWorkOrderPayload(Request $request, bool $partial = false): array
+    {
+        $validated = $request->validate([
+            'vehicleGeotabId' => ['nullable', 'string', 'max:120'],
+            'vehiclePlate' => [$partial ? 'sometimes' : 'required', 'string', 'max:120'],
+            'title' => [$partial ? 'sometimes' : 'required', 'string', 'max:255'],
+            'description' => [$partial ? 'sometimes' : 'required', 'string', 'max:3000'],
+            'priority' => ['nullable', 'string', 'max:40'],
+            'status' => ['nullable', 'string', 'max:40'],
+            'sourceType' => ['nullable', 'string', 'max:80'],
+            'sourceRecordId' => ['nullable', 'string', 'max:255'],
+            'sourceSummary' => ['nullable', 'string', 'max:2000'],
+            'assignedTo' => ['nullable', 'string', 'max:255'],
+            'scheduledAt' => ['nullable', 'date'],
+            'estimatedCost' => ['nullable', 'numeric', 'min:0'],
+            'actualCost' => ['nullable', 'numeric', 'min:0'],
+            'notes' => ['nullable', 'string', 'max:5000'],
+            'voidReason' => ['nullable', 'string', 'max:2000'],
+            'attachments' => ['nullable', 'array', 'max:12'],
+            'attachments.*.fileName' => ['required_with:attachments', 'string', 'max:255'],
+            'attachments.*.fileType' => ['required_with:attachments', 'string', 'max:80'],
+            'attachments.*.dataUrl' => ['required_with:attachments', 'string', 'max:14000000'],
+            'attachments.*.kind' => ['nullable', 'string', 'max:80'],
+            'attachments.*.notes' => ['nullable', 'string', 'max:1000'],
+            'actor' => ['nullable', 'string', 'max:255'],
+            'meta' => ['nullable', 'array'],
+        ]);
+
+        foreach (($validated['attachments'] ?? []) as $index => $attachment) {
+            $this->validateProofDataUrl($attachment['dataUrl'] ?? null, "attachments.$index.dataUrl", requireDataUrl: true);
+        }
+
+        return $validated;
+    }
+
+    private function maintenanceWorkOrderAttributes(array $validated, ?MaintenanceWorkOrder $workOrder = null): array
+    {
+        $attributes = [];
+        if (array_key_exists('vehicleGeotabId', $validated)) {
+            $attributes['vehicle_geotab_id'] = trim((string) ($validated['vehicleGeotabId'] ?? '')) ?: null;
+        }
+        if (array_key_exists('vehiclePlate', $validated)) {
+            $attributes['vehicle_plate'] = strtoupper(trim((string) ($validated['vehiclePlate'] ?? ''))) ?: null;
+        }
+        if (array_key_exists('title', $validated)) {
+            $attributes['title'] = $this->sanitizeText($validated['title'], 'Maintenance Work Order');
+        }
+        if (array_key_exists('description', $validated)) {
+            $attributes['description'] = $this->sanitizeText($validated['description'], '');
+        }
+        if (array_key_exists('priority', $validated)) {
+            $attributes['priority'] = $this->normalizeWorkOrderPriority((string) ($validated['priority'] ?? 'medium'));
+        } elseif ($workOrder === null) {
+            $attributes['priority'] = 'medium';
+        }
+        if (array_key_exists('status', $validated)) {
+            $attributes['status'] = $this->normalizeWorkOrderStatus((string) ($validated['status'] ?? 'open'));
+        } elseif ($workOrder === null) {
+            $attributes['status'] = 'open';
+        }
+        if (array_key_exists('sourceType', $validated)) {
+            $attributes['source_type'] = $this->normalizeWorkOrderSource((string) ($validated['sourceType'] ?? 'manual'));
+        } elseif ($workOrder === null) {
+            $attributes['source_type'] = 'manual';
+        }
+        if (array_key_exists('sourceRecordId', $validated)) {
+            $attributes['source_record_id'] = $this->nullableCleanText($validated['sourceRecordId'] ?? '');
+        }
+        if (array_key_exists('sourceSummary', $validated)) {
+            $attributes['source_summary'] = $this->nullableCleanText($validated['sourceSummary'] ?? '');
+        }
+        if (array_key_exists('assignedTo', $validated)) {
+            $attributes['assigned_to'] = $this->nullableCleanText($validated['assignedTo'] ?? '');
+            if (($attributes['assigned_to'] ?? null) !== null && (($workOrder?->status ?? $attributes['status'] ?? 'open') === 'open')) {
+                $attributes['status'] = 'assigned';
+            }
+        }
+        if (array_key_exists('scheduledAt', $validated)) {
+            $attributes['scheduled_at'] = trim((string) ($validated['scheduledAt'] ?? '')) !== ''
+                ? Carbon::parse($validated['scheduledAt'])
+                : null;
+        }
+        if (array_key_exists('estimatedCost', $validated)) {
+            $attributes['estimated_cost'] = $validated['estimatedCost'] ?? null;
+        }
+        if (array_key_exists('actualCost', $validated)) {
+            $attributes['actual_cost'] = $validated['actualCost'] ?? null;
+        }
+        if (array_key_exists('notes', $validated)) {
+            $attributes['notes'] = $this->nullableCleanText($validated['notes'] ?? '');
+        }
+        if (array_key_exists('attachments', $validated)) {
+            $attributes['attachments'] = array_values(array_map(
+                fn (array $attachment): array => [
+                    'fileName' => $this->sanitizeText($attachment['fileName'] ?? '', 'attachment'),
+                    'fileType' => $this->sanitizeText($attachment['fileType'] ?? '', 'application/octet-stream'),
+                    'dataUrl' => (string) ($attachment['dataUrl'] ?? ''),
+                    'kind' => $this->sanitizeText($attachment['kind'] ?? 'proof', 'proof'),
+                    'notes' => $this->nullableCleanText($attachment['notes'] ?? ''),
+                    'uploadedAt' => $attachment['uploadedAt'] ?? now()->toIso8601String(),
+                ],
+                $validated['attachments'] ?? [],
+            ));
+        }
+        if (array_key_exists('voidReason', $validated)) {
+            $reason = $this->sanitizeText($validated['voidReason'] ?? '', '');
+            if ($reason !== '') {
+                $attributes['status'] = 'voided';
+                $attributes['void_reason'] = $reason;
+            }
+        }
+        if (array_key_exists('meta', $validated)) {
+            $attributes['meta'] = [
+                ...(is_array($workOrder?->meta) ? $workOrder->meta : []),
+                ...($validated['meta'] ?? []),
+            ];
+        }
+
+        return $attributes;
+    }
+
+    private function normalizeWorkOrderPriority(string $priority): string
+    {
+        return match (strtolower(trim($priority))) {
+            'critical', 'high', 'medium', 'low' => strtolower(trim($priority)),
+            default => 'medium',
+        };
+    }
+
+    private function normalizeWorkOrderStatus(string $status): string
+    {
+        return match (strtolower(str_replace([' ', '-'], '_', trim($status)))) {
+            'assigned' => 'assigned',
+            'in_progress', 'started' => 'in_progress',
+            'waiting_parts', 'waiting_for_parts' => 'waiting_parts',
+            'completed', 'complete' => 'completed',
+            'verified', 'closed' => 'verified',
+            'voided', 'void' => 'voided',
+            default => 'open',
+        };
+    }
+
+    private function normalizeWorkOrderSource(string $source): string
+    {
+        return match (strtolower(str_replace([' ', '-'], '_', trim($source)))) {
+            'geotab_fault', 'fault' => 'geotab_fault',
+            'geotab_dvir', 'dvir' => 'geotab_dvir',
+            'geotab_status', 'device_status', 'status' => 'geotab_status',
+            'service_threshold', 'threshold' => 'service_threshold',
+            default => 'manual',
+        };
+    }
+
+    private function applyWorkOrderStatusTimestamps(MaintenanceWorkOrder $workOrder, string $beforeStatus, string $nextStatus): void
+    {
+        if ($beforeStatus === $nextStatus) {
+            return;
+        }
+
+        $workOrder->status = $nextStatus;
+        if ($nextStatus === 'in_progress' && $workOrder->started_at === null) {
+            $workOrder->started_at = now();
+        }
+        if ($nextStatus === 'completed' && $workOrder->completed_at === null) {
+            $workOrder->completed_at = now();
+        }
+        if ($nextStatus === 'verified' && $workOrder->verified_at === null) {
+            $workOrder->verified_at = now();
+            if ($workOrder->completed_at === null) {
+                $workOrder->completed_at = now();
+            }
+        }
+    }
+
+    private function maintenanceWorkOrderActor(Request $request): string
+    {
+        return $this->sanitizeText(
+            $request->input('actor')
+                ?: $request->header('X-Pioneer-User')
+                ?: $request->header('X-User-Name')
+                ?: $request->user()?->name
+                ?: 'maintenance staff',
+            'maintenance staff',
+        );
+    }
+
+    private function maintenanceWorkOrderAudit(string $event, string $actor, array $context = []): array
+    {
+        return [
+            'event' => $event,
+            'actor' => $this->sanitizeText($actor, 'maintenance staff'),
+            'timestamp' => now()->toIso8601String(),
+            'context' => $context,
+        ];
+    }
+
+    private function formatMaintenanceWorkOrder(MaintenanceWorkOrder $workOrder): array
+    {
+        $sourceType = $this->normalizeWorkOrderSource((string) $workOrder->source_type);
+        $attachments = array_values(is_array($workOrder->attachments) ? $workOrder->attachments : []);
+
+        return [
+            'id' => (string) $workOrder->id,
+            'workOrderId' => 'WO-'.str_pad((string) $workOrder->id, 5, '0', STR_PAD_LEFT),
+            'vehicleGeotabId' => $workOrder->vehicle_geotab_id,
+            'vehiclePlate' => $workOrder->vehicle_plate ?: 'N/A',
+            'vehicle' => $workOrder->vehicle_plate ?: 'N/A',
+            'title' => $workOrder->title,
+            'description' => $workOrder->description,
+            'priority' => ucfirst($workOrder->priority ?: 'medium'),
+            'priorityKey' => $workOrder->priority ?: 'medium',
+            'status' => $workOrder->status ?: 'open',
+            'statusLabel' => $this->workOrderStatusLabel($workOrder->status ?: 'open'),
+            'sourceType' => $sourceType,
+            'sourceLabel' => $this->workOrderSourceLabel($sourceType),
+            'sourceRecordId' => $workOrder->source_record_id,
+            'sourceSummary' => $workOrder->source_summary,
+            'isNativeWorkOrder' => true,
+            'isDerivedWorkOrder' => false,
+            'isGeotabBacked' => $sourceType !== 'manual',
+            'assignedTo' => $workOrder->assigned_to ?: 'Unassigned',
+            'scheduledDate' => $this->displayShortDate($workOrder->scheduled_at),
+            'scheduledAt' => $workOrder->scheduled_at?->toIso8601String(),
+            'startedAt' => $workOrder->started_at?->toIso8601String(),
+            'completedAt' => $workOrder->completed_at?->toIso8601String(),
+            'verifiedAt' => $workOrder->verified_at?->toIso8601String(),
+            'estimatedCost' => $workOrder->estimated_cost,
+            'actualCost' => $workOrder->actual_cost,
+            'estimatedCostLabel' => $workOrder->estimated_cost !== null ? $this->money((float) $workOrder->estimated_cost) : 'N/A',
+            'actualCostLabel' => $workOrder->actual_cost !== null ? $this->money((float) $workOrder->actual_cost) : 'N/A',
+            'cost' => $workOrder->actual_cost !== null ? $this->money((float) $workOrder->actual_cost) : ($workOrder->estimated_cost !== null ? $this->money((float) $workOrder->estimated_cost) : 'N/A'),
+            'notes' => $workOrder->notes ?: '',
+            'voidReason' => $workOrder->void_reason,
+            'attachments' => array_values(array_map(
+                fn (array $attachment, int $index): array => [
+                    'index' => $index,
+                    'fileName' => $attachment['fileName'] ?? 'attachment',
+                    'fileType' => $attachment['fileType'] ?? 'application/octet-stream',
+                    'kind' => $attachment['kind'] ?? 'proof',
+                    'notes' => $attachment['notes'] ?? null,
+                    'uploadedAt' => $attachment['uploadedAt'] ?? null,
+                    'hasData' => trim((string) ($attachment['dataUrl'] ?? '')) !== '',
+                ],
+                $attachments,
+                array_keys($attachments),
+            )),
+            'attachmentCount' => count($attachments),
+            'hasProof' => count($attachments) > 0,
+            'auditTrail' => is_array($workOrder->audit_trail) ? $workOrder->audit_trail : [],
+            'meta' => $workOrder->meta ?? [],
+            'createdAt' => $workOrder->created_at?->toIso8601String(),
+            'updatedAt' => $workOrder->updated_at?->toIso8601String(),
+        ];
+    }
+
+    private function workOrderStatusLabel(string $status): string
+    {
+        return match ($this->normalizeWorkOrderStatus($status)) {
+            'assigned' => 'Assigned',
+            'in_progress' => 'In Progress',
+            'waiting_parts' => 'Waiting Parts',
+            'completed' => 'Completed',
+            'verified' => 'Verified',
+            'voided' => 'Voided',
+            default => 'Open',
+        };
+    }
+
+    private function workOrderSourceLabel(string $sourceType): string
+    {
+        return match ($this->normalizeWorkOrderSource($sourceType)) {
+            'geotab_fault' => 'From GeoTab Fault',
+            'geotab_dvir' => 'From DVIR',
+            'geotab_status' => 'From Device Status',
+            'service_threshold' => 'Service Threshold',
+            default => 'Manual',
+        };
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function loadMaintenanceWorkOrders(array $filters = []): array
+    {
+        if (! $this->maintenanceWorkOrderTableAvailable()) {
+            return [];
+        }
+
+        $query = MaintenanceWorkOrder::query();
+        $vehicle = $this->sanitizeText($filters['vehicle'] ?? '', '');
+        if ($vehicle !== '') {
+            $query->where(function ($builder) use ($vehicle): void {
+                $builder->where('vehicle_plate', $vehicle)
+                    ->orWhere('vehicle_geotab_id', $vehicle);
+            });
+        }
+        $status = $this->sanitizeText($filters['status'] ?? '', '');
+        if ($status !== '') {
+            $query->where('status', $this->normalizeWorkOrderStatus($status));
+        }
+
+        return array_values(array_map(
+            fn (MaintenanceWorkOrder $workOrder): array => $this->formatMaintenanceWorkOrder($workOrder),
+            $query->orderByDesc('updated_at')->orderByDesc('id')->get()->all(),
+        ));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $derived
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergeNativeMaintenanceWorkOrders(array $derived): array
+    {
+        $native = $this->loadMaintenanceWorkOrders();
+        $nativeSourceKeys = [];
+        foreach ($native as $row) {
+            $key = $this->maintenanceWorkOrderSourceKey($row);
+            if ($key !== null) {
+                $nativeSourceKeys[$key] = true;
+            }
+        }
+
+        $rows = $native;
+        foreach ($derived as $row) {
+            $key = $this->maintenanceWorkOrderSourceKey($row);
+            if ($key !== null && isset($nativeSourceKeys[$key])) {
+                continue;
+            }
+            $rows[] = $row;
+        }
+
+        usort($rows, function (array $a, array $b): int {
+            $statusRank = [
+                'open' => 0,
+                'assigned' => 1,
+                'in_progress' => 2,
+                'waiting_parts' => 3,
+                'completed' => 4,
+                'verified' => 5,
+                'voided' => 6,
+            ];
+            $priorityRank = ['critical' => 0, 'high' => 1, 'medium' => 2, 'low' => 3];
+            $aStatus = $statusRank[$this->normalizeWorkOrderStatus((string) ($a['status'] ?? 'open'))] ?? 10;
+            $bStatus = $statusRank[$this->normalizeWorkOrderStatus((string) ($b['status'] ?? 'open'))] ?? 10;
+            if ($aStatus !== $bStatus) {
+                return $aStatus <=> $bStatus;
+            }
+
+            $aPriority = $priorityRank[$this->normalizeWorkOrderPriority((string) ($a['priorityKey'] ?? $a['priority'] ?? 'medium'))] ?? 10;
+            $bPriority = $priorityRank[$this->normalizeWorkOrderPriority((string) ($b['priorityKey'] ?? $b['priority'] ?? 'medium'))] ?? 10;
+            if ($aPriority !== $bPriority) {
+                return $aPriority <=> $bPriority;
+            }
+
+            return strcmp((string) ($b['updatedAt'] ?? $b['scheduledDate'] ?? ''), (string) ($a['updatedAt'] ?? $a['scheduledDate'] ?? ''));
+        });
+
+        return array_values($rows);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function maintenanceWorkOrderSourceKey(array $row): ?string
+    {
+        $sourceType = $this->normalizeWorkOrderSource((string) ($row['sourceType'] ?? 'manual'));
+        $sourceRecordId = trim((string) ($row['sourceRecordId'] ?? ''));
+        if ($sourceType === 'manual' || $sourceRecordId === '') {
+            return null;
+        }
+
+        return $sourceType.'|'.$sourceRecordId;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $vehicles
+     * @param  array<int, array<string, mixed>>  $workOrders
+     * @return array<int, array<string, mixed>>
+     */
+    private function attachMaintenanceWorkOrdersToVehicles(array $vehicles, array $workOrders): array
+    {
+        return array_values(array_map(function (array $vehicle) use ($workOrders): array {
+            $plate = strtolower(trim((string) ($vehicle['plate'] ?? '')));
+            $geotabId = strtolower(trim((string) ($vehicle['geotabId'] ?? '')));
+            $related = array_values(array_filter($workOrders, function (array $workOrder) use ($plate, $geotabId): bool {
+                $workOrderPlate = strtolower(trim((string) ($workOrder['vehiclePlate'] ?? $workOrder['vehicle'] ?? '')));
+                $workOrderGeotabId = strtolower(trim((string) ($workOrder['vehicleGeotabId'] ?? '')));
+
+                return ($plate !== '' && $workOrderPlate === $plate)
+                    || ($geotabId !== '' && $workOrderGeotabId === $geotabId);
+            }));
+
+            $open = array_values(array_filter(
+                $related,
+                fn (array $row): bool => ! in_array($this->normalizeWorkOrderStatus((string) ($row['status'] ?? 'open')), ['completed', 'verified', 'voided'], true),
+            ));
+            $completed = array_values(array_filter(
+                $related,
+                fn (array $row): bool => in_array($this->normalizeWorkOrderStatus((string) ($row['status'] ?? 'open')), ['completed', 'verified'], true),
+            ));
+
+            $vehicle['workOrders'] = array_slice($related, 0, 8);
+            $vehicle['openWorkOrders'] = array_slice($open, 0, 5);
+            $vehicle['latestCompletedWorkOrder'] = $completed[0] ?? null;
+
+            return $vehicle;
+        }, $vehicles));
     }
 
     private function loadMaintenanceHistory(array $filters = []): array
@@ -13528,6 +14507,16 @@ class GeotabController extends Controller
         return $this->tableAvailable('maintenance_histories');
     }
 
+    private function maintenanceWorkOrderTableAvailable(): bool
+    {
+        return $this->tableAvailable('maintenance_work_orders');
+    }
+
+    private function fuelEventTableAvailable(): bool
+    {
+        return $this->tableAvailable('fuel_events');
+    }
+
     private function notificationPreferencesTableAvailable(): bool
     {
         return $this->tableAvailable('notification_preferences');
@@ -13626,95 +14615,16 @@ class GeotabController extends Controller
             'status' => $pod->status,
             'deliveredAt' => $pod->delivered_at?->toIso8601String(),
             'hasSignature' => filled($pod->signature_data_url),
-            'attachments' => $this->formatPodAttachments($pod),
+            'attachments' => array_values(array_map(
+                fn (string $path, int $index): array => [
+                    'path' => $path,
+                    'url' => url('/api/fleet/pod/'.$pod->trip_id.'/attachments/'.$index),
+                ],
+                (array) ($pod->attachments ?? []),
+                array_keys((array) ($pod->attachments ?? [])),
+            )),
             'meta' => $pod->meta ?? [],
         ];
-    }
-
-    private function formatPodAttachments(ProofOfDelivery $pod): array
-    {
-        $formatted = [];
-        $downloadIndex = 0;
-
-        foreach ((array) ($pod->attachments ?? []) as $attachment) {
-            $path = $this->podAttachmentPath($attachment);
-            $entry = $this->podAttachmentEntry($attachment, $path);
-
-            if ($entry === null) {
-                continue;
-            }
-
-            if ($path !== null) {
-                if (trim((string) ($entry['url'] ?? '')) === '') {
-                    $entry['url'] = url('/api/fleet/pod/'.$pod->trip_id.'/attachments/'.$downloadIndex);
-                }
-
-                $downloadIndex++;
-            }
-
-            $formatted[] = $entry;
-        }
-
-        return $formatted;
-    }
-
-    private function podAttachmentEntry(mixed $attachment, ?string $path): ?array
-    {
-        if (is_string($attachment)) {
-            return $path !== null ? ['path' => $path] : null;
-        }
-
-        if (! is_array($attachment)) {
-            return null;
-        }
-
-        $entry = [];
-        foreach (['name', 'type', 'mime', 'mimeType', 'url', 'demo'] as $key) {
-            if (array_key_exists($key, $attachment)) {
-                $entry[$key] = $attachment[$key];
-            }
-        }
-
-        if ($path !== null) {
-            $entry['path'] = $path;
-        }
-
-        if (array_key_exists('demo', $entry)) {
-            $entry['demo'] = (bool) $entry['demo'];
-        }
-
-        $entry = array_filter(
-            $entry,
-            static fn (mixed $value): bool => $value !== null && $value !== ''
-        );
-
-        return $entry !== [] ? $entry : null;
-    }
-
-    private function podAttachmentPath(mixed $attachment): ?string
-    {
-        if (is_string($attachment)) {
-            $path = trim($attachment);
-
-            return $path !== '' ? $path : null;
-        }
-
-        if (! is_array($attachment)) {
-            return null;
-        }
-
-        $path = $attachment['path']
-            ?? $attachment['storagePath']
-            ?? $attachment['storedPath']
-            ?? null;
-
-        if (! is_string($path)) {
-            return null;
-        }
-
-        $path = trim($path);
-
-        return $path !== '' ? $path : null;
     }
 
     private function podTableAvailable(): bool

@@ -95,8 +95,18 @@ Route::prefix('fleet')->group(function () {
     Route::get('/maintenance/faults', [GeotabController::class, 'maintenanceFaults']);
     Route::get('/maintenance/dvir', [GeotabController::class, 'maintenanceDvir']);
     Route::get('/maintenance/work-orders', [GeotabController::class, 'maintenanceWorkOrders']);
+    Route::post('/maintenance/work-orders', [GeotabController::class, 'storeMaintenanceWorkOrder']);
+    Route::get('/maintenance/work-orders/{workOrderId}', [GeotabController::class, 'maintenanceWorkOrderRecord']);
+    Route::patch('/maintenance/work-orders/{workOrderId}', [GeotabController::class, 'updateMaintenanceWorkOrder']);
+    Route::post('/maintenance/work-orders/{workOrderId}/attachments', [GeotabController::class, 'storeMaintenanceWorkOrderAttachment']);
+    Route::delete('/maintenance/work-orders/{workOrderId}/attachments/{index}', [GeotabController::class, 'deleteMaintenanceWorkOrderAttachment']);
     Route::get('/fuel', [GeotabController::class, 'fuel']);
     Route::get('/fuel/transactions', [GeotabController::class, 'fuelTransactions']);
+    Route::post('/fuel/events/manual', [GeotabController::class, 'storeManualFuelEvent']);
+    Route::patch('/fuel/events/{eventId}', [GeotabController::class, 'updateFuelEvent']);
+    Route::post('/fuel/events/{eventId}/confirm', [GeotabController::class, 'confirmFuelEvent']);
+    Route::post('/fuel/events/{eventId}/reject', [GeotabController::class, 'rejectFuelEvent']);
+    Route::post('/fuel/events/{eventId}/receipt', [GeotabController::class, 'storeFuelEventReceipt']);
     Route::get('/settings/fuel-prices', [GeotabController::class, 'fuelPriceSettings']);
     Route::put('/settings/fuel-prices', [GeotabController::class, 'saveFuelPriceSettings']);
     Route::get('/settings/system', [GeotabController::class, 'systemSettings']);

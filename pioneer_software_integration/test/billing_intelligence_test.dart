@@ -6,7 +6,9 @@ void main() {
   test('billing page exposes policy and POD readiness UI', () {
     final source = File('lib/src/pages/billing_page.dart').readAsStringSync();
 
-    expect(source, contains('POD GATE'));
+    expect(source, contains('Billing command center'));
+    expect(source, contains('Free-delivery review'));
+    expect(source, contains('POD holds'));
     expect(source, contains('Operational Assurance'));
     expect(source, contains('collectionReadiness'));
     expect(source, contains('billingDecision'));
@@ -20,7 +22,7 @@ void main() {
     expect(source, contains('Outstanding Balance'));
     expect(source, contains('Overdue Amount'));
     expect(source, contains("_InvoiceTableHeader('INVOICE NO.')"));
-    expect(source, contains('VAT'));
+    expect(source, contains("_InvoiceTableHeader('VAT'"));
     expect(source, contains('Line Items'));
     expect(source, contains('ERP Reference Details'));
     expect(source, contains('Mark Paid'));
