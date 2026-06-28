@@ -3062,12 +3062,12 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+        color: AppTheme.surfaceCard(context),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isDark
               ? cardAccent.withValues(alpha: 0.18)
-              : AppTheme.black.withValues(alpha: 0.06),
+              : AppTheme.borderDefault(context),
         ),
         boxShadow: [
           BoxShadow(
@@ -3099,23 +3099,13 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
                   children: [
                     Text(
                       title,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        color: isDark ? AppTheme.white : AppTheme.colorFF111827,
-                      ),
+                      style: AppTheme.settingsTitleStyle(context),
                     ),
                     if (subtitle != null && subtitle.trim().isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text(
                         subtitle,
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 1.35,
-                          color: isDark
-                              ? AppTheme.gray400
-                              : AppTheme.colorFF64748B,
-                        ),
+                        style: AppTheme.settingsSubtitleStyle(context),
                       ),
                     ],
                   ],
@@ -3156,20 +3146,15 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
               children: [
                 Text(
                   title,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF111827,
-                  ),
+                  style: AppTheme.settingsTitleStyle(context, fontSize: 13),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   body,
-                  style: TextStyle(
+                  style: AppTheme.settingsSubtitleStyle(
+                    context,
                     fontSize: 12,
-                    height: 1.45,
-                    color: isDark ? AppTheme.gray300 : AppTheme.colorFF475569,
-                  ),
+                  ).copyWith(height: 1.45),
                 ),
               ],
             ),
@@ -3194,13 +3179,13 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
       validator: validator,
       maxLines: maxLines,
       keyboardType: keyboardType,
-      style: TextStyle(color: isDark ? AppTheme.white : AppTheme.colorFF1A1D23),
+      style: AppTheme.settingsBodyStyle(context),
       decoration: InputDecoration(
         labelText: label,
         helperText: helperText,
         prefixIcon: Icon(icon),
         filled: true,
-        fillColor: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFC,
+        fillColor: AppTheme.surfaceInput(context),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
@@ -3218,7 +3203,7 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFC,
+        color: AppTheme.surfaceInput(context),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -3226,7 +3211,7 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
           Icon(
             icon,
             size: 18,
-            color: isDark ? AppTheme.gray400 : AppTheme.materialGrey,
+            color: AppTheme.textSecondary(context),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -3235,19 +3220,12 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
               children: [
                 Text(
                   label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark ? AppTheme.gray500 : AppTheme.gray600,
-                  ),
+                  style: AppTheme.settingsCaptionStyle(context),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   value,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF1A1D23,
-                  ),
+                  style: AppTheme.settingsBodyStyle(context),
                 ),
               ],
             ),
@@ -3272,7 +3250,7 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
         labelText: label,
         prefixIcon: Icon(icon),
         filled: true,
-        fillColor: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFC,
+        fillColor: AppTheme.surfaceInput(context),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
@@ -3295,7 +3273,7 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF0F1117 : AppTheme.colorFFF8FAFC,
+        color: AppTheme.surfaceInput(context),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -3306,20 +3284,14 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
               children: [
                 Text(
                   title,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF1A1D23,
-                  ),
+                  style: AppTheme.settingsBodyStyle(context),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.4,
-                    color: isDark ? AppTheme.gray500 : AppTheme.gray600,
-                  ),
+                  style: AppTheme.settingsSubtitleStyle(
+                    context,
+                  ).copyWith(height: 1.4),
                 ),
               ],
             ),
@@ -3348,25 +3320,18 @@ class _SettingsPageState extends State<SettingsPage> with RoleChecks {
         Icon(
           icon,
           size: 14,
-          color: isDark ? AppTheme.gray500 : AppTheme.materialGrey,
+          color: AppTheme.textSecondary(context),
         ),
         const SizedBox(width: 8),
         Text(
           '$label:',
-          style: TextStyle(
-            fontSize: 12,
-            color: isDark ? AppTheme.gray500 : AppTheme.gray600,
-          ),
+          style: AppTheme.settingsCaptionStyle(context),
         ),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             value,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: isDark ? AppTheme.gray300 : AppTheme.colorFF1A1D23,
-            ),
+            style: AppTheme.settingsBodyStyle(context, fontSize: 12),
           ),
         ),
       ],

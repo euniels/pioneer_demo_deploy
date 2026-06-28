@@ -210,15 +210,10 @@ class _SkeletonTableSection extends StatelessWidget {
 }
 
 BoxDecoration _skeletonDecoration(BuildContext context) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
   return BoxDecoration(
-    color: AppTheme.getCardBg(context),
+    color: AppTheme.surfaceCard(context),
     borderRadius: AppTheme.getButtonRadius(),
-    border: Border.all(
-      color: isDark
-          ? AppTheme.white.withValues(alpha: 0.08)
-          : AppTheme.black.withValues(alpha: 0.08),
-    ),
+    border: Border.all(color: AppTheme.borderDefault(context)),
   );
 }
 

@@ -5,6 +5,7 @@ import '../services/crud_permissions.dart';
 import '../theme/app_theme.dart';
 import '../utils/display_format.dart';
 import '../utils/form_validation.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/app_state_widgets.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
@@ -17,6 +18,7 @@ class ClientsPage extends StatefulWidget {
 }
 
 class _ClientsPageState extends State<ClientsPage> {
+  final TextEditingController _searchController = TextEditingController();
   String _search = '';
   String _status = 'All';
   String _sortMode = 'Company A-Z';
@@ -33,6 +35,7 @@ class _ClientsPageState extends State<ClientsPage> {
   @override
   void dispose() {
     clientsNotifier.removeListener(_onClientsChanged);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -300,34 +303,14 @@ class _ClientsPageState extends State<ClientsPage> {
   }
 
   Widget _clientSearchField(bool isDark) {
-    return TextField(
+    return AdminSearchField(
+      controller: _searchController,
+      hintText: 'Search by company, contact, or ERP ID...',
       onChanged: (value) => setState(() => _search = value),
-      style: TextStyle(
-        fontSize: 14,
-        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-      ),
-      decoration: InputDecoration(
-        hintText: 'Search by company, contact, or ERP ID...',
-        prefixIcon: const Icon(Icons.search_rounded),
-        filled: true,
-        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-      ),
+      onClear: () => setState(() {
+        _searchController.clear();
+        _search = '';
+      }),
     );
   }
 
@@ -605,24 +588,7 @@ class _ClientResultCount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.infoBlue.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
-      ),
-      child: Text(
-        '$count clients shown',
-        style: const TextStyle(
-          color: AppTheme.infoBlue,
-          fontSize: 12,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-    );
+    return AdminResultCount(count: count, label: 'clients');
   }
 }
 
@@ -645,65 +611,13 @@ class _ClientFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final active = value != activeWhen;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return PopupMenuButton<String>(
-      tooltip: label,
+    return AdminFilterChip(
+      label: label,
+      value: value,
+      activeWhen: activeWhen,
+      options: options,
       onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final option in options)
-          PopupMenuItem<String>(value: option, child: Text(option)),
-      ],
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        decoration: BoxDecoration(
-          color: active
-              ? AppTheme.successGreen.withValues(alpha: 0.13)
-              : isDark
-              ? AppTheme.colorFF1F2937
-              : AppTheme.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: active
-                ? AppTheme.successGreen.withValues(alpha: 0.34)
-                : isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(14),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              active ? '$label: $value' : label,
-              style: TextStyle(
-                color: active
-                    ? AppTheme.successGreen
-                    : isDark
-                    ? AppTheme.gray300
-                    : AppTheme.colorFF233244,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 16,
-              color: active ? AppTheme.successGreen : AppTheme.gray400,
-            ),
-            if (active) ...[
-              const SizedBox(width: 4),
-              InkWell(
-                onTap: onClear,
-                borderRadius: BorderRadius.circular(999),
-                child: const Icon(Icons.close_rounded, size: 15),
-              ),
-            ],
-          ],
-        ),
-      ),
+      onClear: onClear,
     );
   }
 }

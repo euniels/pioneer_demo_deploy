@@ -52,10 +52,10 @@ class _MaintenanceCardState extends State<MaintenanceCard>
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: AppTheme.getCardBg(context),
+                color: AppTheme.surfaceCard(context),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: AppTheme.getBorderColor(context),
+                  color: AppTheme.borderDefault(context),
                   width: _isHovered ? 2 : 1,
                 ),
                 gradient: _isHovered
@@ -64,9 +64,9 @@ class _MaintenanceCardState extends State<MaintenanceCard>
                         end: Alignment.bottomRight,
                         colors: [
                           isDark
-                              ? AppTheme.colorFF2A3F5F
+                              ? AppTheme.surfacePanel(context)
                               : AppTheme.colorFFF8FBFF,
-                          AppTheme.getCardBg(context),
+                          AppTheme.surfaceCard(context),
                         ],
                       )
                     : null,
@@ -105,9 +105,7 @@ class _MaintenanceCardState extends State<MaintenanceCard>
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: 14,
-                                color: isDark
-                                    ? AppTheme.white
-                                    : AppTheme.colorFF1F2937,
+                                color: AppTheme.textPrimary(context),
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -129,9 +127,7 @@ class _MaintenanceCardState extends State<MaintenanceCard>
                   Text(
                     'Predicted Issue',
                     style: TextStyle(
-                      color: isDark
-                          ? AppTheme.colorFFAEB8C8
-                          : AppTheme.colorFF6B7280,
+                      color: AppTheme.textSecondary(context),
                       fontWeight: FontWeight.w600,
                       fontSize: 12,
                     ),
@@ -142,7 +138,7 @@ class _MaintenanceCardState extends State<MaintenanceCard>
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
-                      color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                      color: AppTheme.textPrimary(context),
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -151,9 +147,7 @@ class _MaintenanceCardState extends State<MaintenanceCard>
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: isDark
-                          ? AppTheme.colorFFC5CEE0
-                          : AppTheme.colorFF374151,
+                      color: AppTheme.textSecondary(context),
                       fontSize: 13,
                     ),
                   ),
@@ -199,33 +193,27 @@ class _MiniStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: isDark ? AppTheme.colorFF1A2E4A : AppTheme.colorFFF3F6FF,
+          color: AppTheme.surfacePanel(context),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppTheme.getBorderColor(context)),
+          border: Border.all(color: AppTheme.borderDefault(context)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               label,
-              style: TextStyle(
-                color: isDark ? AppTheme.colorFFAEB8C8 : AppTheme.colorFF6B7280,
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-              ),
+              style: AppTheme.settingsLabelStyle(context),
             ),
             const SizedBox(height: 4),
             Text(
               value,
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                color: AppTheme.textPrimary(context),
               ),
             ),
           ],

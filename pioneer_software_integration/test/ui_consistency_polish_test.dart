@@ -17,6 +17,102 @@ void main() {
     expect(AppTheme.statusColor('in transit'), AppTheme.primaryBlue);
   });
 
+  test('AppTheme exposes reusable system surface and text tokens', () {
+    final source = File('lib/src/theme/app_theme.dart').readAsStringSync();
+
+    expect(source, contains('textPrimary'));
+    expect(source, contains('textSecondary'));
+    expect(source, contains('textMuted'));
+    expect(source, contains('surfaceCard'));
+    expect(source, contains('surfaceInput'));
+    expect(source, contains('settingsTitleStyle'));
+    expect(source, contains('settingsSubtitleStyle'));
+    expect(source, contains('settingsBodyStyle'));
+    expect(source, contains('settingsCaptionStyle'));
+  });
+
+  test('shared page shell widgets use semantic theme tokens', () {
+    final files = [
+      'lib/src/widgets/dashboard_layout.dart',
+      'lib/src/widgets/app_card.dart',
+      'lib/src/widgets/app_state_widgets.dart',
+      'lib/src/widgets/premium_glass_card.dart',
+      'lib/src/widgets/workflow_timeline.dart',
+      'lib/src/widgets/maintenance_card.dart',
+      'lib/src/widgets/page_skeletons.dart',
+    ];
+
+    for (final path in files) {
+      final source = File(path).readAsStringSync();
+      final usesSharedToken = [
+        'AppTheme.surfaceCard(context)',
+        'AppTheme.surfacePanel(context)',
+        'AppTheme.surfacePage(context)',
+        'AppTheme.textPrimary(context)',
+        'AppTheme.textSecondary(context)',
+        'AppTheme.textDisabled(context)',
+        'AppTheme.settings',
+        'AppTheme.borderDefault(context)',
+        'AppTheme.borderStrong(context)',
+      ].any(source.contains);
+
+      expect(usesSharedToken, isTrue, reason: '$path should use shared visual tokens.');
+    }
+  });
+
+  test('admin list pages use shared search filter and summary controls', () {
+    final controls = File(
+      'lib/src/widgets/admin_page_controls.dart',
+    ).readAsStringSync();
+    final drivers = File('lib/src/pages/drivers_page.dart').readAsStringSync();
+    final vehicles = File('lib/src/pages/vehicles_page.dart').readAsStringSync();
+    final clients = File('lib/src/pages/clients_page.dart').readAsStringSync();
+    final users = File('lib/src/pages/users_page.dart').readAsStringSync();
+    final auditLogs = File(
+      'lib/src/pages/audit_log_page.dart',
+    ).readAsStringSync();
+    final billing = File('lib/src/pages/billing_page.dart').readAsStringSync();
+    final fuel = File('lib/src/pages/fuel_expenses_page.dart').readAsStringSync();
+    final clientTracking = File(
+      'lib/src/pages/client_tracking_page.dart',
+    ).readAsStringSync();
+    final maintenance = File(
+      'lib/src/pages/maintenance_page.dart',
+    ).readAsStringSync();
+    final statements = File(
+      'lib/src/pages/statements_of_accounts.dart',
+    ).readAsStringSync();
+
+    expect(controls, contains('class AdminSearchField'));
+    expect(controls, contains('class AdminViewToggle'));
+    expect(controls, contains('class AdminResultCount'));
+    expect(controls, contains('class AdminFilterChip'));
+    expect(controls, contains('class AdminSummaryCard'));
+    expect(controls, contains('AppTheme.surfaceInput(context)'));
+    expect(controls, contains('AppTheme.textPrimary(context)'));
+
+    for (final source in [drivers, vehicles, clients, users]) {
+      expect(source, contains('AdminSearchField'));
+      expect(source, contains('AdminResultCount'));
+      expect(source, contains('AdminFilterChip'));
+    }
+
+    for (final source in [drivers, vehicles]) {
+      expect(source, contains('AdminViewToggle'));
+    }
+
+    expect(vehicles, contains('AdminSummaryCard'));
+    expect(auditLogs, contains('AdminSearchField'));
+    expect(billing, contains('AdminSearchField'));
+    expect(fuel, contains('AdminResultCount'));
+    expect(fuel, contains('AdminFilterChip'));
+    expect(clientTracking, contains('AdminSearchField'));
+    expect(maintenance, contains('AdminResultCount'));
+    expect(maintenance, contains('AdminFilterChip'));
+    expect(statements, contains('AdminSearchField'));
+    expect(statements, contains('AdminResultCount'));
+  });
+
   testWidgets(
     'PioneerStateCard gives empty and error states an action surface',
     (tester) async {
@@ -403,6 +499,12 @@ void main() {
     expect(source, contains('Settings Change Log'));
     expect(source, contains('View full administrative audit trail'));
     expect(source, contains("Navigator.pushNamed(context, '/audit-logs')"));
+    expect(source, contains('AppTheme.surfaceCard(context)'));
+    expect(source, contains('AppTheme.surfaceInput(context)'));
+    expect(source, contains('AppTheme.settingsTitleStyle(context)'));
+    expect(source, contains('AppTheme.settingsSubtitleStyle(context)'));
+    expect(source, contains('AppTheme.settingsBodyStyle(context)'));
+    expect(source, contains('AppTheme.settingsCaptionStyle(context)'));
     expect(api, contains('/fleet/settings/system'));
     expect(api, contains('saveSystemSettings'));
   });

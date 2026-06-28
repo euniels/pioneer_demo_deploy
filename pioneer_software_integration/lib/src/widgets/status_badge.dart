@@ -17,12 +17,12 @@ class StatusBadge extends StatelessWidget {
     super.key,
   });
 
-  Color _getStatusColor() {
+  Color _getStatusColor(BuildContext context) {
     switch (type) {
       case StatusType.active:
         return AppTheme.successGreen;
       case StatusType.inactive:
-        return AppTheme.colorFF9CA3AF;
+        return AppTheme.textDisabled(context);
       case StatusType.warning:
         return AppTheme.warningOrange;
       case StatusType.error:
@@ -32,13 +32,16 @@ class StatusBadge extends StatelessWidget {
     }
   }
 
-  LinearGradient _getGradient() {
+  LinearGradient _getGradient(BuildContext context) {
     switch (type) {
       case StatusType.active:
         return AppTheme.successGradient;
       case StatusType.inactive:
-        return const LinearGradient(
-          colors: [AppTheme.colorFFB0B7C3, AppTheme.colorFF9CA3AF],
+        return LinearGradient(
+          colors: [
+            AppTheme.textDisabled(context),
+            AppTheme.textMuted(context),
+          ],
         );
       case StatusType.warning:
         return AppTheme.warningGradient;
@@ -51,7 +54,7 @@ class StatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _getStatusColor();
+    final statusColor = _getStatusColor(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
@@ -74,7 +77,7 @@ class StatusBadge extends StatelessWidget {
             width: 8,
             height: 8,
             decoration: BoxDecoration(
-              gradient: _getGradient(),
+              gradient: _getGradient(context),
               borderRadius: BorderRadius.circular(4),
             ),
           ),

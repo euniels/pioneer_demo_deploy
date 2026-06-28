@@ -11,6 +11,7 @@ import '../services/vehicles_store.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/geotab_push_preview.dart';
 import '../widgets/geotab_sync_status_badge.dart';
 
@@ -1968,30 +1969,11 @@ class _DriverSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return AdminSearchField(
       controller: controller,
+      hintText: 'Search by name, driver ID, or vehicle...',
       onChanged: onChanged,
-      decoration: InputDecoration(
-        hintText: 'Search by name, driver ID, or vehicle...',
-        prefixIcon: const Icon(Icons.search_rounded),
-        suffixIcon: controller.text.isEmpty
-            ? null
-            : IconButton(
-                tooltip: 'Clear search',
-                onPressed: onClear,
-                icon: const Icon(Icons.close_rounded),
-              ),
-        filled: true,
-        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-      ),
+      onClear: onClear,
     );
   }
 }
@@ -2009,72 +1991,12 @@ class _DriverViewToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppTheme.colorFF1A1D23,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.white.withAlpha(18)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _ViewToggleButton(
-            icon: Icons.grid_view_rounded,
-            active: gridActive,
-            tooltip: 'Grid view',
-            onTap: onGrid,
-          ),
-          _ViewToggleButton(
-            icon: Icons.view_list_rounded,
-            active: !gridActive,
-            tooltip: 'List view',
-            onTap: onList,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ViewToggleButton extends StatelessWidget {
-  const _ViewToggleButton({
-    required this.icon,
-    required this.active,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final bool active;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          width: 38,
-          height: 36,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: active
-                ? AppTheme.successGreen.withValues(alpha: 0.18)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            icon,
-            color: active ? AppTheme.successGreen : AppTheme.gray400,
-            size: 19,
-          ),
-        ),
-      ),
+    return AdminViewToggle(
+      gridActive: gridActive,
+      onGrid: onGrid,
+      onList: onList,
+      height: 44,
+      buttonSize: 36,
     );
   }
 }
@@ -2086,24 +2008,7 @@ class _DriverResultCount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.infoBlue.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
-      ),
-      child: Text(
-        '$count drivers shown',
-        style: const TextStyle(
-          color: AppTheme.infoBlue,
-          fontWeight: FontWeight.w900,
-          fontSize: 12,
-        ),
-      ),
-    );
+    return AdminResultCount(count: count, label: 'drivers');
   }
 }
 
@@ -2126,56 +2031,13 @@ class _DriverFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final active = value != activeWhen;
-    return PopupMenuButton<String>(
-      initialValue: value,
+    return AdminFilterChip(
+      label: label,
+      value: value,
+      options: options,
       onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final option in options)
-          PopupMenuItem(value: option, child: Text(option)),
-      ],
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        decoration: BoxDecoration(
-          color: active
-              ? AppTheme.successGreen.withValues(alpha: 0.13)
-              : AppTheme.white.withAlpha(8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: active
-                ? AppTheme.successGreen.withValues(alpha: 0.34)
-                : AppTheme.white.withAlpha(18),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              active ? '$label: $value' : label,
-              style: TextStyle(
-                color: active ? AppTheme.successGreen : AppTheme.gray300,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 16,
-              color: active ? AppTheme.successGreen : AppTheme.gray400,
-            ),
-            if (active) ...[
-              const SizedBox(width: 4),
-              InkWell(
-                onTap: onClear,
-                borderRadius: BorderRadius.circular(999),
-                child: const Icon(Icons.close_rounded, size: 15),
-              ),
-            ],
-          ],
-        ),
-      ),
+      onClear: onClear,
+      activeWhen: activeWhen,
     );
   }
 }

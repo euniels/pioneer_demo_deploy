@@ -13,6 +13,7 @@ import '../services/role_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/display_format.dart';
 import '../utils/workflow_status_helper.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
@@ -801,47 +802,15 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 720;
-          final search = SizedBox(
-            height: 50,
-            child: TextField(
-              controller: _tripController,
-              onSubmitted: (_) => _load(),
-              style: AppTheme.getBodyStyle(context).copyWith(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Enter Trip ID, delivery reference, or client code...',
-                hintStyle: AppTheme.getSubtitleStyle(
-                  context,
-                ).copyWith(fontSize: 14),
-                prefixIcon: const Icon(Icons.search_rounded),
-                filled: true,
-                fillColor:
-                    isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withAlpha(20)
-                        : AppTheme.black.withAlpha(18),
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withAlpha(20)
-                        : AppTheme.black.withAlpha(18),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppTheme.primaryBlue),
-                ),
-              ),
-            ),
+          final search = AdminSearchField(
+            controller: _tripController,
+            hintText: 'Enter Trip ID, delivery reference, or client code...',
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => _load(),
+            onClear: () {
+              _tripController.clear();
+              setState(() => _future = null);
+            },
           );
           final loadButton = SizedBox(
             height: 50,

@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../config/pioneer_runtime_config.dart';
+import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
 import '../services/fleet_sync_service.dart';
@@ -11,10 +12,12 @@ import '../services/geotab_sync_status_service.dart';
 import '../services/vehicles_store.dart';
 import '../utils/display_format.dart';
 import '../utils/form_validation.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/geotab_push_preview.dart';
 import '../widgets/geotab_sync_status_badge.dart';
 import '../widgets/page_skeletons.dart';
+import '../widgets/telemetry_widgets.dart';
 import '../theme/app_theme.dart';
 
 class MaintenancePage extends StatefulWidget {
@@ -28,7 +31,8 @@ enum _MaintenanceHistoryAction { edit, voidRecord, pushToGeotab }
 
 class _MaintenancePageState extends State<MaintenancePage> {
   late Future<Map<String, dynamic>> _future;
-  String _section = 'workOrders';
+  String _section = 'alerts';
+  String _searchQuery = '';
   String _vehicleFilter = 'All Vehicles';
   String _typeFilter = 'All Types';
   String _sortMode = 'Date Newest';
@@ -138,19 +142,6 @@ class _MaintenancePageState extends State<MaintenancePage> {
       title: 'Maintenance',
       subtitle: 'Service due, faults, DVIR, work orders, and live measurements',
       titleTextStyle: AppTheme.getDashboardPageTitleStyle(context),
-      actions: [
-        IconButton(
-          tooltip: 'Refresh maintenance',
-          onPressed: _reload,
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-        if (CrudPermissions.canCreate(CrudEntity.maintenance))
-          FilledButton.icon(
-            onPressed: () => _openMaintenanceForm(),
-            icon: const Icon(Icons.add_task_rounded, size: 18),
-            label: const Text('Add Log'),
-          ),
-      ],
       child: FutureBuilder<Map<String, dynamic>>(
         future: _future,
         initialData: BackendApiService.peekCachedDataMap(
@@ -180,14 +171,13 @@ class _MaintenancePageState extends State<MaintenancePage> {
           final realAlerts = _listOfMaps(data['alerts']);
           final faults = _listOfMaps(data['faults']);
           final dvir = _listOfMaps(data['dvir']);
-          final realWorkOrders = _listOfMaps(data['workOrders']);
+          final workOrders = _listOfMaps(data['workOrders']);
           final realHistory = _listOfMaps(data['history']);
           final measurements = _listOfMaps(data['measurements']);
           final realPredictive = _listOfMaps(data['predictive']);
           final usingSampleMaintenance =
               PioneerRuntimeConfig.showMockData &&
               realAlerts.isEmpty &&
-              realWorkOrders.isEmpty &&
               realHistory.isEmpty &&
               realPredictive.isEmpty;
           final alerts = usingSampleMaintenance
@@ -199,9 +189,6 @@ class _MaintenancePageState extends State<MaintenancePage> {
           final predictive = usingSampleMaintenance
               ? _samplePredictiveRows()
               : realPredictive;
-          final workOrders = usingSampleMaintenance
-              ? _sampleWorkOrderRows()
-              : realWorkOrders;
 
           final serviceDueRows = alerts.isNotEmpty ? alerts : predictive;
           final sectionRows = switch (_section) {
@@ -212,7 +199,7 @@ class _MaintenancePageState extends State<MaintenancePage> {
             'measurements' => measurements,
             'predictive' => predictive,
             _ => serviceDueRows,
-          };
+          }.where(_matchesMaintenanceSearch).toList();
           final cardSection =
               _section == 'alerts' &&
                   alerts.isEmpty &&
@@ -242,80 +229,79 @@ class _MaintenancePageState extends State<MaintenancePage> {
 
           return RefreshIndicator(
             onRefresh: () async => _reload(),
-            child: ListView(
-              padding: const EdgeInsets.all(AppTheme.space24),
+            child: Column(
               children: [
-                const _MaintenanceSectionHeading(
-                  title: 'Fleet Maintenance Readiness',
-                  subtitle:
-                      'Service risk, workshop activity, and compliance visibility.',
-                ),
-                const SizedBox(height: AppTheme.space20),
-                _buildOverview(isDark, overview),
-                const SizedBox(height: AppTheme.dashboardSectionSpacing),
+                _buildMaintenanceToolbar(isDark, sectionRows.length),
                 _buildSectionSwitcher(isDark),
-                if (_section == 'history') ...[
-                  const SizedBox(height: AppTheme.space20),
+                if (_section == 'history')
                   _buildHistoryFilters(isDark, history),
-                ],
-                const SizedBox(height: AppTheme.dashboardSectionSpacing),
-                _MaintenanceSectionHeading(
-                  title: sectionHeading,
-                  subtitle: sectionSubtitle,
+                Expanded(
+                  child: Container(
+                    color: isDark
+                        ? AppTheme.colorFF0A0E1A
+                        : AppTheme.colorFFF5F6F8,
+                    child: ListView(
+                      padding: const EdgeInsets.all(AppTheme.space24),
+                      children: [
+                        _buildOverview(isDark, overview),
+                        const SizedBox(
+                          height: AppTheme.dashboardSectionSpacing,
+                        ),
+                        _MaintenanceSectionHeading(
+                          title: sectionHeading,
+                          subtitle: sectionSubtitle,
+                        ),
+                        const SizedBox(height: AppTheme.space20),
+                        if (usingSampleMaintenance &&
+                            (_section == 'alerts' ||
+                                _section == 'history' ||
+                                _section == 'predictive')) ...[
+                          const _MaintenanceSampleDataBanner(),
+                          const SizedBox(height: AppTheme.space16),
+                        ],
+                        if (_section == 'predictive' && predictive.isNotEmpty)
+                          _buildPredictiveRiskMatrix(isDark, predictive)
+                        else if (_section == 'history' &&
+                            sectionRows.isNotEmpty)
+                          _buildHistoryTable(isDark, sectionRows)
+                        else if (sectionRows.isEmpty)
+                          _emptyStateForSection(isDark, history)
+                        else
+                          ...sectionRows.map(
+                            (row) => _MaintenanceCard(
+                              data: row,
+                              section: cardSection,
+                              isDark: isDark,
+                              onTap: _section == 'faults'
+                                  ? () => _showFaultDetails(row)
+                                  : _section == 'workOrders'
+                                  ? () => _showWorkOrderDetails(row)
+                                  : null,
+                              onEdit:
+                                  CrudPermissions.canEdit(
+                                        CrudEntity.maintenance,
+                                      ) &&
+                                      _section == 'history'
+                                  ? () => _openMaintenanceForm(record: row)
+                                  : null,
+                              onVoid:
+                                  CrudPermissions.canDelete(
+                                        CrudEntity.maintenance,
+                                      ) &&
+                                      _section == 'history' &&
+                                      (row['voided'] == true) == false
+                                  ? () => _confirmVoid(row)
+                                  : null,
+                              onPush:
+                                  _section == 'history' && canPushToGeotab(row)
+                                  ? () => _pushMaintenanceToGeotab(row)
+                                  : null,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
-                if (_section == 'workOrders' &&
-                    CrudPermissions.canCreate(CrudEntity.maintenance)) ...[
-                  const SizedBox(height: AppTheme.space16),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton.icon(
-                      onPressed: () => _openWorkOrderDialog(null),
-                      icon: const Icon(Icons.assignment_add, size: 18),
-                      label: const Text('Create Work Order'),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: AppTheme.space20),
-                if (usingSampleMaintenance &&
-                    (_section == 'alerts' ||
-                        _section == 'history' ||
-                        _section == 'predictive')) ...[
-                  const _MaintenanceSampleDataBanner(),
-                  const SizedBox(height: AppTheme.space16),
-                ],
-                if (_section == 'predictive' && predictive.isNotEmpty)
-                  _buildPredictiveRiskMatrix(isDark, predictive)
-                else if (_section == 'history' && sectionRows.isNotEmpty)
-                  _buildHistoryTable(isDark, sectionRows)
-                else if (sectionRows.isEmpty)
-                  _emptyStateForSection(isDark, history)
-                else
-                  ...sectionRows.map(
-                    (row) => _MaintenanceCard(
-                      data: row,
-                      section: cardSection,
-                      isDark: isDark,
-                      onTap: _section == 'faults'
-                          ? () => _showFaultDetails(row)
-                          : _section == 'workOrders'
-                          ? () => _openWorkOrderDialog(row)
-                          : null,
-                      onEdit:
-                          CrudPermissions.canEdit(CrudEntity.maintenance) &&
-                              _section == 'history'
-                          ? () => _openMaintenanceForm(record: row)
-                          : null,
-                      onVoid:
-                          CrudPermissions.canDelete(CrudEntity.maintenance) &&
-                              _section == 'history' &&
-                              (row['voided'] == true) == false
-                          ? () => _confirmVoid(row)
-                          : null,
-                      onPush: _section == 'history' && canPushToGeotab(row)
-                          ? () => _pushMaintenanceToGeotab(row)
-                          : null,
-                    ),
-                  ),
               ],
             ),
           );
@@ -434,55 +420,6 @@ class _MaintenancePageState extends State<MaintenancePage> {
     },
   ];
 
-  List<Map<String, dynamic>> _sampleWorkOrderRows() => [
-    {
-      'id': 'sample-work-order-1',
-      'workOrderId': 'WO-DEMO-001',
-      'isSample': true,
-      'isNativeWorkOrder': true,
-      'vehicle': _samplePlate(0),
-      'vehiclePlate': _samplePlate(0),
-      'title': 'Inspect cooling system fault',
-      'description':
-          'GeoTab diagnostic evidence suggests a coolant temperature review is needed before the next dispatch.',
-      'status': 'assigned',
-      'statusLabel': 'Assigned',
-      'priority': 'High',
-      'priorityKey': 'high',
-      'sourceType': 'geotab_fault',
-      'sourceLabel': 'From GeoTab Fault',
-      'sourceSummary': 'Demo GeoTab FaultData evidence.',
-      'assignedTo': 'Maintenance Staff',
-      'scheduledDate': '2026-06-18',
-      'estimatedCostLabel': '₱8,500.00',
-      'actualCostLabel': 'N/A',
-      'attachmentCount': 1,
-    },
-    {
-      'id': 'sample-work-order-2',
-      'workOrderId': 'WO-DEMO-002',
-      'isSample': true,
-      'isNativeWorkOrder': true,
-      'vehicle': _samplePlate(1),
-      'vehiclePlate': _samplePlate(1),
-      'title': 'Preventive service threshold',
-      'description':
-          'Service interval is close based on odometer and maintenance history.',
-      'status': 'open',
-      'statusLabel': 'Open',
-      'priority': 'Medium',
-      'priorityKey': 'medium',
-      'sourceType': 'service_threshold',
-      'sourceLabel': 'Service Threshold',
-      'sourceSummary': 'Demo service threshold evidence.',
-      'assignedTo': 'Unassigned',
-      'scheduledDate': '2026-06-21',
-      'estimatedCostLabel': '₱6,000.00',
-      'actualCostLabel': 'N/A',
-      'attachmentCount': 0,
-    },
-  ];
-
   Future<void> _pushMaintenanceToGeotab(Map<String, dynamic> row) async {
     final historyId = row['id'].toString();
     final preview = await BackendApiService.pushMaintenanceHistoryToGeotab(
@@ -512,57 +449,6 @@ class _MaintenancePageState extends State<MaintenancePage> {
       ),
     );
     _reload();
-  }
-
-  Future<void> _openWorkOrderDialog(Map<String, dynamic>? order) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _WorkOrderDialog(
-        order: order,
-        vehicles: vehiclesNotifier.value,
-        onSave: (payload) async {
-          final id = order?['id']?.toString() ?? '';
-          final nativeExisting =
-              id.isNotEmpty &&
-              order?['isNativeWorkOrder'] == true &&
-              order?['isSample'] != true;
-          if (nativeExisting) {
-            await BackendApiService.updateMaintenanceWorkOrder(id, payload);
-          } else {
-            await BackendApiService.createMaintenanceWorkOrder(payload);
-          }
-        },
-        onStatusChange: (status, {String? reason}) async {
-          final id = order?['id']?.toString() ?? '';
-          if (id.isEmpty ||
-              order?['isNativeWorkOrder'] != true ||
-              order?['isSample'] == true) {
-            return;
-          }
-          await BackendApiService.updateMaintenanceWorkOrder(id, {
-            'status': status,
-            if (reason != null && reason.trim().isNotEmpty)
-              'voidReason': reason.trim(),
-          });
-        },
-        onAttach: (payload) async {
-          final id = order?['id']?.toString() ?? '';
-          if (id.isEmpty ||
-              order?['isNativeWorkOrder'] != true ||
-              order?['isSample'] == true) {
-            return;
-          }
-          await BackendApiService.addMaintenanceWorkOrderAttachment(
-            id,
-            payload,
-          );
-        },
-      ),
-    );
-    if (saved == true) {
-      _reload();
-    }
   }
 
   Widget _emptyStateForSection(
@@ -607,20 +493,6 @@ class _MaintenancePageState extends State<MaintenancePage> {
             : null,
         onTap: CrudPermissions.canCreate(CrudEntity.maintenance)
             ? () => _openMaintenanceForm()
-            : null,
-      );
-    }
-    if (_section == 'workOrders') {
-      return _MaintenanceEmptyState(
-        isDark: isDark,
-        title: 'No maintenance work orders yet',
-        message:
-            'Create a manual work order or convert GeoTab fault, DVIR, or device evidence into a repair workflow.',
-        actionLabel: CrudPermissions.canCreate(CrudEntity.maintenance)
-            ? 'Create Work Order'
-            : null,
-        onTap: CrudPermissions.canCreate(CrudEntity.maintenance)
-            ? () => _openWorkOrderDialog(null)
             : null,
       );
     }
@@ -687,29 +559,103 @@ class _MaintenancePageState extends State<MaintenancePage> {
     );
   }
 
+  Widget _buildMaintenanceToolbar(bool isDark, int resultCount) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final search = _MaintenanceSearchField(
+            value: _searchQuery,
+            isDark: isDark,
+            onChanged: (value) => setState(() => _searchQuery = value),
+            onClear: () => setState(() => _searchQuery = ''),
+          );
+          final canAdd = CrudPermissions.canCreate(CrudEntity.maintenance);
+          final addButton = _MaintenanceToolbarButton(
+            label: compact
+                ? 'Add'
+                : (_section == 'workOrders' ? 'Create Work Order' : 'Add Log'),
+            icon: _section == 'workOrders'
+                ? Icons.handyman_rounded
+                : Icons.add_task_rounded,
+            color: AppTheme.successGreen,
+            filled: true,
+            onTap: () => _section == 'workOrders'
+                ? _openWorkOrderForm()
+                : _openMaintenanceForm(),
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: AdminResultCount(count: resultCount, label: 'records'),
+                ),
+                const SizedBox(height: 10),
+                search,
+                if (canAdd) ...[const SizedBox(height: 10), addButton],
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              AdminResultCount(count: resultCount, label: 'records'),
+              const SizedBox(width: 12),
+              Expanded(child: search),
+              if (canAdd) ...[const SizedBox(width: 14), addButton],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildOverview(bool isDark, Map<String, dynamic> overview) {
     final cards = [
       _OverviewCard(
         label: 'Alerts',
         value: '${overview['activeAlerts'] ?? 0}',
+        subtitle: 'need scheduling',
+        icon: Icons.warning_amber_rounded,
         accent: AppTheme.colorFFF59E0B,
         isDark: isDark,
       ),
       _OverviewCard(
         label: 'Faults',
         value: '${overview['faults'] ?? 0}',
+        subtitle: 'diagnostic events',
+        icon: Icons.report_problem_rounded,
         accent: AppTheme.colorFFEF4444,
         isDark: isDark,
       ),
       _OverviewCard(
         label: 'DVIR',
         value: '${overview['dvirReports'] ?? 0}',
+        subtitle: 'inspection reports',
+        icon: Icons.fact_check_rounded,
         accent: AppTheme.colorFF4B7BE5,
         isDark: isDark,
       ),
       _OverviewCard(
         label: 'Work Orders',
         value: '${overview['workOrders'] ?? 0}',
+        subtitle: 'shop activity',
+        icon: Icons.handyman_rounded,
         accent: AppTheme.colorFF10B981,
         isDark: isDark,
       ),
@@ -766,52 +712,61 @@ class _MaintenancePageState extends State<MaintenancePage> {
     };
 
     return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 12),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: sections.entries.map((entry) {
-            final selected = _section == entry.key;
-            return InkWell(
-              onTap: () => setState(() => _section = entry.key),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppTheme.space20,
-                  vertical: AppTheme.space16,
-                ),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: sections.entries.map((entry) {
+              final selected = _section == entry.key;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: InkWell(
+                  onTap: () => setState(() => _section = entry.key),
+                  borderRadius: BorderRadius.circular(10),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    height: 38,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
                       color: selected
-                          ? AppTheme.primaryBlue
-                          : AppTheme.transparent,
-                      width: 3,
+                          ? AppTheme.successGreen.withValues(alpha: 0.14)
+                          : AppTheme.white.withAlpha(8),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: selected
+                            ? AppTheme.successGreen.withValues(alpha: 0.34)
+                            : AppTheme.white.withAlpha(18),
+                      ),
+                    ),
+                    child: Text(
+                      entry.value,
+                      style: AppTheme.getBodyStyle(context, fontSize: 12)
+                          .copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: selected
+                                ? AppTheme.successGreen
+                                : AppTheme.gray300,
+                          ),
                     ),
                   ),
                 ),
-                child: Text(
-                  entry.value,
-                  style:
-                      AppTheme.getBodyStyle(
-                        context,
-                        fontSize: AppTheme.dashboardBodySize,
-                      ).copyWith(
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                        color: selected
-                            ? AppTheme.primaryBlue
-                            : AppTheme.getSubtleTextColor(context),
-                      ),
-                ),
-              ),
-            );
-          }).toList(),
+              );
+            }).toList(),
+          ),
         ),
       ),
     );
@@ -1158,42 +1113,44 @@ class _MaintenancePageState extends State<MaintenancePage> {
     }.toList();
     final types = {'All Types', ..._maintenanceTypes}.toList();
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final narrow = constraints.maxWidth < 720;
-        final fieldWidth = narrow ? constraints.maxWidth : 220.0;
-        final typeWidth = narrow ? constraints.maxWidth : 340.0;
-        return Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark
-                  ? AppTheme.white.withValues(alpha: 0.06)
-                  : AppTheme.black.withValues(alpha: 0.06),
-            ),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
           ),
-          child: Wrap(
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 720;
+          final fieldWidth = narrow ? constraints.maxWidth : 220.0;
+          final typeWidth = narrow ? constraints.maxWidth : 320.0;
+          return Wrap(
             spacing: 12,
             runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               SizedBox(
                 width: fieldWidth,
-                child: DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  initialValue: vehicles.contains(_vehicleFilter)
+                child: AdminFilterChip(
+                  label: 'Vehicle',
+                  value: vehicles.contains(_vehicleFilter)
                       ? _vehicleFilter
                       : 'All Vehicles',
-                  items: vehicles
-                      .map(
-                        (value) =>
-                            DropdownMenuItem(value: value, child: Text(value)),
-                      )
-                      .toList(),
-                  onChanged: (value) =>
-                      setState(() => _vehicleFilter = value ?? 'All Vehicles'),
-                  decoration: const InputDecoration(labelText: 'Vehicle'),
+                  activeWhen: 'All Vehicles',
+                  options: vehicles,
+                  onSelected: (value) => setState(() {
+                    _vehicleFilter = value;
+                  }),
+                  onClear: () => setState(() {
+                    _vehicleFilter = 'All Vehicles';
+                  }),
                 ),
               ),
               SizedBox(
@@ -1274,9 +1231,9 @@ class _MaintenancePageState extends State<MaintenancePage> {
                 label: const Text('Clear'),
               ),
             ],
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -1319,6 +1276,29 @@ class _MaintenancePageState extends State<MaintenancePage> {
       };
     });
     return filtered;
+  }
+
+  bool _matchesMaintenanceSearch(Map<String, dynamic> row) {
+    final query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) {
+      return true;
+    }
+    final searchable = [
+      row['vehiclePlate'],
+      row['vehicle'],
+      row['plate'],
+      row['type'],
+      row['priority'],
+      row['status'],
+      row['description'],
+      row['notes'],
+      row['provider'],
+      row['faultCode'],
+      row['diagnosticName'],
+      row['workOrderNumber'],
+      row['source'],
+    ].map((value) => value?.toString().toLowerCase() ?? '').join(' ');
+    return searchable.contains(query);
   }
 
   int _compareMaintenanceDates(
@@ -1391,6 +1371,144 @@ class _MaintenancePageState extends State<MaintenancePage> {
         },
       ),
     );
+  }
+
+  Future<void> _openWorkOrderForm({Map<String, dynamic>? record}) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _WorkOrderDialog(record: record),
+    );
+    if (result == null || !mounted) return;
+    try {
+      if ((record?['id']?.toString() ?? '').isEmpty) {
+        await BackendApiService.createMaintenanceWorkOrder(result);
+      } else {
+        await BackendApiService.updateMaintenanceWorkOrder(
+          record!['id'].toString(),
+          result,
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Work order saved.')));
+      _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Work order could not be saved.',
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showWorkOrderDetails(Map<String, dynamic> record) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _WorkOrderDetailsDialog(
+        record: record,
+        onCreateFromEvidence: (payload) async {
+          await BackendApiService.createMaintenanceWorkOrder(payload);
+          _reload();
+        },
+        onStatus: (status) async {
+          await _updateWorkOrderStatus(record, status);
+        },
+        onAttach: () async {
+          await _attachWorkOrderProof(record);
+        },
+        onEdit: () async {
+          Navigator.pop(context);
+          await _openWorkOrderForm(record: record);
+        },
+      ),
+    );
+  }
+
+  Future<void> _updateWorkOrderStatus(
+    Map<String, dynamic> record,
+    String status,
+  ) async {
+    final id = record['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    try {
+      await BackendApiService.updateMaintenanceWorkOrder(id, {
+        'status': status,
+        'notes': 'Status changed to ${_workOrderStatusLabel(status)}.',
+      });
+      if (!mounted) return;
+      Navigator.maybePop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Work order marked ${_workOrderStatusLabel(status)}.'),
+        ),
+      );
+      _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Work order status could not be updated.',
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _attachWorkOrderProof(Map<String, dynamic> record) async {
+    final id = record['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
+      withData: true,
+    );
+    final file = result?.files.single;
+    if (file == null || file.bytes == null) return;
+    final extension = (file.extension ?? '').toLowerCase();
+    final mime = switch (extension) {
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'png' => 'image/png',
+      'pdf' => 'application/pdf',
+      _ => 'application/octet-stream',
+    };
+    try {
+      await BackendApiService.addMaintenanceWorkOrderAttachment(id, {
+        'fileName': file.name,
+        'fileType': mime,
+        'dataUrl': 'data:$mime;base64,${base64Encode(file.bytes!)}',
+        'kind': 'repair_proof',
+      });
+      if (!mounted) return;
+      Navigator.maybePop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Work order proof attached.')),
+      );
+      _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Attachment could not be saved.',
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _confirmVoid(Map<String, dynamic> record) async {
@@ -1485,15 +1603,622 @@ class _MaintenanceSectionHeading extends StatelessWidget {
   }
 }
 
+class _WorkOrderDialog extends StatefulWidget {
+  const _WorkOrderDialog({this.record});
+
+  final Map<String, dynamic>? record;
+
+  @override
+  State<_WorkOrderDialog> createState() => _WorkOrderDialogState();
+}
+
+class _WorkOrderDialogState extends State<_WorkOrderDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _vehicleController;
+  late final TextEditingController _titleController;
+  late final TextEditingController _descriptionController;
+  late final TextEditingController _assignedController;
+  late final TextEditingController _estimatedCostController;
+  late final TextEditingController _notesController;
+  String _priority = 'medium';
+  String _sourceType = 'manual';
+
+  @override
+  void initState() {
+    super.initState();
+    final record = widget.record ?? const <String, dynamic>{};
+    _vehicleController = TextEditingController(
+      text: formatValue(
+        record['vehiclePlate'] ?? record['vehicle'],
+      ).replaceAll('N/A', ''),
+    );
+    _titleController = TextEditingController(
+      text: formatValue(record['title']).replaceAll('N/A', ''),
+    );
+    _descriptionController = TextEditingController(
+      text: formatValue(record['description']).replaceAll('N/A', ''),
+    );
+    _assignedController = TextEditingController(
+      text: formatValue(record['assignedTo']).replaceAll('N/A', ''),
+    );
+    _estimatedCostController = TextEditingController(
+      text: formatValue(record['estimatedCost']).replaceAll('N/A', ''),
+    );
+    _notesController = TextEditingController(
+      text: formatValue(record['notes']).replaceAll('N/A', ''),
+    );
+    _priority = (record['priorityKey'] ?? record['priority'] ?? 'medium')
+        .toString()
+        .toLowerCase()
+        .replaceAll(' ', '_');
+    _sourceType = (record['sourceType'] ?? 'manual').toString();
+  }
+
+  @override
+  void dispose() {
+    _vehicleController.dispose();
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _assignedController.dispose();
+    _estimatedCostController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 720;
+    return Dialog(
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isMobile ? 12 : 32,
+        vertical: 24,
+      ),
+      backgroundColor: AppTheme.transparent,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Material(
+            color: AppTheme.getCardBg(context),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _DialogHeader(
+                  icon: Icons.handyman_rounded,
+                  title: widget.record == null
+                      ? 'Create Work Order'
+                      : 'Edit Work Order',
+                ),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(22),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        children: [
+                          _field(
+                            _vehicleController,
+                            'Vehicle plate',
+                            required: true,
+                          ),
+                          const SizedBox(height: 12),
+                          _field(_titleController, 'Title', required: true),
+                          const SizedBox(height: 12),
+                          _field(
+                            _descriptionController,
+                            'Description',
+                            required: true,
+                            maxLines: 3,
+                          ),
+                          const SizedBox(height: 12),
+                          _row(isMobile, [
+                            DropdownButtonFormField<String>(
+                              initialValue: _priority,
+                              decoration: const InputDecoration(
+                                labelText: 'Priority',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'low',
+                                  child: Text('Low'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'medium',
+                                  child: Text('Medium'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'high',
+                                  child: Text('High'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'critical',
+                                  child: Text('Critical'),
+                                ),
+                              ],
+                              onChanged: (value) =>
+                                  setState(() => _priority = value ?? 'medium'),
+                            ),
+                            DropdownButtonFormField<String>(
+                              initialValue: _sourceType,
+                              decoration: const InputDecoration(
+                                labelText: 'Source',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'manual',
+                                  child: Text('Manual'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'geotab_fault',
+                                  child: Text('From GeoTab Fault'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'geotab_dvir',
+                                  child: Text('From DVIR'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'geotab_status',
+                                  child: Text('From Device Status'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'service_threshold',
+                                  child: Text('Service Threshold'),
+                                ),
+                              ],
+                              onChanged: (value) => setState(
+                                () => _sourceType = value ?? 'manual',
+                              ),
+                            ),
+                          ]),
+                          const SizedBox(height: 12),
+                          _row(isMobile, [
+                            _field(_assignedController, 'Assigned to'),
+                            _field(
+                              _estimatedCostController,
+                              'Estimated cost',
+                              keyboardType: TextInputType.number,
+                            ),
+                          ]),
+                          const SizedBox(height: 12),
+                          _field(_notesController, 'Notes', maxLines: 2),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _submit,
+                          child: const Text('Save Work Order'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _field(
+    TextEditingController controller,
+    String label, {
+    bool required = false,
+    TextInputType? keyboardType,
+    int maxLines = 1,
+  }) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      maxLines: maxLines,
+      validator: keyboardType == TextInputType.number
+          ? (value) => FormValidation.nonNegativeNumber(
+              label,
+              value,
+              required: required,
+            )
+          : required
+          ? (value) => FormValidation.requiredField(label, value)
+          : null,
+      decoration: InputDecoration(labelText: required ? '$label *' : label),
+    );
+  }
+
+  Widget _row(bool mobile, List<Widget> children) {
+    if (mobile) {
+      return Column(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            children[i],
+            if (i != children.length - 1) const SizedBox(height: 12),
+          ],
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          Expanded(child: children[i]),
+          if (i != children.length - 1) const SizedBox(width: 12),
+        ],
+      ],
+    );
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(context, {
+      'vehiclePlate': _vehicleController.text.trim(),
+      'title': _titleController.text.trim(),
+      'description': _descriptionController.text.trim(),
+      'priority': _priority,
+      'sourceType': _sourceType,
+      'assignedTo': _assignedController.text.trim(),
+      'estimatedCost': double.tryParse(_estimatedCostController.text.trim()),
+      'notes': _notesController.text.trim(),
+    });
+  }
+}
+
+class _WorkOrderDetailsDialog extends StatelessWidget {
+  const _WorkOrderDetailsDialog({
+    required this.record,
+    required this.onCreateFromEvidence,
+    required this.onStatus,
+    required this.onAttach,
+    required this.onEdit,
+  });
+
+  final Map<String, dynamic> record;
+  final Future<void> Function(Map<String, dynamic> payload)
+  onCreateFromEvidence;
+  final Future<void> Function(String status) onStatus;
+  final Future<void> Function() onAttach;
+  final Future<void> Function() onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = record['id']?.toString() ?? '';
+    final isNative = record['isNativeWorkOrder'] == true || id.isNotEmpty;
+    final status = (record['statusKey'] ?? record['status'] ?? 'open')
+        .toString()
+        .toLowerCase()
+        .replaceAll(' ', '_');
+    final source = formatValue(record['sourceLabel'] ?? record['sourceType']);
+    final attachments = _listOfMaps(record['attachments']);
+    final terminal = {'completed', 'verified', 'voided'}.contains(status);
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      backgroundColor: AppTheme.transparent,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 820),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Material(
+            color: AppTheme.getCardBg(context),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _DialogHeader(
+                  icon: Icons.handyman_rounded,
+                  title: 'Work Order Details',
+                ),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(22),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                formatValue(record['title'] ?? 'Work Order'),
+                                style: AppTheme.getHeadingStyle(
+                                  context,
+                                  fontSize: 22,
+                                ),
+                              ),
+                            ),
+                            _TinyBadge(
+                              label: _workOrderStatusLabel(status),
+                              color: _workOrderStatusColor(status),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _TinyBadge(
+                              label: source,
+                              color: AppTheme.primaryBlue,
+                            ),
+                            _TinyBadge(
+                              label: formatValue(
+                                record['priority'] ?? 'Medium',
+                              ),
+                              color: AppTheme.warningOrange,
+                            ),
+                            _TinyBadge(
+                              label:
+                                  '${attachments.length} attachment${attachments.length == 1 ? '' : 's'}',
+                              color: AppTheme.successGreen,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          formatValue(record['description']),
+                          style: AppTheme.getBodyStyle(context).copyWith(
+                            color: AppTheme.getSubtleTextColor(context),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            _MetricPill(
+                              label: 'Vehicle',
+                              value: formatValue(
+                                record['vehiclePlate'] ?? record['vehicle'],
+                              ),
+                            ),
+                            _MetricPill(
+                              label: 'Assigned',
+                              value: formatValue(record['assignedTo']),
+                            ),
+                            _MetricPill(
+                              label: 'Estimated',
+                              value: formatValue(record['estimatedCostLabel']),
+                            ),
+                            _MetricPill(
+                              label: 'Actual',
+                              value: formatValue(record['actualCostLabel']),
+                            ),
+                          ],
+                        ),
+                        if (formatValue(record['sourceSummary']) != 'N/A') ...[
+                          const SizedBox(height: 16),
+                          Text(
+                            'Source evidence',
+                            style: AppTheme.getBodyStyle(
+                              context,
+                            ).copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            formatValue(record['sourceSummary']),
+                            style: AppTheme.settingsSubtitleStyle(context),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+                  child: Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close'),
+                      ),
+                      if (!isNative)
+                        FilledButton.icon(
+                          onPressed: () async {
+                            await onCreateFromEvidence(
+                              _payloadFromEvidence(record),
+                            );
+                            if (context.mounted) Navigator.pop(context);
+                          },
+                          icon: const Icon(Icons.add_task_rounded),
+                          label: const Text('Create Native Work Order'),
+                        ),
+                      if (isNative) ...[
+                        OutlinedButton.icon(
+                          onPressed: onAttach,
+                          icon: const Icon(Icons.attach_file_rounded),
+                          label: const Text('Attach Proof'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: onEdit,
+                          icon: const Icon(Icons.edit_note_rounded),
+                          label: const Text('Edit'),
+                        ),
+                        if (!terminal)
+                          FilledButton.icon(
+                            onPressed: () async =>
+                                onStatus(_nextWorkOrderStatus(status)),
+                            icon: const Icon(Icons.play_arrow_rounded),
+                            label: Text(_nextWorkOrderAction(status)),
+                          ),
+                        if (!terminal)
+                          TextButton.icon(
+                            onPressed: () async => onStatus('voided'),
+                            icon: const Icon(Icons.block_rounded),
+                            label: const Text('Void'),
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DialogHeader extends StatelessWidget {
+  const _DialogHeader({required this.icon, required this.title});
+
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+      color: AppTheme.colorFF4B7BE5,
+      child: Row(
+        children: [
+          Icon(icon, color: AppTheme.white),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              title,
+              style: AppTheme.getHeadingStyle(
+                context,
+                fontSize: 20,
+              ).copyWith(color: AppTheme.white),
+            ),
+          ),
+          IconButton(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close_rounded, color: AppTheme.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricPill extends StatelessWidget {
+  const _MetricPill({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 140),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppTheme.getSecondaryBg(context),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.getBorderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: AppTheme.settingsSubtitleStyle(context, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value == 'N/A' ? 'Not set' : value,
+            style: AppTheme.getBodyStyle(
+              context,
+            ).copyWith(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Map<String, dynamic> _payloadFromEvidence(Map<String, dynamic> record) {
+  final sourceType = (record['sourceType'] ?? 'manual').toString();
+  return {
+    'vehiclePlate': formatValue(record['vehiclePlate'] ?? record['vehicle']),
+    'title': formatValue(record['title'] ?? 'Maintenance Work Order'),
+    'description': formatValue(
+      record['description'] ?? record['sourceSummary'],
+    ),
+    'priority': (record['priorityKey'] ?? record['priority'] ?? 'medium')
+        .toString()
+        .toLowerCase(),
+    'sourceType': sourceType == 'manual' ? 'manual' : sourceType,
+    'sourceRecordId': record['sourceRecordId']?.toString(),
+    'sourceSummary': formatValue(record['sourceSummary']),
+    'status': 'open',
+  };
+}
+
+String _workOrderStatusLabel(String status) {
+  return switch (status.toLowerCase().replaceAll(' ', '_')) {
+    'assigned' => 'Assigned',
+    'in_progress' => 'In progress',
+    'waiting_parts' => 'Waiting parts',
+    'completed' => 'Completed',
+    'verified' => 'Verified',
+    'voided' => 'Voided',
+    _ => 'Open',
+  };
+}
+
+String _nextWorkOrderStatus(String status) {
+  return switch (status.toLowerCase().replaceAll(' ', '_')) {
+    'open' => 'assigned',
+    'assigned' => 'in_progress',
+    'in_progress' => 'completed',
+    'waiting_parts' => 'in_progress',
+    'completed' => 'verified',
+    _ => 'in_progress',
+  };
+}
+
+String _nextWorkOrderAction(String status) {
+  return switch (status.toLowerCase().replaceAll(' ', '_')) {
+    'open' => 'Assign',
+    'assigned' => 'Start Work',
+    'in_progress' => 'Complete',
+    'waiting_parts' => 'Resume Work',
+    'completed' => 'Verify',
+    _ => 'Advance',
+  };
+}
+
+Color _workOrderStatusColor(String status) {
+  return switch (status.toLowerCase().replaceAll(' ', '_')) {
+    'completed' || 'verified' => AppTheme.successGreen,
+    'voided' => AppTheme.errorRed,
+    'waiting_parts' => AppTheme.warningOrange,
+    'in_progress' => AppTheme.primaryBlue,
+    _ => AppTheme.colorFF8B5CF6,
+  };
+}
+
 class _OverviewCard extends StatelessWidget {
   final String label;
   final String value;
+  final String subtitle;
+  final IconData icon;
   final Color accent;
   final bool isDark;
 
   const _OverviewCard({
     required this.label,
     required this.value,
+    required this.subtitle,
+    required this.icon,
     required this.accent,
     required this.isDark,
   });
@@ -1501,26 +2226,194 @@ class _OverviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppTheme.dashboardKpiPadding),
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
-        borderRadius: BorderRadius.circular(AppTheme.radiusXl),
-        border: Border.all(color: accent.withValues(alpha: 0.22)),
+        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: accent.withValues(alpha: isDark ? 0.34 : 0.2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: isDark ? 0.14 : 0.08),
+            blurRadius: 22,
+            spreadRadius: -14,
+            offset: const Offset(0, 14),
+          ),
+        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: AppTheme.dashboardKpiLabelSize,
-              fontWeight: FontWeight.w800,
-              color: accent,
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: accent, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: AppTheme.space8),
-          Text(value, style: AppTheme.getDashboardKpiValueStyle(context)),
         ],
+      ),
+    );
+  }
+}
+
+class _MaintenanceToolbarButton extends StatelessWidget {
+  const _MaintenanceToolbarButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.filled = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          constraints: const BoxConstraints(minWidth: 144),
+          decoration: BoxDecoration(
+            color: filled ? color : color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: color.withValues(alpha: filled ? 0 : 0.28),
+            ),
+            boxShadow: filled
+                ? [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.22),
+                      blurRadius: 16,
+                      spreadRadius: -10,
+                      offset: const Offset(0, 10),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: filled ? AppTheme.white : color, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: filled ? AppTheme.white : color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MaintenanceSearchField extends StatelessWidget {
+  const _MaintenanceSearchField({
+    required this.value,
+    required this.isDark,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final String value;
+  final bool isDark;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        hintText:
+            'Search by vehicle, service type, fault, provider, or notes...',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: value.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded),
+              ),
+        filled: true,
+        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(12),
+          ),
+        ),
+      ),
+      style: TextStyle(
+        fontSize: 14,
+        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
       ),
     );
   }
@@ -1839,6 +2732,17 @@ class _MaintenanceCard extends StatelessWidget {
         data['voided'] == true ||
         data['status']?.toString().toLowerCase() == 'voided';
     final readOnly = data['isReadOnly'] == true;
+    final severityText = _faultSeverity(data).toLowerCase();
+    final faultSeverity =
+        severityText.contains('critical') || severityText.contains('high')
+        ? TelemetrySeverity.critical
+        : severityText.contains('medium') || severityText.contains('warning')
+        ? TelemetrySeverity.warning
+        : TelemetrySeverity.normal;
+    final faultColor = telemetrySeverityColor(
+      faultSeverity,
+      TelemetryAvailability.live,
+    );
 
     final card = Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -1847,7 +2751,9 @@ class _MaintenanceCard extends StatelessWidget {
         color: isDark ? AppTheme.colorFF141924 : AppTheme.white,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: isDark
+          color: section == 'faults'
+              ? faultColor.withValues(alpha: 0.4)
+              : isDark
               ? AppTheme.white.withValues(alpha: 0.06)
               : AppTheme.black.withValues(alpha: 0.06),
         ),
@@ -1855,50 +2761,43 @@ class _MaintenanceCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: AppTheme.dashboardSectionHeaderSize,
-              fontWeight: FontWeight.w900,
-              color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
-            ),
-          ),
-          if (section == 'workOrders') ...[
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _TinyBadge(
-                  label: isSample
-                      ? 'Sample'
-                      : (data['isNativeWorkOrder'] == true
-                            ? 'PioneerPath Work Order'
-                            : 'GeoTab Suggestion'),
-                  color: isSample
-                      ? AppTheme.warningOrange
-                      : (data['isNativeWorkOrder'] == true
-                            ? AppTheme.successGreen
-                            : AppTheme.primaryBlue),
-                ),
-                _TinyBadge(
-                  label: formatValue(data['sourceLabel'] ?? 'Manual'),
-                  color: data['isGeotabBacked'] == true
-                      ? AppTheme.primaryBlue
-                      : AppTheme.colorFF64748B,
-                ),
-                _TinyBadge(
-                  label: formatValue(data['statusLabel'] ?? data['status']),
-                  color: _workOrderStatusColor(data['status']),
-                ),
-                if ((data['attachmentCount'] ?? 0) != 0)
-                  _TinyBadge(
-                    label: '${data['attachmentCount']} proof file(s)',
-                    color: AppTheme.successGreen,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: AppTheme.dashboardSectionHeaderSize,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
                   ),
+                ),
+              ),
+              if (section == 'faults') ...[
+                _TinyBadge(label: _faultSeverity(data), color: faultColor),
+                const SizedBox(width: 7),
+                _TinyBadge(
+                  label: data['acknowledged'] == true
+                      ? 'Acknowledged'
+                      : 'Needs review',
+                  color: data['acknowledged'] == true
+                      ? AppTheme.successGreen
+                      : AppTheme.warningOrange,
+                ),
               ],
-            ),
-          ],
+              if (section == 'dvir')
+                _TinyBadge(
+                  label: data['repaired'] == true
+                      ? 'Repaired'
+                      : data['hasDefects'] == true
+                      ? 'Defect found'
+                      : 'Passed',
+                  color: data['repaired'] == true || data['hasDefects'] != true
+                      ? AppTheme.successGreen
+                      : AppTheme.warningOrange,
+                ),
+            ],
+          ),
           if (section == 'history') ...[
             const SizedBox(height: 8),
             Wrap(
@@ -1931,6 +2830,33 @@ class _MaintenanceCard extends StatelessWidget {
               ],
             ),
           ],
+          if (section == 'workOrders') ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _TinyBadge(
+                  label: _workOrderStatusLabel(
+                    (data['statusKey'] ?? data['status'] ?? 'open').toString(),
+                  ),
+                  color: _workOrderStatusColor(
+                    (data['statusKey'] ?? data['status'] ?? 'open').toString(),
+                  ),
+                ),
+                _TinyBadge(
+                  label: formatValue(data['sourceLabel'] ?? data['sourceType']),
+                  color: AppTheme.primaryBlue,
+                ),
+                if (_listOfMaps(data['attachments']).isNotEmpty)
+                  _TinyBadge(
+                    label:
+                        '${_listOfMaps(data['attachments']).length} proof file${_listOfMaps(data['attachments']).length == 1 ? '' : 's'}',
+                    color: AppTheme.successGreen,
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           Text(
             subtitle,
@@ -1946,6 +2872,30 @@ class _MaintenanceCard extends StatelessWidget {
               color: isDark ? AppTheme.white60 : AppTheme.colorFF64748B,
             ),
           ),
+          if (section == 'faults') ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _TinyBadge(
+                  label:
+                      'First ${formatValue(data['firstDetectedAt'] ?? data['dateTime'])}',
+                  color: AppTheme.primaryBlue,
+                ),
+                _TinyBadge(
+                  label:
+                      'Last ${formatValue(data['lastDetectedAt'] ?? data['recordedAt'] ?? data['dateTime'])}',
+                  color: AppTheme.primaryBlue,
+                ),
+                _TinyBadge(
+                  label:
+                      '${data['occurrenceCount'] ?? 1} occurrence${(data['occurrenceCount'] ?? 1) == 1 ? '' : 's'}',
+                  color: faultColor,
+                ),
+              ],
+            ),
+          ],
           if (section == 'history') ...[
             const SizedBox(height: 10),
             Text(
@@ -2011,16 +2961,6 @@ class _MaintenanceCard extends StatelessWidget {
       child: card,
     );
   }
-}
-
-Color _workOrderStatusColor(Object? value) {
-  return switch (value?.toString().toLowerCase().replaceAll(' ', '_')) {
-    'completed' || 'verified' => AppTheme.successGreen,
-    'in_progress' || 'assigned' => AppTheme.primaryBlue,
-    'waiting_parts' => AppTheme.warningOrange,
-    'voided' => AppTheme.errorRed,
-    _ => AppTheme.colorFF64748B,
-  };
 }
 
 class _TinyBadge extends StatelessWidget {
@@ -2105,570 +3045,6 @@ class _DateFilterButton extends StatelessWidget {
         value == null
             ? label
             : '$label ${value!.year}-${value!.month.toString().padLeft(2, '0')}-${value!.day.toString().padLeft(2, '0')}',
-      ),
-    );
-  }
-}
-
-class _WorkOrderDialog extends StatefulWidget {
-  const _WorkOrderDialog({
-    required this.vehicles,
-    required this.onSave,
-    required this.onStatusChange,
-    required this.onAttach,
-    this.order,
-  });
-
-  final Map<String, dynamic>? order;
-  final List<Map<String, dynamic>> vehicles;
-  final Future<void> Function(Map<String, dynamic> payload) onSave;
-  final Future<void> Function(String status, {String? reason}) onStatusChange;
-  final Future<void> Function(Map<String, dynamic> payload) onAttach;
-
-  @override
-  State<_WorkOrderDialog> createState() => _WorkOrderDialogState();
-}
-
-class _WorkOrderDialogState extends State<_WorkOrderDialog> {
-  final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _vehicleController;
-  late final TextEditingController _geotabIdController;
-  late final TextEditingController _titleController;
-  late final TextEditingController _descriptionController;
-  late final TextEditingController _assignedController;
-  late final TextEditingController _estimatedCostController;
-  late final TextEditingController _actualCostController;
-  late final TextEditingController _notesController;
-  String _priority = 'medium';
-  DateTime? _scheduledAt;
-  bool _saving = false;
-  bool _attaching = false;
-
-  Map<String, dynamic> get _order => widget.order ?? const {};
-  bool get _editing => widget.order != null && _order['isNativeWorkOrder'] == true;
-  bool get _sample => _order['isSample'] == true;
-  bool get _derived => _order['isDerivedWorkOrder'] == true;
-  bool get _canPersist => !_sample;
-  String get _status => (_order['status'] ?? 'open').toString();
-
-  @override
-  void initState() {
-    super.initState();
-    _vehicleController = TextEditingController(
-      text: (_order['vehiclePlate'] ?? _order['vehicle'] ?? '').toString(),
-    );
-    _geotabIdController = TextEditingController(
-      text: _order['vehicleGeotabId']?.toString() ?? '',
-    );
-    _titleController = TextEditingController(
-      text: (_order['title'] ?? '').toString(),
-    );
-    _descriptionController = TextEditingController(
-      text: (_order['description'] ?? '').toString(),
-    );
-    _assignedController = TextEditingController(
-      text: (_order['assignedTo'] ?? '').toString().replaceAll('Unassigned', ''),
-    );
-    _estimatedCostController = TextEditingController(
-      text: _numberText(_order['estimatedCost']),
-    );
-    _actualCostController = TextEditingController(
-      text: _numberText(_order['actualCost']),
-    );
-    _notesController = TextEditingController(text: (_order['notes'] ?? '').toString());
-    _priority = _priorityKey(_order['priorityKey'] ?? _order['priority']);
-    _scheduledAt = DateTime.tryParse(_order['scheduledAt']?.toString() ?? '');
-  }
-
-  @override
-  void dispose() {
-    _vehicleController.dispose();
-    _geotabIdController.dispose();
-    _titleController.dispose();
-    _descriptionController.dispose();
-    _assignedController.dispose();
-    _estimatedCostController.dispose();
-    _actualCostController.dispose();
-    _notesController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final mobile = width < 760;
-    final vehicleOptions =
-        widget.vehicles
-            .map((vehicle) => vehicle['plate']?.toString().trim() ?? '')
-            .where((plate) => plate.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort();
-    if (_vehicleController.text.trim().isNotEmpty &&
-        !vehicleOptions.contains(_vehicleController.text.trim())) {
-      vehicleOptions.add(_vehicleController.text.trim());
-    }
-
-    return Dialog(
-      clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: mobile ? width - 24 : 820,
-          maxHeight: MediaQuery.of(context).size.height - 48,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppTheme.space24,
-                vertical: AppTheme.space20,
-              ),
-              color: AppTheme.primaryBlue,
-              child: Row(
-                children: [
-                  const Icon(Icons.assignment_rounded, color: AppTheme.white),
-                  const SizedBox(width: AppTheme.space12),
-                  Expanded(
-                    child: Text(
-                      _editing
-                          ? 'Work Order ${formatValue(_order['workOrderId'])}'
-                          : (_derived ? 'Create From GeoTab Evidence' : 'Create Work Order'),
-                      style: const TextStyle(
-                        color: AppTheme.white,
-                        fontSize: AppTheme.dashboardSectionHeaderSize,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _saving || _attaching ? null : () => Navigator.pop(context, false),
-                    icon: const Icon(Icons.close_rounded, color: AppTheme.white),
-                  ),
-                ],
-              ),
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(AppTheme.space24),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Wrap(
-                        spacing: AppTheme.space8,
-                        runSpacing: AppTheme.space8,
-                        children: [
-                          _TinyBadge(
-                            label: formatValue(_order['sourceLabel'] ?? 'Manual'),
-                            color: _sourceColor(_order['sourceType']),
-                          ),
-                          _TinyBadge(
-                            label: formatValue(_order['statusLabel'] ?? _status),
-                            color: _statusColor(_status),
-                          ),
-                          _TinyBadge(
-                            label: '${formatValue(_order['attachmentCount'] ?? 0)} attachment(s)',
-                            color: AppTheme.primaryBlue,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: AppTheme.space16),
-                      if ((_order['sourceSummary']?.toString().trim().isNotEmpty ?? false)) ...[
-                        _EvidencePanel(summary: _order['sourceSummary'].toString()),
-                        const SizedBox(height: AppTheme.space16),
-                      ],
-                      _row(mobile, [
-                        DropdownButtonFormField<String>(
-                          isExpanded: true,
-                          initialValue: vehicleOptions.contains(_vehicleController.text)
-                              ? _vehicleController.text
-                              : null,
-                          items: vehicleOptions
-                              .map((plate) => DropdownMenuItem(value: plate, child: Text(plate)))
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null) return;
-                            _vehicleController.text = value;
-                            final match = widget.vehicles.firstWhere(
-                              (vehicle) => vehicle['plate']?.toString() == value,
-                              orElse: () => const <String, dynamic>{},
-                            );
-                            _geotabIdController.text = match['geotabId']?.toString() ?? '';
-                          },
-                          validator: (value) => FormValidation.requiredSelection(
-                            'vehicle',
-                            value ?? _vehicleController.text,
-                          ),
-                          decoration: const InputDecoration(labelText: 'Vehicle *'),
-                        ),
-                        _field(_titleController, 'Title *', required: true),
-                      ]),
-                      const SizedBox(height: AppTheme.space12),
-                      _field(
-                        _descriptionController,
-                        'Work description *',
-                        required: true,
-                        maxLines: 4,
-                      ),
-                      const SizedBox(height: AppTheme.space12),
-                      _row(mobile, [
-                        DropdownButtonFormField<String>(
-                          initialValue: _priority,
-                          items: const [
-                            DropdownMenuItem(value: 'low', child: Text('Low')),
-                            DropdownMenuItem(value: 'medium', child: Text('Medium')),
-                            DropdownMenuItem(value: 'high', child: Text('High')),
-                            DropdownMenuItem(value: 'critical', child: Text('Critical')),
-                          ],
-                          onChanged: (value) => setState(() => _priority = value ?? _priority),
-                          decoration: const InputDecoration(labelText: 'Priority'),
-                        ),
-                        _field(_assignedController, 'Assigned staff / mechanic'),
-                        _dateTile(),
-                      ]),
-                      const SizedBox(height: AppTheme.space12),
-                      _row(mobile, [
-                        _field(
-                          _estimatedCostController,
-                          'Estimated cost',
-                          keyboardType: TextInputType.number,
-                        ),
-                        _field(
-                          _actualCostController,
-                          'Actual cost',
-                          keyboardType: TextInputType.number,
-                        ),
-                      ]),
-                      const SizedBox(height: AppTheme.space12),
-                      _field(_notesController, 'Notes / verification remarks', maxLines: 3),
-                      const SizedBox(height: AppTheme.space16),
-                      _buildActionButtons(),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActionButtons() {
-    final existingNative = _editing && _canPersist;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (existingNative)
-          Wrap(
-            spacing: AppTheme.space8,
-            runSpacing: AppTheme.space8,
-            children: [
-              _statusButton('Assign', 'assigned'),
-              _statusButton('Start Work', 'in_progress'),
-              _statusButton('Waiting Parts', 'waiting_parts'),
-              _statusButton('Complete', 'completed'),
-              _statusButton('Verify', 'verified'),
-              OutlinedButton.icon(
-                onPressed: _attaching ? null : _pickAttachment,
-                icon: const Icon(Icons.attach_file_rounded, size: 18),
-                label: Text(_attaching ? 'Attaching...' : 'Attach Receipt/Photo'),
-              ),
-              TextButton.icon(
-                onPressed: _saving ? null : _voidOrder,
-                icon: const Icon(Icons.block_rounded, size: 18),
-                label: const Text('Void'),
-              ),
-            ],
-          ),
-        if (existingNative) const SizedBox(height: AppTheme.space16),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _saving || _attaching ? null : () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-            ),
-            const SizedBox(width: AppTheme.space12),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _saving || _sample ? null : _submit,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppTheme.white,
-                        ),
-                      )
-                    : const Icon(Icons.save_rounded, size: 18),
-                label: Text(_editing ? 'Save Work Order' : 'Create Work Order'),
-              ),
-            ),
-          ],
-        ),
-        if (_sample) ...[
-          const SizedBox(height: AppTheme.space10),
-          Text(
-            'Sample work orders are preview-only. Use live/demo backend data to test saving.',
-            style: AppTheme.getCaptionStyle(context).copyWith(color: AppTheme.warningOrange),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _statusButton(String label, String status) {
-    return OutlinedButton(
-      onPressed: _saving ? null : () => _changeStatus(status),
-      child: Text(label),
-    );
-  }
-
-  Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await widget.onSave(_payload());
-      if (mounted) Navigator.pop(context, true);
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _changeStatus(String status) async {
-    setState(() => _saving = true);
-    try {
-      await widget.onStatusChange(status);
-      if (mounted) Navigator.pop(context, true);
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _voidOrder() async {
-    final controller = TextEditingController();
-    final reason = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Void work order?'),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            labelText: 'Required void reason',
-            hintText: 'Explain why this work order should be voided',
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Void Work Order'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if ((reason ?? '').isEmpty) return;
-    setState(() => _saving = true);
-    try {
-      await widget.onStatusChange('voided', reason: reason);
-      if (mounted) Navigator.pop(context, true);
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _pickAttachment() async {
-    final result = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
-      withData: true,
-    );
-    final file = result?.files.single;
-    if (file == null || file.bytes == null) return;
-    final ext = (file.extension ?? '').toLowerCase();
-    final mime = switch (ext) {
-      'jpg' || 'jpeg' => 'image/jpeg',
-      'png' => 'image/png',
-      'pdf' => 'application/pdf',
-      _ => 'application/octet-stream',
-    };
-    setState(() => _attaching = true);
-    try {
-      await widget.onAttach({
-        'fileName': file.name,
-        'fileType': mime,
-        'dataUrl': 'data:$mime;base64,${base64Encode(file.bytes!)}',
-        'kind': 'repair_proof',
-      });
-      if (mounted) Navigator.pop(context, true);
-    } finally {
-      if (mounted) setState(() => _attaching = false);
-    }
-  }
-
-  Map<String, dynamic> _payload() {
-    return {
-      'vehiclePlate': _vehicleController.text.trim(),
-      'vehicleGeotabId': _geotabIdController.text.trim(),
-      'title': _titleController.text.trim(),
-      'description': _descriptionController.text.trim(),
-      'priority': _priority,
-      'sourceType': (_order['sourceType'] ?? 'manual').toString(),
-      'sourceRecordId': _order['sourceRecordId']?.toString(),
-      'sourceSummary': _order['sourceSummary']?.toString(),
-      'assignedTo': _assignedController.text.trim(),
-      'scheduledAt': _scheduledAt?.toIso8601String(),
-      'estimatedCost': _numOrNull(_estimatedCostController.text),
-      'actualCost': _numOrNull(_actualCostController.text),
-      'notes': _notesController.text.trim(),
-    };
-  }
-
-  Widget _row(bool mobile, List<Widget> children) {
-    if (mobile) {
-      return Column(
-        children: children
-            .map((child) => Padding(
-                  padding: const EdgeInsets.only(bottom: AppTheme.space12),
-                  child: child,
-                ))
-            .toList(),
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < children.length; i++) ...[
-          if (i > 0) const SizedBox(width: AppTheme.space12),
-          Expanded(child: children[i]),
-        ],
-      ],
-    );
-  }
-
-  Widget _field(
-    TextEditingController controller,
-    String label, {
-    bool required = false,
-    int maxLines = 1,
-    TextInputType? keyboardType,
-  }) {
-    return TextFormField(
-      controller: controller,
-      maxLines: maxLines,
-      keyboardType: keyboardType,
-      validator: required
-          ? (value) => FormValidation.requiredField(label.replaceAll('*', '').trim(), value)
-          : null,
-      decoration: InputDecoration(labelText: label),
-    );
-  }
-
-  Widget _dateTile() {
-    return InkWell(
-      onTap: () async {
-        final picked = await showDatePicker(
-          context: context,
-          initialDate: _scheduledAt ?? DateTime.now(),
-          firstDate: DateTime.now().subtract(const Duration(days: 3650)),
-          lastDate: DateTime.now().add(const Duration(days: 3650)),
-        );
-        if (picked != null) {
-          setState(() => _scheduledAt = picked);
-        }
-      },
-      child: InputDecorator(
-        decoration: const InputDecoration(labelText: 'Scheduled date'),
-        child: Text(
-          _scheduledAt == null
-              ? 'Not scheduled'
-              : '${_scheduledAt!.year}-${_scheduledAt!.month.toString().padLeft(2, '0')}-${_scheduledAt!.day.toString().padLeft(2, '0')}',
-        ),
-      ),
-    );
-  }
-
-  static String _priorityKey(Object? value) {
-    final normalized = value?.toString().toLowerCase().trim() ?? '';
-    if (['low', 'medium', 'high', 'critical'].contains(normalized)) {
-      return normalized;
-    }
-    return 'medium';
-  }
-
-  static String _numberText(Object? value) {
-    if (value == null) return '';
-    final text = value.toString();
-    return text == 'N/A' ? '' : text;
-  }
-
-  static num? _numOrNull(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return null;
-    return num.tryParse(trimmed.replaceAll(',', ''));
-  }
-
-  static Color _statusColor(String value) {
-    return switch (value.toLowerCase().replaceAll(' ', '_')) {
-      'completed' || 'verified' => AppTheme.successGreen,
-      'in_progress' || 'assigned' => AppTheme.primaryBlue,
-      'waiting_parts' => AppTheme.warningOrange,
-      'voided' => AppTheme.errorRed,
-      _ => AppTheme.colorFF64748B,
-    };
-  }
-
-  static Color _sourceColor(Object? value) {
-    return switch (value?.toString().toLowerCase()) {
-      'geotab_fault' => AppTheme.errorRed,
-      'geotab_dvir' => AppTheme.warningOrange,
-      'geotab_status' => AppTheme.primaryBlue,
-      'service_threshold' => AppTheme.successGreen,
-      _ => AppTheme.colorFF64748B,
-    };
-  }
-}
-
-class _EvidencePanel extends StatelessWidget {
-  const _EvidencePanel({required this.summary});
-
-  final String summary;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppTheme.space16),
-      decoration: BoxDecoration(
-        color: AppTheme.warningOrange.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: AppTheme.warningOrange.withValues(alpha: 0.24)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.manage_search_rounded, color: AppTheme.warningOrange),
-          const SizedBox(width: AppTheme.space10),
-          Expanded(
-            child: Text(
-              summary,
-              style: AppTheme.getBodyStyle(
-                context,
-                fontSize: AppTheme.dashboardBodySize,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -2779,171 +3155,227 @@ class _MaintenanceLogDialogState extends State<_MaintenanceLogDialog> {
     return Dialog(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: mobile ? width - 24 : 760),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _editing
-                      ? (_readOnlySource
-                            ? 'Supplement GeoTab Maintenance'
-                            : 'Edit Maintenance Log')
-                      : 'Add Maintenance Log',
-                  style: const TextStyle(
-                    fontSize: AppTheme.dashboardSectionHeaderSize,
-                    fontWeight: FontWeight.w900,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? AppTheme.colorFF111827
+                : AppTheme.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppTheme.getBorderColor(context)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
                   ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  _readOnlySource
-                      ? 'GeoTab-sourced fields are read-only; add local remarks or proof only.'
-                      : 'Manual C3-04/C3-05 service record for compliance and prediction.',
-                  style: const TextStyle(color: AppTheme.colorFF64748B),
-                ),
-                const SizedBox(height: 16),
-                _row(mobile, [
-                  DropdownButtonFormField<String>(
-                    initialValue:
-                        vehicleOptions.contains(_vehicleController.text)
-                        ? _vehicleController.text
-                        : null,
-                    items: vehicleOptions
-                        .map(
-                          (plate) => DropdownMenuItem(
-                            value: plate,
-                            child: Text(plate),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: _readOnlySource
-                        ? null
-                        : (value) {
-                            if (value != null) {
-                              _vehicleController.text = value;
-                              final match = vehiclesNotifier.value.firstWhere(
-                                (vehicle) =>
-                                    vehicle['plate']?.toString() == value,
-                                orElse: () => const <String, dynamic>{},
-                              );
-                              _geotabIdController.text =
-                                  match['geotabId']?.toString() ?? '';
-                            }
-                          },
-                    validator: (value) => FormValidation.requiredSelection(
-                      'vehicle',
-                      value ?? _vehicleController.text,
-                    ),
-                    decoration: const InputDecoration(labelText: 'Vehicle *'),
-                  ),
-                  _dateTile(
-                    label: 'Maintenance date',
-                    value: _date,
-                    enabled: !_readOnlySource,
-                    onTap: () => _pickDate(true),
-                  ),
-                ]),
-                const SizedBox(height: 12),
-                _row(mobile, [
-                  _field(
-                    _odometerController,
-                    'Odometer reading at service in km',
-                    required: true,
-                    enabled: !_readOnlySource,
-                    keyboardType: TextInputType.number,
-                  ),
-                  DropdownButtonFormField<String>(
-                    initialValue: _type,
-                    items: widget.types
-                        .map(
-                          (type) =>
-                              DropdownMenuItem(value: type, child: Text(type)),
-                        )
-                        .toList(),
-                    onChanged: _readOnlySource
-                        ? null
-                        : (value) => setState(() => _type = value ?? _type),
-                    validator: (value) => FormValidation.requiredSelection(
-                      'maintenance type',
-                      value,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Maintenance type',
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 12),
-                _row(mobile, [
-                  _field(
-                    _providerController,
-                    'Service provider',
-                    enabled: !_readOnlySource,
-                  ),
-                  _field(
-                    _costController,
-                    'Cost in PHP',
-                    enabled: !_readOnlySource,
-                    keyboardType: TextInputType.number,
-                  ),
-                  _dateTile(
-                    label: 'Next due',
-                    value: _nextDue,
-                    enabled: !_readOnlySource,
-                    onTap: () => _pickDate(false),
-                  ),
-                ]),
-                const SizedBox(height: 12),
-                _field(
-                  _remarksController,
-                  'Remarks and findings',
-                  required: true,
-                  maxLines: 4,
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: _pickProof,
-                  icon: const Icon(Icons.attach_file_rounded, size: 18),
-                  label: Text(
-                    _proofFileName == null || _proofFileName!.isEmpty
-                        ? 'Attach JPG, PNG, or PDF proof'
-                        : 'Attached: $_proofFileName',
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
+                child: Row(
                   children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _saving
-                            ? null
-                            : () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
+                    const Icon(
+                      Icons.build_circle_rounded,
+                      color: AppTheme.white,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: FilledButton(
-                        onPressed: _saving ? null : _submit,
-                        child: _saving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: AppTheme.white,
-                                ),
-                              )
-                            : Text(_saved ? 'Saved' : 'Save Log'),
+                      child: Text(
+                        _editing
+                            ? (_readOnlySource
+                                  ? 'Supplement GeoTab Maintenance'
+                                  : 'Edit Maintenance Log')
+                            : 'Add Maintenance Log',
+                        style: const TextStyle(
+                          color: AppTheme.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
                       ),
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _readOnlySource
+                              ? 'GeoTab-sourced fields are read-only; add local remarks or proof only.'
+                              : 'Manual C3-04/C3-05 service record for compliance and prediction.',
+                          style: const TextStyle(
+                            color: AppTheme.colorFF64748B,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        _row(mobile, [
+                          DropdownButtonFormField<String>(
+                            initialValue:
+                                vehicleOptions.contains(_vehicleController.text)
+                                ? _vehicleController.text
+                                : null,
+                            items: vehicleOptions
+                                .map(
+                                  (plate) => DropdownMenuItem(
+                                    value: plate,
+                                    child: Text(plate),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: _readOnlySource
+                                ? null
+                                : (value) {
+                                    if (value != null) {
+                                      _vehicleController.text = value;
+                                      final match = vehiclesNotifier.value
+                                          .firstWhere(
+                                            (vehicle) =>
+                                                vehicle['plate']?.toString() ==
+                                                value,
+                                            orElse: () =>
+                                                const <String, dynamic>{},
+                                          );
+                                      _geotabIdController.text =
+                                          match['geotabId']?.toString() ?? '';
+                                    }
+                                  },
+                            validator: (value) =>
+                                FormValidation.requiredSelection(
+                                  'vehicle',
+                                  value ?? _vehicleController.text,
+                                ),
+                            decoration: const InputDecoration(
+                              labelText: 'Vehicle *',
+                            ),
+                          ),
+                          _dateTile(
+                            label: 'Maintenance date',
+                            value: _date,
+                            enabled: !_readOnlySource,
+                            onTap: () => _pickDate(true),
+                          ),
+                        ]),
+                        const SizedBox(height: 12),
+                        _row(mobile, [
+                          _field(
+                            _odometerController,
+                            'Odometer reading at service in km',
+                            required: true,
+                            enabled: !_readOnlySource,
+                            keyboardType: TextInputType.number,
+                          ),
+                          DropdownButtonFormField<String>(
+                            initialValue: _type,
+                            items: widget.types
+                                .map(
+                                  (type) => DropdownMenuItem(
+                                    value: type,
+                                    child: Text(type),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: _readOnlySource
+                                ? null
+                                : (value) =>
+                                      setState(() => _type = value ?? _type),
+                            validator: (value) =>
+                                FormValidation.requiredSelection(
+                                  'maintenance type',
+                                  value,
+                                ),
+                            decoration: const InputDecoration(
+                              labelText: 'Maintenance type',
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 12),
+                        _row(mobile, [
+                          _field(
+                            _providerController,
+                            'Service provider',
+                            enabled: !_readOnlySource,
+                          ),
+                          _field(
+                            _costController,
+                            'Cost in PHP',
+                            enabled: !_readOnlySource,
+                            keyboardType: TextInputType.number,
+                          ),
+                          _dateTile(
+                            label: 'Next due',
+                            value: _nextDue,
+                            enabled: !_readOnlySource,
+                            onTap: () => _pickDate(false),
+                          ),
+                        ]),
+                        const SizedBox(height: 12),
+                        _field(
+                          _remarksController,
+                          'Remarks and findings',
+                          required: true,
+                          maxLines: 4,
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: _pickProof,
+                          icon: const Icon(Icons.attach_file_rounded, size: 18),
+                          label: Text(
+                            _proofFileName == null || _proofFileName!.isEmpty
+                                ? 'Attach JPG, PNG, or PDF proof'
+                                : 'Attached: $_proofFileName',
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: _saving
+                                    ? null
+                                    : () => Navigator.pop(context),
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: _saving ? null : _submit,
+                                child: _saving
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: AppTheme.white,
+                                        ),
+                                      )
+                                    : Text(_saved ? 'Saved' : 'Save Log'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/backend_api.dart';
 import '../theme/app_theme.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 
@@ -204,7 +205,6 @@ class _AuditLogPageState extends State<AuditLogPage> {
                   final compact = constraints.maxWidth < 760;
                   final actorSearch = _AuditSearchField(
                     controller: _actorController,
-                    isDark: isDark,
                     onChanged: (_) => _reload(resetPage: true),
                     onClear: () {
                       _actorController.clear();
@@ -827,67 +827,21 @@ class _AuditLogPageState extends State<AuditLogPage> {
 class _AuditSearchField extends StatelessWidget {
   const _AuditSearchField({
     required this.controller,
-    required this.isDark,
     required this.onChanged,
     required this.onClear,
   });
 
   final TextEditingController controller;
-  final bool isDark;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return AdminSearchField(
       controller: controller,
+      hintText: 'Search by actor, role, or email...',
       onChanged: onChanged,
-      onSubmitted: onChanged,
-      style: TextStyle(
-        fontWeight: FontWeight.w700,
-        color: isDark ? AppTheme.white : AppTheme.colorFF18212F,
-      ),
-      decoration: InputDecoration(
-        hintText: 'Search by actor, role, or email...',
-        prefixIcon: Icon(
-          Icons.manage_search_rounded,
-          color: isDark ? AppTheme.white70 : AppTheme.colorFF64748B,
-        ),
-        suffixIcon: controller.text.trim().isEmpty
-            ? null
-            : IconButton(
-                tooltip: 'Clear search',
-                onPressed: onClear,
-                icon: const Icon(Icons.close_rounded),
-              ),
-        filled: true,
-        fillColor: isDark
-            ? const Color(0xFF20242B)
-            : const Color(0xFFF1F5F9),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withValues(alpha: 0.08)
-                : AppTheme.black.withValues(alpha: 0.08),
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withValues(alpha: 0.08)
-                : AppTheme.black.withValues(alpha: 0.08),
-          ),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(
-            color: AppTheme.primaryBlue.withValues(alpha: 0.55),
-            width: 1.4,
-          ),
-        ),
-      ),
+      onClear: onClear,
     );
   }
 }

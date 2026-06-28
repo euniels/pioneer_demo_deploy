@@ -35,9 +35,9 @@ class PioneerStateCard extends StatelessWidget {
       width: double.infinity,
       padding: EdgeInsets.all(compact ? AppTheme.space16 : AppTheme.space24),
       decoration: BoxDecoration(
-        color: AppTheme.getCardBg(context),
+        color: AppTheme.surfaceCard(context),
         borderRadius: AppTheme.getPanelRadius(),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
+        border: Border.all(color: AppTheme.borderDefault(context)),
         boxShadow: AppTheme.getCardShadow(context),
       ),
       child: Column(
@@ -65,8 +65,7 @@ class PioneerStateCard extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: AppTheme.getCaptionStyle(context).copyWith(
-              color: AppTheme.getSubtleTextColor(context),
+            style: AppTheme.settingsSubtitleStyle(context).copyWith(
               height: 1.35,
             ),
           ),
@@ -124,8 +123,8 @@ class PioneerErrorBanner extends StatelessWidget {
           Expanded(
             child: Text(
               'Something went wrong while loading this section.',
-              style: AppTheme.getCaptionStyle(context).copyWith(
-                color: AppTheme.getTextColor(context),
+              style: AppTheme.settingsCaptionStyle(context).copyWith(
+                color: AppTheme.textPrimary(context),
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -164,9 +163,9 @@ class PioneerBackgroundRefreshIndicator extends StatelessWidget {
           vertical: AppTheme.space6,
         ),
         decoration: BoxDecoration(
-          color: AppTheme.getCardBg(context),
+          color: AppTheme.surfaceCard(context),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: AppTheme.getBorderColor(context)),
+          border: Border.all(color: AppTheme.borderDefault(context)),
           boxShadow: AppTheme.getCardShadow(context),
         ),
         child: Row(
@@ -181,7 +180,7 @@ class PioneerBackgroundRefreshIndicator extends StatelessWidget {
               ),
             ),
             const SizedBox(width: AppTheme.space8),
-            Text(label, style: AppTheme.getCaptionStyle(context)),
+            Text(label, style: AppTheme.settingsCaptionStyle(context)),
           ],
         ),
       ),

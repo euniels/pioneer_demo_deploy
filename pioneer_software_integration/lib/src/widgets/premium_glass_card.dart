@@ -25,27 +25,14 @@ class PremiumGlassCard extends StatelessWidget {
         duration: const Duration(milliseconds: 300),
         padding: padding ?? const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          // Solid background - no transparency issues
-          color: isDark ? AppTheme.darkCardBg : AppTheme.white,
-
+          color: AppTheme.surfaceCard(context),
           borderRadius: BorderRadius.circular(24),
-
-          // Vibrant border glow - stronger in dark mode
           border: Border.all(
-            color: isDark
-                ? AppTheme.primaryBlue.withValues(
-                    alpha: ((140) / 255),
-                  ) // More vibrant in dark
-                : AppTheme.primaryBlue.withValues(
-                    alpha: ((60) / 255),
-                  ), // Subtle in light
+            color: AppTheme.borderStrong(context),
             width: isDark ? 2.0 : 1.5,
           ),
-
-          // Multiple layered shadows for 3D floating effect
           boxShadow: isDark
               ? [
-                  // Dark mode: More dramatic glow
                   BoxShadow(
                     color: AppTheme.primaryBlue.withValues(
                       alpha: ((120) / 255),
@@ -61,7 +48,6 @@ class PremiumGlassCard extends StatelessWidget {
                   ),
                 ]
               : [
-                  // Light mode: Clean, elevated card shadows
                   BoxShadow(
                     color: AppTheme.primaryBlue.withValues(alpha: ((40) / 255)),
                     blurRadius: elevation * 0.8,

@@ -121,9 +121,7 @@ class _TimelineRow extends StatelessWidget {
     final circleSize = compact ? 22.0 : 28.0;
     final lineColor = completed
         ? AppTheme.successGreen.withValues(alpha: 0.55)
-        : isDark
-        ? AppTheme.white.withValues(alpha: 0.16)
-        : AppTheme.black.withValues(alpha: 0.12);
+        : AppTheme.borderDefault(context);
 
     return IntrinsicHeight(
       child: Row(
@@ -158,8 +156,8 @@ class _TimelineRow extends StatelessWidget {
                       fontSize: compact ? 12 : 13.5,
                       fontWeight: current ? FontWeight.w900 : FontWeight.w600,
                       color: future
-                          ? (isDark ? AppTheme.gray600 : AppTheme.gray400)
-                          : (isDark ? AppTheme.white : AppTheme.colorFF1E293B),
+                          ? AppTheme.textDisabled(context)
+                          : AppTheme.textPrimary(context),
                     ),
                   ),
                   if (!compact &&
@@ -171,9 +169,7 @@ class _TimelineRow extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 12,
                           height: 1.35,
-                          color: isDark
-                              ? AppTheme.gray400
-                              : AppTheme.colorFF64748B,
+                          color: AppTheme.textSecondary(context),
                         ),
                       ),
                     ),
@@ -208,7 +204,7 @@ class _PhaseCircle extends StatelessWidget {
         ? AppTheme.successGreen
         : current
         ? AppTheme.primaryBlue
-        : AppTheme.materialGrey;
+        : AppTheme.textDisabled(context);
 
     Widget circle = Container(
       width: size,

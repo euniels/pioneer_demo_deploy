@@ -318,13 +318,9 @@ class _DashboardLayoutState extends State<DashboardLayout> {
     return Container(
       width: panelWidth,
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        color: AppTheme.surfaceCard(context),
         borderRadius: BorderRadius.circular(isVerySmall ? 12 : 16),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.1)
-              : AppTheme.black.withValues(alpha: 0.1),
-        ),
+        border: Border.all(color: AppTheme.borderDefault(context)),
       ),
       // ClipRRect silences any residual sub-pixel overflow
       child: ClipRRect(
@@ -338,9 +334,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
               decoration: BoxDecoration(
                 border: Border(
                   bottom: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withValues(alpha: 0.08)
-                        : AppTheme.black.withValues(alpha: 0.08),
+                    color: AppTheme.borderDefault(context),
                   ),
                 ),
               ),
@@ -357,9 +351,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                             style: TextStyle(
                               fontSize: headerFontSize,
                               fontWeight: FontWeight.w700,
-                              color: isDark
-                                  ? AppTheme.white
-                                  : AppTheme.colorFF2C3E50,
+                              color: AppTheme.textPrimary(context),
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -424,14 +416,14 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                       Icon(
                         Icons.notifications_off_outlined,
                         size: isVerySmall ? 36 : (isMobile ? 40 : 48),
-                        color: isDark ? AppTheme.gray600 : AppTheme.gray400,
+                        color: AppTheme.textDisabled(context),
                       ),
                       SizedBox(height: isVerySmall ? 6 : (isMobile ? 8 : 12)),
                       Text(
                         'No notifications',
                         style: TextStyle(
                           fontSize: isVerySmall ? 11 : (isMobile ? 12 : 14),
-                          color: isDark ? AppTheme.gray500 : AppTheme.gray600,
+                          color: AppTheme.textMuted(context),
                         ),
                       ),
                     ],
@@ -469,9 +461,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withValues(alpha: 0.08)
-                        : AppTheme.black.withValues(alpha: 0.08),
+                    color: AppTheme.borderDefault(context),
                   ),
                 ),
               ),
@@ -558,7 +548,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
             style: TextStyle(
               fontSize: titleFontSize,
               fontWeight: item.isRead ? FontWeight.w600 : FontWeight.w700,
-              color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              color: AppTheme.textPrimary(context),
             ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -571,7 +561,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                 item.message,
                 style: TextStyle(
                   fontSize: messageFontSize,
-                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  color: AppTheme.textSecondary(context),
                   height: 1.2,
                 ),
                 maxLines: 2,
@@ -582,7 +572,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                 item.time,
                 style: TextStyle(
                   fontSize: timeFontSize,
-                  color: isDark ? AppTheme.gray500 : AppTheme.gray500,
+                  color: AppTheme.textMuted(context),
                 ),
               ),
             ],
@@ -648,13 +638,9 @@ class _DashboardLayoutState extends State<DashboardLayout> {
     return Container(
       width: panelWidth,
       decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        color: AppTheme.surfaceCard(context),
         borderRadius: BorderRadius.circular(isVerySmall ? 12 : 16),
-        border: Border.all(
-          color: isDark
-              ? AppTheme.white.withValues(alpha: 0.1)
-              : AppTheme.black.withValues(alpha: 0.1),
-        ),
+        border: Border.all(color: AppTheme.borderDefault(context)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -665,9 +651,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
-                  color: isDark
-                      ? AppTheme.white.withValues(alpha: 0.08)
-                      : AppTheme.black.withValues(alpha: 0.08),
+                  color: AppTheme.borderDefault(context),
                 ),
               ),
             ),
@@ -702,9 +686,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                         style: TextStyle(
                           fontSize: nameFontSize,
                           fontWeight: FontWeight.w700,
-                          color: isDark
-                              ? AppTheme.white
-                              : AppTheme.colorFF2C3E50,
+                          color: AppTheme.textPrimary(context),
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -714,7 +696,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                         AuthService.currentUserData?.email ?? '',
                         style: TextStyle(
                           fontSize: emailFontSize,
-                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                          color: AppTheme.textSecondary(context),
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -823,7 +805,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
               size: iconSize,
               color: isDestructive
                   ? AppTheme.colorFFE74C3C
-                  : (isDark ? AppTheme.gray400 : AppTheme.gray700),
+                  : AppTheme.textSecondary(context),
             ),
             SizedBox(width: isVerySmall ? 10 : 12),
             Expanded(
@@ -834,7 +816,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                   fontWeight: FontWeight.w500,
                   color: isDestructive
                       ? AppTheme.colorFFE74C3C
-                      : (isDark ? AppTheme.white : AppTheme.colorFF2C3E50),
+                      : AppTheme.textPrimary(context),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -852,14 +834,14 @@ class _DashboardLayoutState extends State<DashboardLayout> {
       barrierDismissible: !_isLoggingOut,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+          backgroundColor: AppTheme.surfaceCard(context),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text(
             'Logout',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
-              color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
+              color: AppTheme.textPrimary(context),
             ),
           ),
           content: Text(
@@ -868,7 +850,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                 : 'Are you sure you want to logout?',
             style: TextStyle(
               fontSize: 14,
-              color: isDark ? AppTheme.gray400 : AppTheme.gray700,
+              color: AppTheme.textSecondary(context),
             ),
           ),
           actions: [
@@ -879,7 +861,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: isDark ? AppTheme.gray400 : AppTheme.gray700,
+                  color: AppTheme.textSecondary(context),
                 ),
               ),
             ),
@@ -949,11 +931,11 @@ class _DashboardLayoutState extends State<DashboardLayout> {
         if (isNarrow) {
           return Scaffold(
             key: _scaffoldKey,
-            backgroundColor: AppTheme.getBackgroundColor(context),
+            backgroundColor: AppTheme.surfacePage(context),
             drawer: Drawer(
               // Match the sidebar background so the status-bar/notch area
               // shows the correct colour while SafeArea pushes content below.
-              backgroundColor: isDark ? AppTheme.colorFF0F1117 : AppTheme.white,
+              backgroundColor: AppTheme.surfacePanel(context),
               child: SafeArea(
                 bottom: false,
                 left: false,
@@ -984,7 +966,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
         }
 
         return Scaffold(
-          backgroundColor: AppTheme.getBackgroundColor(context),
+          backgroundColor: AppTheme.surfacePage(context),
           body: Row(
             children: [
               FleetSidebar(
@@ -1064,11 +1046,11 @@ class _DashboardLayoutState extends State<DashboardLayout> {
           end: Alignment.bottomRight,
           colors: isDark
               ? [AppTheme.darkPanel, AppTheme.darkPanelAlt]
-              : [AppTheme.white, AppTheme.colorFFF5F8FF],
+              : [AppTheme.surfaceCard(context), AppTheme.surfacePanel(context)],
         ),
         border: Border(
           bottom: BorderSide(
-            color: AppTheme.getBorderColor(context).withValues(alpha: 0.7),
+            color: AppTheme.borderDefault(context).withValues(alpha: 0.7),
             width: 1.0,
           ),
         ),
@@ -1087,7 +1069,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
               icon: Icon(
                 Icons.menu_rounded,
                 size: iconSize,
-                color: isDark ? AppTheme.gray300 : AppTheme.colorFF2C3E50,
+                color: AppTheme.textSecondary(context),
               ),
               onPressed: () {
                 _scaffoldKey.currentState?.openDrawer();
@@ -1183,7 +1165,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                     : AppTheme.colorFFEAF2FF.withValues(alpha: 0.72),
                 border: Border(
                   bottom: BorderSide(
-                    color: AppTheme.colorFF1A3A6B.withValues(alpha: 0.12),
+                    color: AppTheme.borderDefault(context),
                   ),
                 ),
               ),
@@ -1199,9 +1181,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                     child: Text(
                       'Offline mode: saved local data is shown; changes sync when the connection returns.',
                       style: TextStyle(
-                        color: isDark
-                            ? AppTheme.white70
-                            : AppTheme.colorFF64748B,
+                        color: AppTheme.textSecondary(context),
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1252,7 +1232,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                     icon: Icon(
                       Icons.notifications_outlined,
                       size: iconSize,
-                      color: AppTheme.getSubtleTextColor(context),
+                      color: AppTheme.textSecondary(context),
                     ),
                     onPressed: () => _toggleNotifications(context),
                     tooltip: 'Notifications',
@@ -1309,7 +1289,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
               icon: Icon(
                 isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                 size: iconSize,
-                color: AppTheme.getSubtleTextColor(context),
+                color: AppTheme.textSecondary(context),
               ),
               onPressed: () {
                 _toggleTheme(!isDark);
@@ -1339,7 +1319,7 @@ class _DashboardLayoutState extends State<DashboardLayout> {
                 icon: Icon(
                   Icons.refresh_rounded,
                   size: iconSize,
-                  color: AppTheme.getSubtleTextColor(context),
+                  color: AppTheme.textSecondary(context),
                 ),
                 onPressed: () {
                   final routeRefresh = widget.onRefresh;

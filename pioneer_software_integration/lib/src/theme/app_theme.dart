@@ -393,6 +393,101 @@ class AppTheme {
     return isDark ? neutralGray : lightMutedText;
   }
 
+  // System design tokens. Pages should prefer these over raw color aliases so
+  // dark-theme contrast stays consistent across modules.
+  static Color textPrimary(BuildContext context) => getTextColor(context);
+
+  static Color textSecondary(BuildContext context) => getSubtleTextColor(context);
+
+  static Color textMuted(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark ? darkSubtleText : lightMutedText;
+  }
+
+  static Color textDisabled(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark ? slateAccent : lightMutedText;
+  }
+
+  static Color surfacePage(BuildContext context) => getBackgroundColor(context);
+
+  static Color surfaceCard(BuildContext context) => getCardBg(context);
+
+  static Color surfacePanel(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark ? darkPanel : lightPanel;
+  }
+
+  static Color surfaceInput(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark ? colorFF0F1117 : colorFFF8FAFC;
+  }
+
+  static Color borderDefault(BuildContext context) => getBorderColor(context);
+
+  static Color borderStrong(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return isDark
+        ? primaryBlue.withValues(alpha: 0.42)
+        : pioneerDeepBlue.withValues(alpha: 0.18);
+  }
+
+  static TextStyle settingsTitleStyle(
+    BuildContext context, {
+    double fontSize = 16,
+  }) {
+    return _systemTextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w900,
+      color: textPrimary(context),
+    );
+  }
+
+  static TextStyle settingsSubtitleStyle(
+    BuildContext context, {
+    double fontSize = 12,
+  }) {
+    return _systemTextStyle(
+      fontSize: fontSize,
+      height: 1.35,
+      fontWeight: FontWeight.w500,
+      color: textSecondary(context),
+    );
+  }
+
+  static TextStyle settingsBodyStyle(
+    BuildContext context, {
+    double fontSize = 13,
+  }) {
+    return _systemTextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
+      color: textPrimary(context),
+    );
+  }
+
+  static TextStyle settingsCaptionStyle(
+    BuildContext context, {
+    double fontSize = 12,
+  }) {
+    return _systemTextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w500,
+      color: textMuted(context),
+    );
+  }
+
+  static TextStyle settingsLabelStyle(
+    BuildContext context, {
+    double fontSize = 12,
+  }) {
+    return _systemTextStyle(
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
+      color: textSecondary(context),
+    );
+  }
+
   static Color getAnalyticsTextColor(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return isDark ? gray300 : lightText;

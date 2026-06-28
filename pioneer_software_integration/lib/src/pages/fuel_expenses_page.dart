@@ -1,16 +1,22 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
 import '../config/pioneer_runtime_config.dart';
+import '../models/telemetry_view_data.dart';
 import '../services/backend_api.dart';
+import '../services/demo_telemetry_fixtures.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/page_cache_service.dart';
 import '../services/vehicles_store.dart';
 import '../theme/app_theme.dart';
 import '../utils/display_format.dart';
 import '../utils/form_validation.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
+import '../widgets/telemetry_widgets.dart';
 
 class FuelExpensesPage extends StatefulWidget {
   const FuelExpensesPage({super.key});
@@ -24,6 +30,7 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
 
   late Future<Map<String, dynamic>> _fuelFuture;
   final List<Map<String, dynamic>> _localEntries = [];
+  String _fuelSearch = '';
   String _selectedVehicle = '';
 
   @override
@@ -198,15 +205,12 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           final totals = _mapOf(data['totals']);
           final backendEvents = _listOfMaps(data['events']);
           final fuelTransactions = _listOfMaps(data['transactions']);
-          final normalizedEvents = _listOfMaps(data['normalizedEvents']);
           final chargeEvents = _listOfMaps(data['chargeEvents']);
           final realUsageByVehicle = _listOfMaps(
             data['usageByVehicle'],
           ).where((item) => _toDouble(item['fuelUsedLiters']) > 0).toList();
           final priceSettings = _mapOf(data['priceSettings']);
-          final preferredFuelRecords = normalizedEvents.isNotEmpty
-              ? normalizedEvents
-              : fuelTransactions.isNotEmpty
+          final preferredFuelRecords = fuelTransactions.isNotEmpty
               ? fuelTransactions
               : backendEvents;
           final visibleLocalEntries = _filterVehicleRows(_localEntries);
@@ -224,13 +228,6 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           final mergedEvents = usingSampleFuel
               ? _sampleFuelRecords()
               : realMergedEvents;
-          final reviewEvents = mergedEvents
-              .where(
-                (record) =>
-                    record['reviewStatus']?.toString().toLowerCase() ==
-                    'needs_review',
-              )
-              .toList();
 
           final totalSpend =
               _toDouble(totals['totalSpend']) +
@@ -249,82 +246,405 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
               chargeEvents.isNotEmpty ||
               energyUsedKwh > 0 ||
               chargingSessions > 0;
+          final filteredMergedEvents = _searchFuelRows(mergedEvents);
 
           return _FuelPageScaffold(
-            child: RefreshIndicator(
-              onRefresh: () async => _reload(),
-              child: ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  if (usingSampleFuel) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      margin: const EdgeInsets.only(bottom: AppTheme.space12),
-                      decoration: BoxDecoration(
-                        color: AppTheme.colorFFF39C12.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.colorFFF39C12.withValues(alpha: 0.2)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.cloud_off, color: AppTheme.colorFFF39C12),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'GeoTab data unavailable — showing local data only. Live updates will resume when connection is restored.',
-                              style: AppTheme.getSubtitleStyle(context).copyWith(fontSize: 13),
+            child: Column(
+              children: [
+                _buildFuelToolbar(context),
+                _buildFuelFilterBar(context, _vehicleFilterOptions(data)),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: () async => _reload(),
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(24),
+                      children: [
+                        if (usingSampleFuel) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            margin: const EdgeInsets.only(
+                              bottom: AppTheme.space12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppTheme.colorFFF39C12.withValues(
+                                alpha: 0.12,
+                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: AppTheme.colorFFF39C12.withValues(
+                                  alpha: 0.2,
+                                ),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.cloud_off,
+                                  color: AppTheme.colorFFF39C12,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'GeoTab data unavailable — showing local data only. Live updates will resume when connection is restored.',
+                                    style: AppTheme.getSubtitleStyle(
+                                      context,
+                                    ).copyWith(fontSize: 13),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
-                      ),
+                        _buildFuelSummaryCards(
+                          context,
+                          totalSpend: totalSpend,
+                          totalLiters: totalLiters,
+                          avgPrice: avgPrice,
+                          idleFuel: idleFuel,
+                          abnormalCount: abnormal,
+                          chargingSessions: chargingSessions,
+                        ).animate().fadeIn(duration: 300.ms),
+                        const SizedBox(height: AppTheme.space16),
+                        _buildFuelTelemetryReadiness(
+                          context,
+                          usageByVehicle,
+                        ).animate().fadeIn(duration: 350.ms),
+                        const SizedBox(height: AppTheme.space16),
+                        _buildUsagePanel(
+                          context,
+                          usageByVehicle,
+                          isSample: usingSampleFuel,
+                        ).animate().fadeIn(duration: 450.ms),
+                        const SizedBox(height: AppTheme.space16),
+                        if (filteredMergedEvents.isEmpty)
+                          _buildNoFuelRecordsPrompt(context)
+                        else
+                          _buildRecentEventsPanel(
+                            context,
+                            filteredMergedEvents,
+                            priceSettings,
+                          ).animate().fadeIn(duration: 475.ms),
+                        if (hasEnergyData) ...[
+                          const SizedBox(height: AppTheme.space16),
+                          _buildEnergyPanel(
+                            context,
+                            chargeEvents,
+                            energyUsedKwh: energyUsedKwh,
+                            chargingSessions: chargingSessions,
+                          ).animate().fadeIn(duration: 500.ms),
+                        ],
+                      ],
                     ),
-                  ],
-                  _buildHero(
-                    context,
-                    totalSpend: totalSpend,
-                    totalLiters: totalLiters,
-                    avgPrice: avgPrice,
-                    idleFuel: idleFuel,
-                    abnormalCount: abnormal,
-                    energyUsedKwh: energyUsedKwh,
-                    chargingSessions: chargingSessions,
-                  ).animate().fadeIn(duration: 350.ms),
-                  const SizedBox(height: AppTheme.space16),
-                  _buildVehicleFilter(context, _vehicleFilterOptions(data)),
-                  const SizedBox(height: AppTheme.space16),
-                  _buildUsagePanel(
-                    context,
-                    usageByVehicle,
-                    isSample: usingSampleFuel,
-                  ).animate().fadeIn(duration: 450.ms),
-                  if (reviewEvents.isNotEmpty) ...[
-                    const SizedBox(height: AppTheme.space16),
-                    _buildRefuelReviewPanel(context, reviewEvents),
-                  ],
-                  const SizedBox(height: AppTheme.space16),
-                  if (mergedEvents.isEmpty)
-                    _buildNoFuelRecordsPrompt(context)
-                  else
-                    _buildRecentEventsPanel(
-                      context,
-                      mergedEvents,
-                      priceSettings,
-                    ).animate().fadeIn(duration: 475.ms),
-                  if (hasEnergyData) ...[
-                    const SizedBox(height: AppTheme.space16),
-                    _buildEnergyPanel(
-                      context,
-                      chargeEvents,
-                      energyUsedKwh: energyUsedKwh,
-                      chargingSessions: chargingSessions,
-                    ).animate().fadeIn(duration: 500.ms),
-                  ],
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           );
         },
       ),
+    );
+  }
+
+  List<Map<String, dynamic>> _searchFuelRows(List<Map<String, dynamic>> rows) {
+    final query = _fuelSearch.trim().toLowerCase();
+    if (query.isEmpty) return rows;
+
+    return rows.where((row) {
+      final haystack = [
+        row['vehicle'],
+        row['plate'],
+        row['driver'],
+        row['station'],
+        row['siteName'],
+        row['source'],
+        row['displayDate'],
+        row['date'],
+      ].map((value) => value?.toString().toLowerCase() ?? '').join(' ');
+      return haystack.contains(query);
+    }).toList();
+  }
+
+  Widget _buildFuelToolbar(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.sizeOf(context).width < 850;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        16,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final search = _FuelSearchField(
+            hint: 'Search fuel records by vehicle, station, or driver...',
+            onChanged: (value) => setState(() => _fuelSearch = value),
+          );
+          final addButton = SizedBox(
+            height: 50,
+            width: compact ? double.infinity : 180,
+            child: FilledButton.icon(
+              onPressed: _addFuelRecord,
+              icon: const Icon(Icons.add_rounded),
+              label: Text(compact ? 'Add Record' : 'New Fuel Record'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.colorFF10B981,
+                foregroundColor: AppTheme.white,
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [search, const SizedBox(height: 12), addButton],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(child: search),
+              const SizedBox(width: 14),
+              addButton,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFuelFilterBar(BuildContext context, List<String> vehicles) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.sizeOf(context).width < 850;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        isMobile ? 16 : 24,
+        10,
+        isMobile ? 16 : 24,
+        12,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+        border: Border(
+          bottom: BorderSide(
+            color: isDark
+                ? AppTheme.white.withAlpha(18)
+                : AppTheme.black.withAlpha(14),
+          ),
+        ),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            AdminResultCount(
+              count: vehicles.length,
+              label: vehicles.length == 1 ? 'vehicle' : 'vehicles',
+            ),
+            const SizedBox(width: 10),
+            AdminFilterChip(
+              label: 'Vehicle',
+              value: _selectedVehicle.isEmpty
+                  ? 'All vehicles'
+                  : _selectedVehicle,
+              displayValue: _selectedVehicle.isEmpty
+                  ? 'All vehicles'
+                  : _selectedVehicle,
+              activeWhen: 'All vehicles',
+              options: ['All vehicles', ...vehicles],
+              onSelected: (value) {
+                setState(() {
+                  _selectedVehicle = value == 'All vehicles' ? '' : value;
+                  _fuelFuture = _loadFuel(forceRefresh: true);
+                });
+              },
+              onClear: () {
+                setState(() {
+                  _selectedVehicle = '';
+                  _fuelFuture = _loadFuel(forceRefresh: true);
+                });
+              },
+            ),
+            if (_selectedVehicle.isNotEmpty || _fuelSearch.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _fuelSearch = '';
+                    _selectedVehicle = '';
+                    _fuelFuture = _loadFuel(forceRefresh: true);
+                  });
+                },
+                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                label: const Text('Clear'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFuelSummaryCards(
+    BuildContext context, {
+    required double totalSpend,
+    required double totalLiters,
+    required double avgPrice,
+    required double idleFuel,
+    required int abnormalCount,
+    required int chargingSessions,
+  }) {
+    final cards = [
+      _FuelSummaryCard(
+        label: 'Total spend',
+        value: _money(totalSpend),
+        caption: 'Refuel cost',
+        icon: Icons.account_balance_wallet_rounded,
+        accent: AppTheme.colorFFD9B56D,
+      ),
+      _FuelSummaryCard(
+        label: 'Total liters',
+        value: '${totalLiters.toStringAsFixed(totalLiters >= 100 ? 0 : 1)} L',
+        caption: 'Fill-up volume',
+        icon: Icons.local_gas_station_rounded,
+        accent: AppTheme.colorFF00D4FF,
+      ),
+      _FuelSummaryCard(
+        label: 'Average price',
+        value: '₱${avgPrice.toStringAsFixed(2)}',
+        caption: 'Per liter',
+        icon: Icons.trending_up_rounded,
+        accent: AppTheme.colorFF10B981,
+      ),
+      _FuelSummaryCard(
+        label: 'Review flags',
+        value: '$abnormalCount',
+        caption: chargingSessions > 0
+            ? '$chargingSessions charge sessions'
+            : '${idleFuel.toStringAsFixed(idleFuel >= 100 ? 0 : 1)} L idle fuel',
+        icon: Icons.warning_amber_rounded,
+        accent: AppTheme.colorFFF59E0B,
+      ),
+    ];
+
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final gap = screenWidth < 850 ? AppTheme.space12 : AppTheme.space16;
+    final contentWidth = screenWidth - (AppTheme.space24 * 2);
+    final columns = contentWidth >= 1000
+        ? 4
+        : contentWidth >= 620
+        ? 2
+        : 1;
+    if (columns == 1) {
+      return Column(
+        children: [
+          for (final card in cards) ...[
+            card,
+            if (card != cards.last) SizedBox(height: gap),
+          ],
+        ],
+      );
+    }
+    final cardWidth = (contentWidth - (gap * (columns - 1))) / columns;
+    return Wrap(
+      spacing: gap,
+      runSpacing: gap,
+      children: [
+        for (final card in cards) SizedBox(width: cardWidth, child: card),
+      ],
+    );
+  }
+
+  Widget _buildFuelTelemetryReadiness(
+    BuildContext context,
+    List<Map<String, dynamic>> usageByVehicle,
+  ) {
+    final rows = usageByVehicle.take(4).map((row) {
+      final vehicle = <String, dynamic>{
+        ...row,
+        'plate': row['plate'] ?? row['vehicle'],
+      };
+      final fuel = DemoTelemetryFixtures.readingsForVehicle(
+        vehicle,
+      ).firstWhere((reading) => reading.key == 'fuel');
+      return (vehicle: vehicle, fuel: fuel);
+    }).toList();
+
+    return _ExecutivePanel(
+      title: 'Current fuel readiness',
+      subtitle:
+          'Latest tank levels are separate from transaction and cost history.',
+      child: rows.isEmpty
+          ? const _FuelEmptyState(
+              title: 'No current fuel readings',
+              message:
+                  'Fuel levels will appear when supported vehicle diagnostics report them.',
+            )
+          : _buildFuelReadinessTiles(context, rows),
+    );
+  }
+
+  Widget _buildFuelReadinessTiles(
+    BuildContext context,
+    List<({Map<String, dynamic> vehicle, TelemetryReadingViewData fuel})> rows,
+  ) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final contentWidth = screenWidth - (AppTheme.space24 * 2);
+    final columns = contentWidth >= 900 ? 4 : 2;
+    const gap = 12.0;
+    final width = (contentWidth - gap * (columns - 1)) / columns;
+    return Wrap(
+      spacing: gap,
+      runSpacing: gap,
+      children: rows
+          .map(
+            (row) => SizedBox(
+              width: width,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    formatValue(row.vehicle['vehicle']),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.getBodyStyle(context).copyWith(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  TelemetryReadingTile(
+                    reading: row.fuel,
+                    icon: Icons.local_gas_station_rounded,
+                    compact: true,
+                    showHistory: false,
+                  ),
+                ],
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 
@@ -346,14 +666,16 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Fuel record saved.')),
       );
-      PageCacheService.invalidate(_filteredCacheKey);
       _reload();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            FormValidation.backendError(error, 'Fuel record could not be saved.'),
+            FormValidation.backendError(
+              error,
+              'Fuel record could not be saved.',
+            ),
           ),
         ),
       );
@@ -362,302 +684,86 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
 
   Future<void> _confirmFuelEvent(Map<String, dynamic> record) async {
     final id = record['id']?.toString() ?? '';
-    if (id.isEmpty || record['sourceType']?.toString().startsWith('geotab') == true) {
-      return;
-    }
+    if (id.isEmpty) return;
     try {
       await BackendApiService.confirmFuelEvent(id);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Fuel event confirmed.')),
       );
-      PageCacheService.invalidate(_filteredCacheKey);
       _reload();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(FormValidation.backendError(error, 'Fuel event could not be confirmed.'))),
+        SnackBar(
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Fuel event could not be confirmed.',
+            ),
+          ),
+        ),
       );
     }
   }
 
   Future<void> _rejectFuelEvent(Map<String, dynamic> record) async {
     final id = record['id']?.toString() ?? '';
-    if (id.isEmpty || record['sourceType']?.toString().startsWith('geotab') == true) {
-      return;
-    }
+    if (id.isEmpty) return;
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reject fuel event?'),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Review reason',
+            hintText: 'Explain why this refuel record should not be used',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if ((reason ?? '').isEmpty) return;
     try {
-      await BackendApiService.rejectFuelEvent(
-        id,
-        reason: 'Rejected from Fuel & Energy review.',
-      );
+      await BackendApiService.rejectFuelEvent(id, reason: reason!);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Fuel event rejected.')),
       );
-      PageCacheService.invalidate(_filteredCacheKey);
       _reload();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(FormValidation.backendError(error, 'Fuel event could not be rejected.'))),
+        SnackBar(
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Fuel event could not be rejected.',
+            ),
+          ),
+        ),
       );
     }
   }
 
-  Widget _buildVehicleFilter(BuildContext context, List<String> vehicles) {
-    return _ExecutivePanel(
-      title: 'Report scope',
-      subtitle:
-          'Filter every fuel total and record by a specific fleet vehicle.',
-      child: Row(
-        children: [
-          const Icon(Icons.filter_alt_rounded, color: AppTheme.primaryBlue),
-          const SizedBox(width: AppTheme.space16),
-          Expanded(
-            child: DropdownButtonFormField<String>(
-              key: ValueKey(_selectedVehicle),
-              initialValue: _selectedVehicle,
-              decoration: const InputDecoration(labelText: 'Vehicle'),
-              items: [
-                const DropdownMenuItem(value: '', child: Text('All vehicles')),
-                ...vehicles.map(
-                  (vehicle) =>
-                      DropdownMenuItem(value: vehicle, child: Text(vehicle)),
-                ),
-              ],
-              onChanged: (value) {
-                setState(() {
-                  _selectedVehicle = value ?? '';
-                  _fuelFuture = _loadFuel(forceRefresh: true);
-                });
-              },
-            ),
-          ),
-          if (_selectedVehicle.isNotEmpty) ...[
-            const SizedBox(width: 10),
-            TextButton.icon(
-              onPressed: () {
-                setState(() {
-                  _selectedVehicle = '';
-                  _fuelFuture = _loadFuel(forceRefresh: true);
-                });
-              },
-              icon: const Icon(Icons.close_rounded),
-              label: const Text('Clear'),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHero(
-    BuildContext context, {
-    required double totalSpend,
-    required double totalLiters,
-    required double avgPrice,
-    required double idleFuel,
-    required int abnormalCount,
-    required double energyUsedKwh,
-    required int chargingSessions,
-  }) {
-    final cards = [
-      _HeroStat(
-        label: 'Total Spend',
-        value: _money(totalSpend),
-        caption: 'Refuel cost across synced events',
-        icon: Icons.account_balance_wallet_rounded,
-        accent: AppTheme.colorFFD9B56D,
-      ),
-      _HeroStat(
-        label: 'Total Liters',
-        value: '${totalLiters.toStringAsFixed(totalLiters >= 100 ? 0 : 1)} L',
-        caption: 'Combined fill-up volume',
-        icon: Icons.local_gas_station_rounded,
-        accent: AppTheme.colorFF00D4FF,
-      ),
-      _HeroStat(
-        label: 'Average Price / L',
-        value: 'PHP ${avgPrice.toStringAsFixed(2)}',
-        caption: 'Weighted by actual liters',
-        icon: Icons.trending_up_rounded,
-        accent: AppTheme.colorFF10B981,
-      ),
-      _HeroStat(
-        label: 'Idle Fuel',
-        value: '${idleFuel.toStringAsFixed(idleFuel >= 100 ? 0 : 1)} L',
-        caption: abnormalCount > 0
-            ? '$abnormalCount asset${abnormalCount == 1 ? '' : 's'} need review'
-            : 'No abnormal consumption flags',
-        icon: Icons.warning_amber_rounded,
-        accent: AppTheme.colorFFF59E0B,
-      ),
-      _HeroStat(
-        label: 'Charging Sessions',
-        value: '$chargingSessions',
-        caption: energyUsedKwh > 0
-            ? '${energyUsedKwh.toStringAsFixed(1)} kWh synced from EV assets'
-            : 'Ready for EV and hybrid fleets when charge data is available',
-        icon: Icons.ev_station_rounded,
-        accent: AppTheme.colorFF8B5CF6,
-      ),
-    ];
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(28),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: Theme.of(context).brightness == Brightness.dark
-              ? const [
-                  AppTheme.colorFF101827,
-                  AppTheme.colorFF18263D,
-                  AppTheme.colorFF111A28,
-                ]
-              : const [
-                  AppTheme.colorFFFFFFFF,
-                  AppTheme.colorFFF4F8FF,
-                  AppTheme.colorFFEAF2FF,
-                ],
-        ),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-        boxShadow: AppTheme.getElevatedShadow(context),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppTheme.goldAccent, AppTheme.primaryBlue],
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Icon(
-                  Icons.speed_rounded,
-                  color: AppTheme.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Fuel and energy command center',
-                      style: AppTheme.getHeadingStyle(context, fontSize: 28),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Live Geotab fuel usage, charge sessions, idling burn, and finance-ready refuel visibility.',
-                      style: AppTheme.getSubtitleStyle(context),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppTheme.space16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final compact = constraints.maxWidth < 980;
-              if (compact) {
-                return Column(
-                  children: cards
-                      .map(
-                        (card) => Padding(
-                          padding: const EdgeInsets.only(
-                            bottom: AppTheme.space16,
-                          ),
-                          child: _buildHeroCard(context, card),
-                        ),
-                      )
-                      .toList(),
-                );
-              }
-
-              return Row(
-                children: cards
-                    .map(
-                      (card) => Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            right: card == cards.last ? 0 : AppTheme.space16,
-                          ),
-                          child: _buildHeroCard(context, card),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeroCard(BuildContext context, _HeroStat stat) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: Theme.of(context).brightness == Brightness.dark
-            ? AppTheme.white.withValues(alpha: 0.03)
-            : AppTheme.white.withValues(alpha: 0.92),
-        border: Border.all(color: stat.accent.withValues(alpha: 0.22)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: stat.accent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(stat.icon, color: stat.accent, size: 18),
-              ),
-              const Spacer(),
-              Text(
-                stat.label.toUpperCase(),
-                style: AppTheme.getCaptionStyle(
-                  context,
-                ).copyWith(letterSpacing: 0.8),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            stat.value,
-            style: AppTheme.getHeadingStyle(
-              context,
-              fontSize: 26,
-            ).copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 6),
-          Text(stat.caption, style: AppTheme.getSubtitleStyle(context)),
-        ],
-      ),
-    );
-  }
-
   Widget _buildUsagePanel(
     BuildContext context,
-    List<Map<String, dynamic>> usageByVehicle,
-    {
+    List<Map<String, dynamic>> usageByVehicle, {
     bool isSample = false,
-  }
-  ) {
+  }) {
     if (usageByVehicle.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: AppTheme.space8),
@@ -696,73 +802,68 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
             const SizedBox(height: AppTheme.space12),
           ],
           ...visibleRows.map((item) {
-          final vehicle = formatValue(item['vehicle']) == 'N/A'
-              ? 'Unassigned vehicle'
-              : formatValue(item['vehicle']);
-          final liters = _toDouble(item['fuelUsedLiters']);
-          final ratio = chartCeiling == 0 ? 0.0 : liters / chartCeiling;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: AppTheme.space12),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 126,
-                  child: Text(
-                    vehicle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTheme.getSubtitleStyle(
-                      context,
-                    ).copyWith(fontSize: 13, fontWeight: FontWeight.w600),
+            final vehicle = formatValue(item['vehicle']) == 'N/A'
+                ? 'Unassigned vehicle'
+                : formatValue(item['vehicle']);
+            final liters = _toDouble(item['fuelUsedLiters']);
+            final ratio = chartCeiling == 0 ? 0.0 : liters / chartCeiling;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: AppTheme.space12),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 126,
+                    child: Text(
+                      vehicle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.getSubtitleStyle(
+                        context,
+                      ).copyWith(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
                   ),
-                ),
-                const SizedBox(width: AppTheme.space12),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final width = (constraints.maxWidth * ratio).clamp(
-                        AppTheme.space12,
-                        constraints.maxWidth,
-                      );
-                      return Stack(
-                        children: [
-                          Container(
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: AppTheme.getSecondaryBg(context),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
+                  const SizedBox(width: AppTheme.space12),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Container(
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: AppTheme.getSecondaryBg(context),
+                            borderRadius: BorderRadius.circular(999),
                           ),
-                          Container(
-                            width: width.toDouble(),
+                        ),
+                        FractionallySizedBox(
+                          widthFactor: ratio.clamp(0.04, 1.0),
+                          alignment: Alignment.centerLeft,
+                          child: Container(
                             height: 18,
                             decoration: BoxDecoration(
                               color: AppTheme.primaryBlue,
                               borderRadius: BorderRadius.circular(999),
                             ),
                           ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: AppTheme.space12),
-                SizedBox(
-                  width: 78,
-                  child: Text(
-                    '${liters.toStringAsFixed(1)} L',
-                    textAlign: TextAlign.right,
-                    style: AppTheme.getSubtitleStyle(context).copyWith(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.primaryBlue,
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          );
-        }),
+                  const SizedBox(width: AppTheme.space12),
+                  SizedBox(
+                    width: 78,
+                    child: Text(
+                      '${liters.toStringAsFixed(1)} L',
+                      textAlign: TextAlign.right,
+                      style: AppTheme.getSubtitleStyle(context).copyWith(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.primaryBlue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -786,82 +887,6 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
     );
   }
 
-  Widget _buildRefuelReviewPanel(
-    BuildContext context,
-    List<Map<String, dynamic>> events,
-  ) {
-    return _ExecutivePanel(
-      title: 'Refuel review',
-      subtitle:
-          'Station-stop or manual fuel records that need confirmation before finance uses them.',
-      child: Column(
-        children: events.take(5).map((record) {
-          final vehicle =
-              formatValue(record['vehicle'] ?? record['vehiclePlate']);
-          final station =
-              formatValue(record['stationName'] ?? record['station']);
-          final liters = _toDouble(record['liters'] ?? record['volumeLiters']);
-          final confidence =
-              formatValue(record['confidenceLabel'] ?? record['confidence']);
-          final sourceType = record['sourceType']?.toString() ?? '';
-          final canReview =
-              record['id'] != null && !sourceType.startsWith('geotab');
-          return Container(
-            margin: const EdgeInsets.only(bottom: AppTheme.space10),
-            padding: const EdgeInsets.all(AppTheme.space12),
-            decoration: BoxDecoration(
-              color: AppTheme.getSecondaryBg(context),
-              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-              border: Border.all(color: AppTheme.getBorderColor(context)),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.local_gas_station_rounded,
-                  color: AppTheme.colorFFF39C12,
-                ),
-                const SizedBox(width: AppTheme.space12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '$vehicle at $station',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTheme.getHeadingStyle(context, fontSize: 14),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${liters.toStringAsFixed(1)} L | $confidence | ${formatValue(record['sourceLabel'])}',
-                        style: AppTheme.getCaptionStyle(context),
-                      ),
-                    ],
-                  ),
-                ),
-                if (canReview) ...[
-                  TextButton(
-                    onPressed: () => _rejectFuelEvent(record),
-                    child: const Text('Reject'),
-                  ),
-                  const SizedBox(width: AppTheme.space8),
-                  FilledButton(
-                    onPressed: () => _confirmFuelEvent(record),
-                    child: const Text('Confirm'),
-                  ),
-                ] else
-                  Text(
-                    'Read-only',
-                    style: AppTheme.getCaptionStyle(context),
-                  ),
-              ],
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
   Widget _buildRecentEventsPanel(
     BuildContext context,
     List<Map<String, dynamic>> events,
@@ -880,26 +905,19 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
         icon: const Icon(Icons.add_rounded),
         label: const Text('Add record'),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final tableWidth = constraints.maxWidth < 940
-              ? 940.0
-              : constraints.maxWidth;
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: tableWidth,
-              child: Column(
-                children: [
-                  _buildFuelRecordHeader(context),
-                  ...events
-                      .take(12)
-                      .map((record) => _buildFuelRecordRow(context, record)),
-                ],
-              ),
-            ),
-          );
-        },
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: math.max(MediaQuery.sizeOf(context).width - 80, 1060),
+          child: Column(
+            children: [
+              _buildFuelRecordHeader(context),
+              ...events
+                  .take(12)
+                  .map((record) => _buildFuelRecordRow(context, record)),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -921,8 +939,10 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           _FuelTableHeading(label: 'STATION', flex: 22),
           _FuelTableHeading(label: 'VOLUME', flex: 12, numeric: true),
           _FuelTableHeading(label: 'PRICE / L', flex: 14, numeric: true),
-          _FuelTableHeading(label: 'ESTIMATED COST', flex: 16, numeric: true),
-          _FuelTableHeading(label: 'SOURCE', flex: 12),
+          _FuelTableHeading(label: 'ESTIMATED COST', flex: 15, numeric: true),
+          _FuelTableHeading(label: 'SOURCE', flex: 15),
+          _FuelTableHeading(label: 'STATUS', flex: 14),
+          _FuelTableHeading(label: 'ACTION', flex: 10, numeric: true),
         ],
       ),
     );
@@ -946,18 +966,10 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
     final estimatedCost = recordedCost > 0
         ? _money(recordedCost)
         : (estimatedLabel == 'N/A' ? '-' : estimatedLabel);
-    final source = formatValue(record['sourceLabel'] ?? record['source']);
-    final sourceType = record['sourceType']?.toString() ?? '';
-    final confidence = formatValue(
-      record['confidenceLabel'] ?? record['confidence'],
-    );
-    final reviewStatus = formatValue(
-      record['reviewStatusLabel'] ?? record['reviewStatus'],
-    );
-    final sourceNote = [
-      if (confidence != 'N/A') confidence,
-      if (reviewStatus != 'N/A') reviewStatus,
-    ].join(' | ');
+    final source = _fuelSourceLabel(record);
+    final reviewStatus = _fuelReviewLabel(record);
+    final canReview = (record['id']?.toString().isNotEmpty ?? false) &&
+        !_isFuelRecordFinal(record);
 
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
@@ -977,7 +989,7 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           _FuelTableCell(
             value: station == 'N/A' ? 'Not recorded' : station,
             flex: 22,
-            note: (sourceType.startsWith('geotab') && station == 'N/A')
+            note: (source.contains('GeoTab') && station == 'N/A')
                 ? 'Not reported by GeoTab'
                 : null,
           ),
@@ -993,18 +1005,98 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
           ),
           _FuelTableCell(
             value: estimatedCost,
-            flex: 16,
+            flex: 15,
             numeric: true,
             emphasized: true,
+            note: _fuelCostBasis(record),
           ),
-          _FuelTableCell(
-            value: source,
-            flex: 12,
-            note: sourceNote.isEmpty ? null : sourceNote,
+          _FuelTableCell(value: source, flex: 15),
+          _FuelTableCell(value: reviewStatus, flex: 14),
+          Expanded(
+            flex: 10,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: canReview
+                  ? PopupMenuButton<String>(
+                      tooltip: 'Fuel review actions',
+                      onSelected: (value) {
+                        if (value == 'confirm') {
+                          _confirmFuelEvent(record);
+                        } else if (value == 'reject') {
+                          _rejectFuelEvent(record);
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: 'confirm',
+                          child: Text('Confirm event'),
+                        ),
+                        PopupMenuItem(
+                          value: 'reject',
+                          child: Text('Reject event'),
+                        ),
+                      ],
+                    )
+                  : const SizedBox(width: 40),
+            ),
           ),
         ],
       ),
     );
+  }
+
+  bool _isFuelRecordFinal(Map<String, dynamic> record) {
+    final status = (record['reviewStatus'] ??
+            record['reviewStatusLabel'] ??
+            record['confidenceLabel'] ??
+            '')
+        .toString()
+        .toLowerCase();
+    return status.contains('confirmed') ||
+        status.contains('rejected') ||
+        status.contains('exact');
+  }
+
+  String _fuelSourceLabel(Map<String, dynamic> record) {
+    final label = formatValue(record['sourceLabel']);
+    if (label != 'N/A') return label;
+    final type = (record['sourceType'] ?? record['source'] ?? '')
+        .toString()
+        .toLowerCase();
+    if (type.contains('fuel_transaction') || type.contains('transaction')) {
+      return 'Exact GeoTab Transaction';
+    }
+    if (type.contains('fill')) return 'GeoTab Fill-Up';
+    if (type.contains('station')) return 'Station Match';
+    if (type.contains('manual')) return 'Manual';
+    if (type.contains('sample')) return 'Sample';
+    return 'GeoTab';
+  }
+
+  String _fuelReviewLabel(Map<String, dynamic> record) {
+    final label = formatValue(record['reviewStatusLabel']);
+    if (label != 'N/A') return label;
+    final status = (record['reviewStatus'] ?? record['confidence'] ?? '')
+        .toString()
+        .toLowerCase();
+    if (status.contains('confirmed') || status.contains('exact')) {
+      return 'Confirmed';
+    }
+    if (status.contains('rejected')) return 'Rejected';
+    if (status.contains('likely') || status.contains('derived')) {
+      return 'Likely';
+    }
+    if (status.contains('manual')) return 'Manual';
+    return 'Needs review';
+  }
+
+  String _fuelCostBasis(Map<String, dynamic> record) {
+    final exact = record['sourceType']?.toString() == 'fuel_transaction' ||
+        _fuelSourceLabel(record).contains('Exact');
+    final hasCost = _toDouble(record['totalCost'] ?? record['cost']) > 0;
+    if (exact && hasCost) return 'Exact transaction';
+    if (hasCost) return 'Entered or calculated';
+    return 'Estimated fallback';
   }
 
   Widget _buildEnergyPanel(
@@ -1164,6 +1256,139 @@ class _FuelPageScaffold extends StatelessWidget {
   }
 }
 
+class _FuelSearchField extends StatelessWidget {
+  final String hint;
+  final ValueChanged<String> onChanged;
+
+  const _FuelSearchField({required this.hint, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return SizedBox(
+      height: 50,
+      child: TextField(
+        onChanged: onChanged,
+        style: AppTheme.getBodyStyle(context).copyWith(fontSize: 14),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: AppTheme.getSubtitleStyle(context).copyWith(fontSize: 14),
+          prefixIcon: Icon(
+            Icons.search_rounded,
+            color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+          ),
+          filled: true,
+          fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(
+              color: isDark
+                  ? AppTheme.white.withAlpha(20)
+                  : AppTheme.black.withAlpha(18),
+            ),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(
+              color: isDark
+                  ? AppTheme.white.withAlpha(20)
+                  : AppTheme.black.withAlpha(18),
+            ),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: AppTheme.primaryBlue),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FuelSummaryCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final String caption;
+  final IconData icon;
+  final Color accent;
+
+  const _FuelSummaryCard({
+    required this.label,
+    required this.value,
+    required this.caption,
+    required this.icon,
+    required this.accent,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 112),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppTheme.getCardBg(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withAlpha(isDark ? 92 : 115)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: accent.withAlpha(isDark ? 34 : 28),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: accent, size: 22),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.getCaptionStyle(
+                    context,
+                  ).copyWith(fontSize: 13, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.getHeadingStyle(
+                    context,
+                    fontSize: 24,
+                  ).copyWith(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  caption,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.getSubtitleStyle(
+                    context,
+                  ).copyWith(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ExecutivePanel extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -1274,7 +1499,9 @@ class _FuelTableCell extends StatelessWidget {
     return Expanded(
       flex: flex,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: numeric
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
         children: [
           Text(
             value,
@@ -1543,21 +1770,22 @@ class _AddFuelRecordSheetState extends State<_AddFuelRecordSheet> {
 
                       Navigator.pop(context, {
                         'vehiclePlate': _selectedVehiclePlate ?? 'Unknown',
-                        'vehicleGeotabId':
-                            selectedVehicle?['geotabId']?.toString() ?? '',
                         'driverName':
-                            selectedVehicle?['driver']?.toString() ??
-                            'Unassigned',
+                            selectedVehicle?['driver'] ?? 'Unassigned',
+                        'eventAt': DateTime.now().toIso8601String(),
                         'stationName': _stationController.text.trim(),
+                        'eventType': 'manual_record',
+                        'sourceType': 'manual',
+                        'reviewStatus': 'confirmed',
+                        'confidence': 'manual',
+                        'fuelType': 'diesel',
+                        'vehicle': _selectedVehiclePlate ?? 'Unknown',
+                        'driver': selectedVehicle?['driver'] ?? 'Unassigned',
                         'station': _stationController.text.trim(),
                         'date': _displayDate(DateTime.now()),
-                        'eventAt': DateTime.now().toIso8601String(),
                         'liters': liters,
                         'volumeLiters': liters,
                         'pricePerLiter': price,
-                        'fuelType':
-                            selectedVehicle?['fuelType']?.toString() ??
-                            'diesel',
                         'cost': total,
                         'totalCost': total,
                         'source': 'Manual',
@@ -1575,29 +1803,38 @@ class _AddFuelRecordSheetState extends State<_AddFuelRecordSheet> {
   }
 }
 
-class _HeroStat {
-  final String label;
-  final String value;
-  final String caption;
-  final IconData icon;
-  final Color accent;
-
-  const _HeroStat({
-    required this.label,
-    required this.value,
-    required this.caption,
-    required this.icon,
-    required this.accent,
-  });
-}
-
 List<Map<String, dynamic>> _sampleFuelUsageByVehicle() {
   return [
-    {'vehicle': 'TRK-001', 'fuelUsedLiters': 120.4, 'abnormalConsumption': false},
-    {'vehicle': 'TRK-002', 'fuelUsedLiters': 95.2, 'abnormalConsumption': false},
-    {'vehicle': 'TRK-003', 'fuelUsedLiters': 45.8, 'abnormalConsumption': true},
-    {'vehicle': 'TRK-004', 'fuelUsedLiters': 12.6, 'abnormalConsumption': false},
-    {'vehicle': 'TRK-005', 'fuelUsedLiters': 78.0, 'abnormalConsumption': false},
+    {
+      'vehicle': 'TRK-001',
+      'fuelUsedLiters': 120.4,
+      'fuelLevelRatio': 0.68,
+      'abnormalConsumption': false,
+    },
+    {
+      'vehicle': 'TRK-002',
+      'fuelUsedLiters': 95.2,
+      'fuelLevelRatio': 0.31,
+      'abnormalConsumption': false,
+    },
+    {
+      'vehicle': 'TRK-003',
+      'fuelUsedLiters': 45.8,
+      'fuelLevelRatio': 0.18,
+      'abnormalConsumption': true,
+    },
+    {
+      'vehicle': 'TRK-004',
+      'fuelUsedLiters': 12.6,
+      'fuelLevelRatio': 0.82,
+      'abnormalConsumption': false,
+    },
+    {
+      'vehicle': 'TRK-005',
+      'fuelUsedLiters': 78.0,
+      'fuelLevelRatio': 0.54,
+      'abnormalConsumption': false,
+    },
   ];
 }
 

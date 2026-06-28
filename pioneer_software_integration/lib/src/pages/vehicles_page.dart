@@ -13,6 +13,7 @@ import '../services/demo_telemetry_fixtures.dart';
 import '../services/vehicles_store.dart';
 import '../utils/display_format.dart';
 import '../utils/form_validation.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/geotab_push_preview.dart';
 import 'vehicle_details_modal.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -28,6 +29,7 @@ class VehiclesPage extends StatefulWidget {
 class _VehiclesPageState extends State<VehiclesPage> {
   static const String _cacheKey = 'vehicles_page';
 
+  final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   bool _showGridView = true;
   String _statusFilter = 'All Status';
@@ -88,6 +90,7 @@ class _VehiclesPageState extends State<VehiclesPage> {
   @override
   void dispose() {
     vehiclesNotifier.removeListener(_onVehiclesChanged);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -381,34 +384,14 @@ class _VehiclesPageState extends State<VehiclesPage> {
   }
 
   Widget _searchField(bool isDark) {
-    return TextField(
+    return AdminSearchField(
+      controller: _searchController,
+      hintText: 'Search by plate, type, driver, or model...',
       onChanged: (v) => setState(() => _searchQuery = v),
-      style: TextStyle(
-        fontSize: 14,
-        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-      ),
-      decoration: InputDecoration(
-        hintText: 'Search by plate, type, driver, or model...',
-        prefixIcon: const Icon(Icons.search_rounded),
-        filled: true,
-        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-      ),
+      onClear: () => setState(() {
+        _searchController.clear();
+        _searchQuery = '';
+      }),
     );
   }
 
@@ -2015,24 +1998,7 @@ class _VehicleResultCount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.infoBlue.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
-      ),
-      child: Text(
-        '$count vehicles shown',
-        style: const TextStyle(
-          color: AppTheme.infoBlue,
-          fontWeight: FontWeight.w900,
-          fontSize: 12,
-        ),
-      ),
-    );
+    return AdminResultCount(count: count, label: 'vehicles');
   }
 }
 
@@ -2060,77 +2026,12 @@ class _VehicleSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(minHeight: 112),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: data.color.withValues(alpha: isDark ? 0.34 : 0.2),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: data.color.withValues(alpha: isDark ? 0.14 : 0.08),
-            blurRadius: 22,
-            spreadRadius: -14,
-            offset: const Offset(0, 14),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: data.color.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(data.icon, color: data.color, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  data.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: isDark ? AppTheme.gray300 : AppTheme.gray700,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  data.value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF233244,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  data.subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return AdminSummaryCard(
+      title: data.title,
+      value: data.value,
+      subtitle: data.subtitle,
+      icon: data.icon,
+      color: data.color,
     );
   }
 }
@@ -2148,74 +2049,10 @@ class _VehicleViewToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 50,
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppTheme.colorFF1A1D23,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.white.withAlpha(18)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _VehicleViewToggleButton(
-            icon: Icons.grid_view_rounded,
-            active: gridActive,
-            tooltip: 'Grid view',
-            onTap: onGrid,
-          ),
-          _VehicleViewToggleButton(
-            icon: Icons.view_list_rounded,
-            active: !gridActive,
-            tooltip: 'List view',
-            onTap: onList,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _VehicleViewToggleButton extends StatelessWidget {
-  const _VehicleViewToggleButton({
-    required this.icon,
-    required this.active,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final bool active;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(9),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          width: 42,
-          height: 42,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: active
-                ? AppTheme.successGreen.withValues(alpha: 0.22)
-                : AppTheme.transparent,
-            borderRadius: BorderRadius.circular(9),
-          ),
-          child: Icon(
-            icon,
-            color: active ? AppTheme.successGreen : AppTheme.gray400,
-            size: 20,
-          ),
-        ),
-      ),
+    return AdminViewToggle(
+      gridActive: gridActive,
+      onGrid: onGrid,
+      onList: onList,
     );
   }
 }
@@ -2239,56 +2076,13 @@ class _VehicleFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final active = value != activeWhen;
-    return PopupMenuButton<String>(
-      initialValue: value,
+    return AdminFilterChip(
+      label: label,
+      value: value,
+      activeWhen: activeWhen,
+      options: options,
       onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final option in options)
-          PopupMenuItem(value: option, child: Text(option)),
-      ],
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        decoration: BoxDecoration(
-          color: active
-              ? AppTheme.successGreen.withValues(alpha: 0.13)
-              : AppTheme.white.withAlpha(8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: active
-                ? AppTheme.successGreen.withValues(alpha: 0.34)
-                : AppTheme.white.withAlpha(18),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              active ? '$label: $value' : label,
-              style: TextStyle(
-                color: active ? AppTheme.successGreen : AppTheme.gray300,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 16,
-              color: active ? AppTheme.successGreen : AppTheme.gray400,
-            ),
-            if (active) ...[
-              const SizedBox(width: 4),
-              InkWell(
-                onTap: onClear,
-                borderRadius: BorderRadius.circular(999),
-                child: const Icon(Icons.close_rounded, size: 15),
-              ),
-            ],
-          ],
-        ),
-      ),
+      onClear: onClear,
     );
   }
 }

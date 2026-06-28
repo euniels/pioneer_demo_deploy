@@ -7,6 +7,7 @@ import '../services/role_service.dart';
 import '../services/user_account_policy.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 
 class UsersPage extends StatefulWidget {
@@ -27,6 +28,7 @@ class _UsersPageState extends State<UsersPage> {
   };
 
   List<Map<String, dynamic>> _users = const [];
+  final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _roleFilter = 'all';
   String _statusFilter = 'all';
@@ -39,6 +41,12 @@ class _UsersPageState extends State<UsersPage> {
   void initState() {
     super.initState();
     _loadUsers();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadUsers({bool forceRefresh = false}) async {
@@ -522,10 +530,12 @@ class _UsersPageState extends State<UsersPage> {
             onTap: () => _openUserForm(),
           );
           final search = _UsersSearchField(
-            value: _searchQuery,
-            isDark: isDark,
+            controller: _searchController,
             onChanged: (value) => setState(() => _searchQuery = value),
-            onClear: () => setState(() => _searchQuery = ''),
+            onClear: () {
+              _searchController.clear();
+              setState(() => _searchQuery = '');
+            },
           );
 
           return Column(
@@ -928,54 +938,22 @@ class _UsersPageState extends State<UsersPage> {
 
 class _UsersSearchField extends StatelessWidget {
   const _UsersSearchField({
-    required this.value,
-    required this.isDark,
+    required this.controller,
     required this.onChanged,
     required this.onClear,
   });
 
-  final String value;
-  final bool isDark;
+  final TextEditingController controller;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return AdminSearchField(
+      controller: controller,
+      hintText: 'Search by name, email, phone, or role...',
       onChanged: onChanged,
-      decoration: InputDecoration(
-        hintText: 'Search by name, email, phone, or role...',
-        prefixIcon: const Icon(Icons.search_rounded),
-        suffixIcon: value.isEmpty
-            ? null
-            : IconButton(
-                tooltip: 'Clear search',
-                onPressed: onClear,
-                icon: const Icon(Icons.close_rounded),
-              ),
-        filled: true,
-        fillColor: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF8FAFD,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark
-                ? AppTheme.white.withAlpha(18)
-                : AppTheme.black.withAlpha(12),
-          ),
-        ),
-      ),
-      style: TextStyle(
-        fontSize: 14,
-        color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
-      ),
+      onClear: onClear,
     );
   }
 }
@@ -1044,24 +1022,7 @@ class _UsersResultCount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.infoBlue.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.infoBlue.withValues(alpha: 0.22)),
-      ),
-      child: Text(
-        '$count users shown',
-        style: const TextStyle(
-          color: AppTheme.infoBlue,
-          fontWeight: FontWeight.w900,
-          fontSize: 12,
-        ),
-      ),
-    );
+    return AdminResultCount(count: count, label: 'users');
   }
 }
 
@@ -1086,60 +1047,15 @@ class _UsersFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final active = value != activeWhen;
-    return PopupMenuButton<String>(
-      initialValue: value,
+    return AdminFilterChip(
+      label: label,
+      value: value,
+      activeWhen: activeWhen,
+      displayValue: displayValue,
+      options: options.keys.toList(growable: false),
+      optionLabels: options,
       onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final entry in options.entries)
-          PopupMenuItem(value: entry.key, child: Text(entry.value)),
-      ],
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        decoration: BoxDecoration(
-          color: active
-              ? AppTheme.successGreen.withValues(alpha: 0.13)
-              : AppTheme.white.withAlpha(8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: active
-                ? AppTheme.successGreen.withValues(alpha: 0.34)
-                : AppTheme.white.withAlpha(18),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 190),
-              child: Text(
-                active ? '$label: $displayValue' : displayValue,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: active ? AppTheme.successGreen : AppTheme.gray300,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 16,
-              color: active ? AppTheme.successGreen : AppTheme.gray400,
-            ),
-            if (active) ...[
-              const SizedBox(width: 4),
-              InkWell(
-                onTap: onClear,
-                borderRadius: BorderRadius.circular(999),
-                child: const Icon(Icons.close_rounded, size: 15),
-              ),
-            ],
-          ],
-        ),
-      ),
+      onClear: onClear,
     );
   }
 }

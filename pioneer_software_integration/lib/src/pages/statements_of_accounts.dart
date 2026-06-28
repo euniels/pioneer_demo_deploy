@@ -4,6 +4,7 @@ import '../services/backend_api.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/soa_exporter.dart';
 import '../utils/workflow_status_helper.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../theme/app_theme.dart';
@@ -362,44 +363,14 @@ class _StatementOfAccountsPageState extends State<StatementOfAccountsPage> {
           final compact = constraints.maxWidth < 820;
           final search = SizedBox(
             height: 50,
-            child: TextField(
+            child: AdminSearchField(
               controller: _clientFilterController,
+              hintText: 'Search client, invoice, or account reference...',
               onChanged: (value) => setState(() => _search = value),
-              style: AppTheme.getBodyStyle(context).copyWith(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Search client, invoice, or account reference...',
-                hintStyle: AppTheme.getSubtitleStyle(
-                  context,
-                ).copyWith(fontSize: 14),
-                prefixIcon: const Icon(Icons.search_rounded),
-                filled: true,
-                fillColor:
-                    isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF5F6F8,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withAlpha(20)
-                        : AppTheme.black.withAlpha(18),
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(
-                    color: isDark
-                        ? AppTheme.white.withAlpha(20)
-                        : AppTheme.black.withAlpha(18),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppTheme.primaryBlue),
-                ),
-              ),
+              onClear: () => setState(() {
+                _clientFilterController.clear();
+                _search = '';
+              }),
             ),
           );
           final actions = Wrap(
@@ -481,7 +452,7 @@ class _StatementOfAccountsPageState extends State<StatementOfAccountsPage> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _SoaResultChip(label: '${clients.length} clients shown'),
+            AdminResultCount(count: clients.length, label: 'clients'),
             const SizedBox(width: 10),
             PopupMenuButton<String>(
               tooltip: 'Payment status',
@@ -912,34 +883,6 @@ class _SoaMetric extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SoaResultChip extends StatelessWidget {
-  final String label;
-
-  const _SoaResultChip({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: AppTheme.colorFF00D4FF.withAlpha(18),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.colorFF00D4FF.withAlpha(70)),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: AppTheme.colorFF00D4FF,
-          fontSize: 13,
-          fontWeight: FontWeight.w800,
-        ),
       ),
     );
   }
