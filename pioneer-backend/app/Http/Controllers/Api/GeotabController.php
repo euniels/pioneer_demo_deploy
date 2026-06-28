@@ -5242,8 +5242,8 @@ class GeotabController extends Controller
         }
 
         $pod = ProofOfDelivery::query()->where('trip_id', $tripId)->first();
-        $attachments = array_values(array_filter((array) ($pod?->attachments ?? []), 'is_string'));
-        $path = $attachments[$index] ?? null;
+        $attachments = array_values((array) ($pod?->attachments ?? []));
+        $path = isset($attachments[$index]) ? $this->podAttachmentPath($attachments[$index]) : null;
 
         if ($pod === null || $path === null || ! Storage::disk('local')->exists($path)) {
             return $this->respondError('Proof attachment not found.', 404);
@@ -7995,7 +7995,7 @@ class GeotabController extends Controller
                 : 'Unknown Zone',
             'eta' => data_get($planItem, 'dateTime'),
             'expectedDistanceToArrival' => data_get($planItem, 'expectedDistanceToArrival'),
-            'expectedStopDurationMinutes' => $this->secondsToMinutes(data_get($planItem, 'expectedStopDuration', 0) / 1000),
+            'expectedStopDurationMinutes' => $this->geotabDurationToMinutes(data_get($planItem, 'expectedStopDuration')),
             'passCount' => (int) data_get($planItem, 'passCount', 0),
             'center' => $this->zoneCenter($zone),
             'points' => $zone !== null
@@ -14615,16 +14615,61 @@ class GeotabController extends Controller
             'status' => $pod->status,
             'deliveredAt' => $pod->delivered_at?->toIso8601String(),
             'hasSignature' => filled($pod->signature_data_url),
-            'attachments' => array_values(array_map(
-                fn (string $path, int $index): array => [
-                    'path' => $path,
-                    'url' => url('/api/fleet/pod/'.$pod->trip_id.'/attachments/'.$index),
-                ],
-                (array) ($pod->attachments ?? []),
-                array_keys((array) ($pod->attachments ?? [])),
-            )),
+            'attachments' => $this->formatPodAttachments((array) ($pod->attachments ?? []), $pod->trip_id),
             'meta' => $pod->meta ?? [],
         ];
+    }
+
+    private function formatPodAttachments(array $attachments, string $tripId): array
+    {
+        return array_values(array_filter(array_map(function (mixed $attachment, int|string $index) use ($tripId): ?array {
+            $path = $this->podAttachmentPath($attachment);
+
+            if (is_string($attachment)) {
+                return [
+                    'path' => $path,
+                    'name' => basename($path),
+                    'url' => url('/api/fleet/pod/'.$tripId.'/attachments/'.$index),
+                ];
+            }
+
+            if (! is_array($attachment)) {
+                return null;
+            }
+
+            $name = $this->sanitizeText($attachment['name'] ?? $attachment['fileName'] ?? basename($path), 'Attachment');
+            $formatted = [
+                'path' => $path,
+                'name' => $name,
+                'type' => $this->sanitizeText($attachment['type'] ?? $attachment['fileType'] ?? '', ''),
+                'demo' => (bool) ($attachment['demo'] ?? false),
+            ];
+
+            if ($path !== '') {
+                $formatted['url'] = url('/api/fleet/pod/'.$tripId.'/attachments/'.$index);
+            }
+
+            return array_filter($formatted, fn (mixed $value): bool => $value !== null && $value !== '');
+        }, $attachments, array_keys($attachments))));
+    }
+
+    private function podAttachmentPath(mixed $attachment): string
+    {
+        if (is_string($attachment)) {
+            return trim($attachment);
+        }
+
+        if (! is_array($attachment)) {
+            return '';
+        }
+
+        foreach (['path', 'storagePath', 'filePath'] as $key) {
+            if (isset($attachment[$key]) && is_string($attachment[$key])) {
+                return trim($attachment[$key]);
+            }
+        }
+
+        return '';
     }
 
     private function podTableAvailable(): bool
@@ -15296,6 +15341,19 @@ class GeotabController extends Controller
 
     private function sanitizeText(mixed $value, string $fallback): string
     {
+        if (is_array($value)) {
+            foreach (['name', 'displayName', 'id', 'value', 'code'] as $key) {
+                if (array_key_exists($key, $value) && ! is_array($value[$key])) {
+                    $value = $value[$key];
+                    break;
+                }
+            }
+
+            if (is_array($value)) {
+                return $fallback;
+            }
+        }
+
         $text = trim((string) $value);
         if ($text === '') {
             return $fallback;
@@ -16896,7 +16954,58 @@ class GeotabController extends Controller
 
     private function secondsToMinutes(mixed $seconds): int
     {
+        if (! is_numeric($seconds)) {
+            return 0;
+        }
+
         return (int) round(((float) $seconds) / 60);
+    }
+
+    private function geotabDurationToMinutes(mixed $value): int
+    {
+        if (is_array($value)) {
+            if (isset($value['milliseconds']) && is_numeric($value['milliseconds'])) {
+                return $this->secondsToMinutes(((float) $value['milliseconds']) / 1000);
+            }
+
+            if (isset($value['seconds']) && is_numeric($value['seconds'])) {
+                return $this->secondsToMinutes($value['seconds']);
+            }
+
+            if (isset($value['ticks']) && is_numeric($value['ticks'])) {
+                return $this->secondsToMinutes(((float) $value['ticks']) / 10000000);
+            }
+
+            $value = $value['value'] ?? null;
+        }
+
+        if ($value === null || trim((string) $value) === '') {
+            return 0;
+        }
+
+        if (is_numeric($value)) {
+            return $this->secondsToMinutes(((float) $value) / 1000);
+        }
+
+        $duration = trim((string) $value);
+        if (preg_match('/^(?:(\d+)\.)?(\d{1,3}):(\d{2}):(\d{2})(?:\.\d+)?$/', $duration, $matches) === 1) {
+            $days = (int) ($matches[1] ?? 0);
+            $hours = (int) $matches[2];
+            $minutes = (int) $matches[3];
+            $seconds = (int) $matches[4];
+
+            return $this->secondsToMinutes(($days * 86400) + ($hours * 3600) + ($minutes * 60) + $seconds);
+        }
+
+        if (preg_match('/^P(?:T)?(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$/i', $duration, $matches) === 1) {
+            $hours = (float) ($matches[1] ?? 0);
+            $minutes = (float) ($matches[2] ?? 0);
+            $seconds = (float) ($matches[3] ?? 0);
+
+            return $this->secondsToMinutes(($hours * 3600) + ($minutes * 60) + $seconds);
+        }
+
+        return 0;
     }
 
     private function fuelCapacityForFillUp(array $fillUp): ?float
