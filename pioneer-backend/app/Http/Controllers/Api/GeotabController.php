@@ -45,6 +45,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
@@ -6806,12 +6807,14 @@ class GeotabController extends Controller
             $engineHours = $this->diagnosticNumeric($telemetry, 'engineHours')
                 ?? $this->diagnosticNumeric($telemetry, 'rawEngineHours');
             $lastUpdated = data_get($status, 'dateTime') ?: ($tripStats['latestTripDate'] ?? null);
+            $latitude = round((float) data_get($status, 'latitude', 0), 6);
+            $longitude = round((float) data_get($status, 'longitude', 0), 6);
             $assetTags = $this->assetTags($device, $telemetry);
             $deliveryFit = $this->deliveryFit($device, $telemetry);
             $routeContext = $this->routeContextForDevice($deviceId, $routesByDevice, $zoneIndex);
             $currentZone = $this->zoneNameForCoordinate(
-                (float) data_get($status, 'latitude', 0),
-                (float) data_get($status, 'longitude', 0),
+                $latitude,
+                $longitude,
                 $zones,
             );
             $arrivalState = $this->arrivalState($isDriving, $currentZone, $routeContext['destinationZone']);
@@ -6825,6 +6828,11 @@ class GeotabController extends Controller
             $fuelEconomyKmPerLiter ??= $this->estimatedFuelEconomyKmPerLiter($device, $fuelUsedForEconomy, (float) ($tripStats['distanceKm'] ?? 0));
             $engineHours ??= $this->estimatedEngineHours($device, $odometerKm);
             $odometerKm = $odometerKm > 0 ? $odometerKm : $this->estimatedOdometerKm($device);
+            $deviceChargeEvents = array_values(array_filter(
+                $chargeEventRows,
+                fn (array $row): bool => (string) ($row['geotabId'] ?? '') === $deviceId,
+            ));
+            $isElectric = ((float) ($fuelUsage['energyUsedKwh'] ?? 0)) > 0 || $deviceChargeEvents !== [];
             $telemetry = $this->backfillVehicleTelemetry(
                 $telemetry,
                 $definitions,
@@ -6834,6 +6842,9 @@ class GeotabController extends Controller
                 $odometerKm,
                 $engineHours,
                 $lastUpdated,
+                $latitude,
+                $longitude,
+                $isElectric,
             );
             $assetProfile = $this->assetProfileForDevice($device);
             $health = $this->buildVehicleHealth(
@@ -6852,11 +6863,6 @@ class GeotabController extends Controller
             $driverChangeRows = array_slice($driverChangesByDevice[$deviceId] ?? [], 0, 8);
             $shipmentRows = array_slice($shipmentsByDevice[$deviceId] ?? [], 0, 6);
             $ioxRows = $ioxByDevice[$deviceId] ?? [];
-            $deviceChargeEvents = array_values(array_filter(
-                $chargeEventRows,
-                fn (array $row): bool => (string) ($row['geotabId'] ?? '') === $deviceId,
-            ));
-            $isElectric = ((float) ($fuelUsage['energyUsedKwh'] ?? 0)) > 0 || $deviceChargeEvents !== [];
             $coldChainCapable = $ioxRows !== []
                 || ($telemetry['reeferTemperatureZone1']['supported'] ?? false) === true
                 || ($telemetry['cargoTemperatureZone1']['supported'] ?? false) === true
@@ -6880,8 +6886,8 @@ class GeotabController extends Controller
                 'status' => $isDriving ? 'on trip' : 'available',
                 'isDriving' => $isDriving,
                 'speed' => (int) data_get($status, 'speed', 0),
-                'latitude' => round((float) data_get($status, 'latitude', 0), 6),
-                'longitude' => round((float) data_get($status, 'longitude', 0), 6),
+                'latitude' => $latitude,
+                'longitude' => $longitude,
                 'bearing' => (int) data_get($status, 'bearing', 0),
                 'isCommunicating' => data_get($status, 'isDeviceCommunicating') === true,
                 'lastUpdated' => $lastUpdated,
@@ -8141,28 +8147,75 @@ class GeotabController extends Controller
         float $odometerKm,
         ?float $engineHours,
         mixed $timestamp,
+        ?float $latitude = null,
+        ?float $longitude = null,
+        bool $isElectric = false,
     ): array {
         $timestamp = $this->parseDate($timestamp)?->toIso8601String() ?? now()->toIso8601String();
         $capacity = is_numeric($fuelCapacity) ? (float) $fuelCapacity : $this->deviceFuelTankCapacity($device);
         $seed = $this->stableVehicleSeed($device);
+        $weather = $this->weatherBaselineForVehicle($latitude, $longitude);
+        $hasWeather = ($weather['source'] ?? null) === 'open_meteo_current';
+        $ambientTemperature = is_numeric($weather['temperatureC'] ?? null)
+            ? (float) $weather['temperatureC']
+            : 27.0 + ($seed % 8);
+        $ambientTemperature = max(18.0, min(43.0, $ambientTemperature));
+        $relativeHumidity = is_numeric($weather['relativeHumidity'] ?? null)
+            ? (float) $weather['relativeHumidity']
+            : 54.0 + ($seed % 23);
+        $relativeHumidity = max(35.0, min(95.0, $relativeHumidity));
+        $dutyAnchor = $engineHours !== null
+            ? fmod(max(0.0, $engineHours), 12.0) / 12.0
+            : fmod(max(0.0, $odometerKm / 45.0), 12.0) / 12.0;
+        $lowFuelStress = $fuelLevelRatio !== null ? max(0.0, 1.0 - $fuelLevelRatio) * 0.14 : 0.05;
+        $operatingLoad = max(0.18, min(1.0, 0.42 + ($dutyAnchor * 0.36) + $lowFuelStress + (($seed % 9) / 100)));
+        $thermalTemperature = $isElectric
+            ? max(31.0, min(68.0, $ambientTemperature + 10.0 + ($operatingLoad * 15.0) + (($seed % 5) / 2)))
+            : max(78.0, min(104.0, $ambientTemperature + 46.0 + ($operatingLoad * 14.0) + (($seed % 6) / 2)));
+        $fanSpeed = $isElectric
+            ? 420 + (int) round(($thermalTemperature - 30.0) * 16.0) + (($seed * 11) % 260)
+            : 700 + (int) round(max(0.0, $thermalTemperature - 78.0) * 42.0) + (($seed * 37) % 360);
+        $batteryVoltage = $isElectric
+            ? round(max(320.0, min(430.0, 355.0 + ($operatingLoad * 38.0) + ($seed % 22))), 1)
+            : round(max(12.2, min(14.6, 12.4 + ($operatingLoad * 1.2) + (($seed % 6) / 20))), 1);
         $fallbacks = [
             'fuelTankCapacity' => $capacity,
             'fuelLevel' => ($capacity !== null && $fuelLevelRatio !== null) ? round($capacity * $fuelLevelRatio, 2) : null,
             'rawOdometer' => $odometerKm > 0 ? $odometerKm : null,
             'engineHours' => $engineHours,
-            'engineCoolantTemperature' => 78 + ($seed % 12),
-            'outsideTemperature' => 27 + ($seed % 8),
-            'relativeHumidity' => 54 + ($seed % 23),
-            'engineCoolingFanSpeed' => 760 + (($seed * 37) % 920),
-            'batteryVoltage' => round(12.3 + (($seed % 16) / 10), 1),
+            'engineCoolantTemperature' => $thermalTemperature,
+            'outsideTemperature' => $ambientTemperature,
+            'relativeHumidity' => $relativeHumidity,
+            'engineCoolingFanSpeed' => $fanSpeed,
+            'batteryVoltage' => $batteryVoltage,
             'coolantLevel' => 82 + ($seed % 13),
+        ];
+        $weatherAdjustedAliases = [
+            'engineCoolantTemperature',
+            'outsideTemperature',
+            'relativeHumidity',
+            'engineCoolingFanSpeed',
+            'batteryVoltage',
         ];
 
         foreach ($fallbacks as $alias => $value) {
-            if (! isset($definitions[$alias]) || $value === null || $this->diagnosticHasValue($telemetry[$alias] ?? null)) {
+            $existingTelemetry = is_array($telemetry[$alias] ?? null) ? $telemetry[$alias] : null;
+            $existingIsEstimated = $existingTelemetry !== null
+                && ($existingTelemetry['estimated'] ?? false) === true
+                && in_array((string) ($existingTelemetry['source'] ?? ''), [
+                    'predictive_fallback',
+                    'weather_adjusted_predictive_fallback',
+                ], true);
+
+            if (
+                ! isset($definitions[$alias])
+                || $value === null
+                || ($this->diagnosticHasValue($existingTelemetry) && ! $existingIsEstimated)
+            ) {
                 continue;
             }
 
+            $weatherAdjusted = $hasWeather && in_array($alias, $weatherAdjustedAliases, true);
             $telemetry[$alias] = [
                 'label' => $definitions[$alias]['label'],
                 'unit' => $definitions[$alias]['unit'],
@@ -8171,11 +8224,98 @@ class GeotabController extends Controller
                 'displayValue' => $this->formatDiagnosticValue((float) $value, (string) ($definitions[$alias]['unit'] ?? '')),
                 'timestamp' => $timestamp,
                 'estimated' => true,
-                'source' => 'predictive_fallback',
+                'source' => $weatherAdjusted ? 'weather_adjusted_predictive_fallback' : 'predictive_fallback',
+                'basis' => $weatherAdjusted ? [
+                    'weatherSource' => $weather['source'],
+                    'weatherUpdatedAt' => $weather['updatedAt'] ?? null,
+                    'vehicleEnergyProfile' => $isElectric ? 'electric_or_hybrid' : 'fuel_with_auxiliary_battery',
+                ] : [
+                    'vehicleEnergyProfile' => $isElectric ? 'electric_or_hybrid' : 'fuel_with_auxiliary_battery',
+                ],
             ];
         }
 
         return $telemetry;
+    }
+
+    private function weatherBaselineForVehicle(?float $latitude, ?float $longitude): array
+    {
+        if ($latitude === null || $longitude === null) {
+            return ['temperatureC' => null, 'relativeHumidity' => null, 'source' => 'unavailable'];
+        }
+
+        if (($latitude === 0.0 && $longitude === 0.0) || abs($latitude) > 90 || abs($longitude) > 180) {
+            return ['temperatureC' => null, 'relativeHumidity' => null, 'source' => 'unavailable'];
+        }
+
+        $roundedLatitude = round($latitude, 2);
+        $roundedLongitude = round($longitude, 2);
+        $cacheKey = 'geotab_vehicle_weather_v1_'
+            .str_replace(['-', '.'], ['m', 'p'], number_format($roundedLatitude, 2, '.', ''))
+            .'_'
+            .str_replace(['-', '.'], ['m', 'p'], number_format($roundedLongitude, 2, '.', ''));
+
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached) && ($cached['source'] ?? null) === 'open_meteo_current') {
+            return $cached;
+        }
+
+        try {
+            $weatherParams = [
+                'latitude' => $roundedLatitude,
+                'longitude' => $roundedLongitude,
+                'current' => 'temperature_2m,relative_humidity_2m',
+                'timezone' => 'auto',
+                'forecast_days' => 1,
+            ];
+
+            try {
+                $response = Http::timeout(4)
+                    ->retry(1, 200)
+                    ->get('https://api.open-meteo.com/v1/forecast', $weatherParams);
+            } catch (\Throwable $exception) {
+                if (! str_contains($exception->getMessage(), 'cURL error 60')) {
+                    throw $exception;
+                }
+
+                $response = Http::withoutVerifying()
+                    ->timeout(4)
+                    ->retry(1, 200)
+                    ->get('https://api.open-meteo.com/v1/forecast', $weatherParams);
+            }
+
+            if (! $response->ok()) {
+                $weather = ['temperatureC' => null, 'relativeHumidity' => null, 'source' => 'unavailable'];
+            } else {
+                $current = (array) $response->json('current', []);
+                $temperature = $current['temperature_2m'] ?? null;
+                $humidity = $current['relative_humidity_2m'] ?? null;
+                $weather = (! is_numeric($temperature) && ! is_numeric($humidity))
+                    ? ['temperatureC' => null, 'relativeHumidity' => null, 'source' => 'unavailable']
+                    : [
+                        'temperatureC' => is_numeric($temperature) ? round((float) $temperature, 1) : null,
+                        'relativeHumidity' => is_numeric($humidity) ? round((float) $humidity, 1) : null,
+                        'source' => 'open_meteo_current',
+                        'updatedAt' => (string) ($current['time'] ?? now()->toIso8601String()),
+                    ];
+            }
+        } catch (\Throwable $exception) {
+            Log::debug('Vehicle weather baseline unavailable', [
+                'latitude' => $roundedLatitude,
+                'longitude' => $roundedLongitude,
+                'message' => $exception->getMessage(),
+            ]);
+
+            $weather = ['temperatureC' => null, 'relativeHumidity' => null, 'source' => 'unavailable'];
+        }
+
+        Cache::put(
+            $cacheKey,
+            $weather,
+            ($weather['source'] ?? null) === 'open_meteo_current' ? now()->addMinutes(45) : now()->addMinutes(5),
+        );
+
+        return $weather;
     }
 
     private function estimatedFuelLevelRatio(
@@ -12925,6 +13065,11 @@ class GeotabController extends Controller
         $fuelEconomy = $this->estimatedFuelEconomyKmPerLiter($pseudoDevice, 0, 0);
         $fuelLevelRatio = $this->estimatedFuelLevelRatio($pseudoDevice, $vehicle->fuel_capacity_liters, 0, 0, $displayOdometerKm, $engineHours);
         $definitions = $this->diagnosticDefinitions();
+        $fuelProfile = strtolower((string) ($vehicle->fuel_type ?? ''));
+        $isElectric = str_contains($fuelProfile, 'electric')
+            || str_contains($fuelProfile, 'ev')
+            || str_contains($fuelProfile, 'battery')
+            || str_contains($fuelProfile, 'hybrid');
         $diagnostics = $this->backfillVehicleTelemetry(
             $this->emptyTelemetryEntry($definitions),
             $definitions,
@@ -12934,6 +13079,9 @@ class GeotabController extends Controller
             $displayOdometerKm,
             $engineHours,
             $vehicle->updated_at,
+            null,
+            null,
+            $isElectric,
         );
 
         return [
