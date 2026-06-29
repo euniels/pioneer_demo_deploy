@@ -9,6 +9,7 @@ import '../services/geotab_sync_status_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
 import '../widgets/app_state_widgets.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
@@ -75,6 +76,7 @@ class _ZonesPageState extends State<ZonesPage> {
   String _sourceFilter = 'All Sources';
   String _statusFilter = 'All Status';
   String _sortMode = 'Name A-Z';
+  final TextEditingController _searchController = TextEditingController();
   bool _loading = true;
   String? _error;
 
@@ -88,6 +90,7 @@ class _ZonesPageState extends State<ZonesPage> {
   @override
   void dispose() {
     geotabWriteBackEventNotifier.removeListener(_onWriteBackEvent);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -327,7 +330,7 @@ class _ZonesPageState extends State<ZonesPage> {
           final controls = Row(
             mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
             children: [
-              _ZoneViewToggle(
+              AdminViewToggle(
                 gridActive: _showGridView,
                 onGrid: () => setState(() => _showGridView = true),
                 onList: () => setState(() => _showGridView = false),
@@ -336,11 +339,14 @@ class _ZonesPageState extends State<ZonesPage> {
               if (compact) Expanded(child: addButton) else addButton,
             ],
           );
-          final search = _ZoneSearchField(
-            value: _searchQuery,
-            isDark: isDark,
+          final search = AdminSearchField(
+            controller: _searchController,
+            hintText: 'Search by zone name, client, or notes...',
             onChanged: (value) => setState(() => _searchQuery = value.trim()),
-            onClear: () => setState(() => _searchQuery = ''),
+            onClear: () => setState(() {
+              _searchQuery = '';
+              _searchController.clear();
+            }),
           );
 
           if (compact) {
@@ -442,9 +448,9 @@ class _ZonesPageState extends State<ZonesPage> {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              _ZoneResultCount(count: _filteredZones.length),
+              AdminResultCount(count: _filteredZones.length, label: 'zones'),
               const SizedBox(width: 10),
-              _ZoneFilterChip(
+              AdminFilterChip(
                 label: 'Type',
                 value: safeTypeFilter,
                 activeWhen: 'All Types',
@@ -453,7 +459,7 @@ class _ZonesPageState extends State<ZonesPage> {
                 onClear: () => setState(() => _typeFilter = 'All Types'),
               ),
               const SizedBox(width: 8),
-              _ZoneFilterChip(
+              AdminFilterChip(
                 label: 'Source',
                 value: _sourceFilter,
                 activeWhen: 'All Sources',
@@ -462,7 +468,7 @@ class _ZonesPageState extends State<ZonesPage> {
                 onClear: () => setState(() => _sourceFilter = 'All Sources'),
               ),
               const SizedBox(width: 8),
-              _ZoneFilterChip(
+              AdminFilterChip(
                 label: 'Status',
                 value: _statusFilter,
                 activeWhen: 'All Status',
@@ -477,7 +483,7 @@ class _ZonesPageState extends State<ZonesPage> {
                 onClear: () => setState(() => _statusFilter = 'All Status'),
               ),
               const SizedBox(width: 8),
-              _ZoneFilterChip(
+              AdminFilterChip(
                 label: 'Sort',
                 value: _sortMode,
                 activeWhen: 'Name A-Z',
@@ -517,6 +523,7 @@ class _ZonesPageState extends State<ZonesPage> {
   void _clearZoneFilters() {
     setState(() {
       _searchQuery = '';
+      _searchController.clear();
       _typeFilter = 'All Types';
       _sourceFilter = 'All Sources';
       _statusFilter = 'All Status';
@@ -762,6 +769,7 @@ class _ZonesPageState extends State<ZonesPage> {
   }
 }
 
+// ignore: unused_element
 class _ZoneSearchField extends StatelessWidget {
   const _ZoneSearchField({
     required this.value,
@@ -816,6 +824,7 @@ class _ZoneSearchField extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _ZoneViewToggle extends StatelessWidget {
   const _ZoneViewToggle({
     required this.gridActive,
@@ -901,6 +910,7 @@ class _ZoneViewToggleButton extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _ZoneResultCount extends StatelessWidget {
   const _ZoneResultCount({required this.count});
 
@@ -929,6 +939,7 @@ class _ZoneResultCount extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _ZoneFilterChip extends StatelessWidget {
   const _ZoneFilterChip({
     required this.label,

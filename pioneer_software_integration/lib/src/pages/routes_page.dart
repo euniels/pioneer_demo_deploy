@@ -8,6 +8,7 @@ import '../services/vehicles_store.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
 import '../widgets/app_state_widgets.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 import '../widgets/pioneer_google_map.dart';
@@ -28,6 +29,7 @@ class _RoutesPageState extends State<RoutesPage> {
   String _sourceFilter = 'All Sources';
   String _statusFilter = 'All Status';
   String _sortMode = 'Name A-Z';
+  final TextEditingController _searchController = TextEditingController();
   bool _loading = true;
   String? _error;
 
@@ -41,6 +43,7 @@ class _RoutesPageState extends State<RoutesPage> {
   @override
   void dispose() {
     geotabWriteBackEventNotifier.removeListener(_onWriteBackEvent);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -299,7 +302,7 @@ class _RoutesPageState extends State<RoutesPage> {
           final controls = Row(
             mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
             children: [
-              _RouteViewToggle(
+              AdminViewToggle(
                 gridActive: _showGridView,
                 onGrid: () => setState(() => _showGridView = true),
                 onList: () => setState(() => _showGridView = false),
@@ -309,11 +312,14 @@ class _RoutesPageState extends State<RoutesPage> {
             ],
           );
 
-          final search = _RouteSearchField(
-            value: _searchQuery,
+          final search = AdminSearchField(
+            controller: _searchController,
+            hintText: 'Search by route name, vehicle, or description...',
             onChanged: (value) => setState(() => _searchQuery = value.trim()),
-            onClear: () => setState(() => _searchQuery = ''),
-            isDark: isDark,
+            onClear: () => setState(() {
+              _searchQuery = '';
+              _searchController.clear();
+            }),
           );
 
           if (compact) {
@@ -408,9 +414,9 @@ class _RoutesPageState extends State<RoutesPage> {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              _RouteResultCount(count: _sortedRoutes.length),
+              AdminResultCount(count: _sortedRoutes.length, label: 'routes'),
               const SizedBox(width: 10),
-              _RouteFilterChip(
+              AdminFilterChip(
                 label: 'Source',
                 value: _sourceFilter,
                 activeWhen: 'All Sources',
@@ -419,7 +425,7 @@ class _RoutesPageState extends State<RoutesPage> {
                 onClear: () => setState(() => _sourceFilter = 'All Sources'),
               ),
               const SizedBox(width: 8),
-              _RouteFilterChip(
+              AdminFilterChip(
                 label: 'Status',
                 value: _statusFilter,
                 activeWhen: 'All Status',
@@ -434,7 +440,7 @@ class _RoutesPageState extends State<RoutesPage> {
                 onClear: () => setState(() => _statusFilter = 'All Status'),
               ),
               const SizedBox(width: 8),
-              _RouteFilterChip(
+              AdminFilterChip(
                 label: 'Sort',
                 value: _sortMode,
                 activeWhen: 'Name A-Z',
@@ -473,6 +479,7 @@ class _RoutesPageState extends State<RoutesPage> {
   void _clearRouteFilters() {
     setState(() {
       _searchQuery = '';
+      _searchController.clear();
       _sourceFilter = 'All Sources';
       _statusFilter = 'All Status';
       _sortMode = 'Name A-Z';
@@ -697,6 +704,7 @@ class _RoutesPageState extends State<RoutesPage> {
   }
 }
 
+// ignore: unused_element
 class _RouteSearchField extends StatelessWidget {
   const _RouteSearchField({
     required this.value,
@@ -751,6 +759,7 @@ class _RouteSearchField extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _RouteViewToggle extends StatelessWidget {
   const _RouteViewToggle({
     required this.gridActive,
@@ -836,6 +845,7 @@ class _RouteViewToggleButton extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _RouteResultCount extends StatelessWidget {
   const _RouteResultCount({required this.count});
 
@@ -864,6 +874,7 @@ class _RouteResultCount extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _RouteFilterChip extends StatelessWidget {
   const _RouteFilterChip({
     required this.label,

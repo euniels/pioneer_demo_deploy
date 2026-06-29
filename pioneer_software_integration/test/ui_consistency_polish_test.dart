@@ -360,6 +360,17 @@ void main() {
     expect(source, contains('isExpanded: true'));
     expect(source, contains('AppTheme.primaryBlue'));
     expect(source, contains('AppTheme.successGreen'));
+    expect(source, contains('_isNativeWorkOrder'));
+    expect(source, contains('_nativeWorkOrderId'));
+    expect(source, contains('Create Native Work Order'));
+    expect(
+      source,
+      contains('Create a native work order before attaching proof.'),
+    );
+    expect(
+      source,
+      contains('Create a native work order before editing evidence.'),
+    );
     expect(source, isNot(contains('Geotab did not return rows yet')));
   });
 

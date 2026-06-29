@@ -7,6 +7,7 @@ import '../services/backend_api.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
 
@@ -280,6 +281,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
       NotificationCategory.alert,
       NotificationCategory.system,
     ];
+    final categoryOptions = [
+      'All Types',
+      ...categories.whereType<NotificationCategory>().map((item) => item.label),
+    ];
+    final activeCategoryLabel = _activeCategory?.label ?? 'All Types';
 
     return Container(
       width: double.infinity,
@@ -301,10 +307,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
             children: [
               Row(
                 children: [
-                  _summaryPill(
-                    isDark,
-                    label: 'shown',
-                    value: '${_svc.notifications.value.length}',
+                  AdminResultCount(
+                    count: _filteredItems.length,
+                    label: 'notifications',
                   ),
                   const SizedBox(width: 10),
                   _summaryPill(
@@ -353,25 +358,23 @@ class _NotificationsPageState extends State<NotificationsPage> {
                             ),
                             const SizedBox(width: 8),
                           ],
-                          Container(
-                            width: 1,
-                            height: 24,
-                            margin: const EdgeInsets.symmetric(horizontal: 4),
-                            color: AppTheme.getBorderColor(context),
-                          ),
                           const SizedBox(width: 4),
-                          for (final category in categories) ...[
-                            _filterChip(
-                              isDark,
-                              label: category == null
-                                  ? 'All Types'
-                                  : category.label,
-                              selected: _activeCategory == category,
-                              onTap: () =>
-                                  setState(() => _activeCategory = category),
-                            ),
-                            const SizedBox(width: 8),
-                          ],
+                          AdminFilterChip(
+                            label: 'Type',
+                            value: activeCategoryLabel,
+                            activeWhen: 'All Types',
+                            options: categoryOptions,
+                            onSelected: (value) => setState(() {
+                              _activeCategory = value == 'All Types'
+                                  ? null
+                                  : categories.whereType<NotificationCategory>().firstWhere(
+                                      (category) => category.label == value,
+                                    );
+                            }),
+                            onClear: () => setState(() {
+                              _activeCategory = null;
+                            }),
+                          ),
                         ],
                       ),
                     ),
@@ -629,6 +632,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _filterChip(
     bool isDark, {
     required String label,

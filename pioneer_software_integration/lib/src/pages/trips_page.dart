@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
 import '../utils/workflow_status_helper.dart';
+import '../widgets/admin_page_controls.dart';
 
 const String tripMapInsufficientPointsMessage =
     'Route data unavailable - insufficient GPS points';
@@ -46,6 +47,7 @@ class _TripsPageState extends State<TripsPage> {
   String _driverFilter = 'All Drivers';
   String _vehicleFilter = 'All Vehicles';
   String _sortMode = 'Date Newest';
+  final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedTripIds = <String>{};
 
   @override
@@ -116,6 +118,7 @@ class _TripsPageState extends State<TripsPage> {
   @override
   void dispose() {
     tripsNotifier.removeListener(_onTripsChanged);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -471,11 +474,14 @@ class _TripsPageState extends State<TripsPage> {
             label: compact ? 'Add' : 'New Trip',
             onTap: _showNewTripModal,
           );
-          final search = _TripSearchField(
-            value: _searchQuery,
-            isDark: isDark,
+          final search = AdminSearchField(
+            controller: _searchController,
+            hintText: 'Search by trip ID, client, driver, or vehicle...',
             onChanged: (value) => setState(() => _searchQuery = value),
-            onClear: () => setState(() => _searchQuery = ''),
+            onClear: () => setState(() {
+              _searchQuery = '';
+              _searchController.clear();
+            }),
           );
 
           if (compact) {
@@ -542,9 +548,9 @@ class _TripsPageState extends State<TripsPage> {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              _TripResultCount(count: _filteredTrips.length),
+              AdminResultCount(count: _filteredTrips.length, label: 'trips'),
               const SizedBox(width: 10),
-              _TripFilterChip(
+              AdminFilterChip(
                 label: 'Status',
                 value: _statusFilter,
                 activeWhen: 'All Status',
@@ -567,7 +573,7 @@ class _TripsPageState extends State<TripsPage> {
                 },
               ),
               const SizedBox(width: 8),
-              _TripFilterChip(
+              AdminFilterChip(
                 label: 'Date',
                 value: _dateFilter,
                 activeWhen: 'All Dates',
@@ -587,7 +593,7 @@ class _TripsPageState extends State<TripsPage> {
                 },
               ),
               const SizedBox(width: 8),
-              _TripFilterChip(
+              AdminFilterChip(
                 label: 'Client',
                 value: clientOptions.contains(_clientFilter)
                     ? _clientFilter
@@ -604,7 +610,7 @@ class _TripsPageState extends State<TripsPage> {
                 },
               ),
               const SizedBox(width: 8),
-              _TripFilterChip(
+              AdminFilterChip(
                 label: 'Driver',
                 value: driverOptions.contains(_driverFilter)
                     ? _driverFilter
@@ -621,7 +627,7 @@ class _TripsPageState extends State<TripsPage> {
                 },
               ),
               const SizedBox(width: 8),
-              _TripFilterChip(
+              AdminFilterChip(
                 label: 'Vehicle',
                 value: vehicleOptions.contains(_vehicleFilter)
                     ? _vehicleFilter
@@ -638,7 +644,7 @@ class _TripsPageState extends State<TripsPage> {
                 },
               ),
               const SizedBox(width: 8),
-              _TripFilterChip(
+              AdminFilterChip(
                 label: 'Sort',
                 value: _sortMode,
                 activeWhen: 'Date Newest',
@@ -701,6 +707,7 @@ class _TripsPageState extends State<TripsPage> {
   void _clearTripFilters() {
     setState(() {
       _searchQuery = '';
+      _searchController.clear();
       _statusFilter = 'All Status';
       _dateFilter = 'All Dates';
       _clientFilter = 'All Clients';
@@ -2251,6 +2258,7 @@ class _TripsPageState extends State<TripsPage> {
 // TRIP DETAILS PAGE WITH KEBAB MENU
 // ============================================
 
+// ignore: unused_element
 class _TripSearchField extends StatelessWidget {
   const _TripSearchField({
     required this.value,
@@ -2354,6 +2362,7 @@ class _TripAddButton extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _TripResultCount extends StatelessWidget {
   const _TripResultCount({required this.count});
 
@@ -2382,6 +2391,7 @@ class _TripResultCount extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _TripFilterChip extends StatelessWidget {
   const _TripFilterChip({
     required this.label,

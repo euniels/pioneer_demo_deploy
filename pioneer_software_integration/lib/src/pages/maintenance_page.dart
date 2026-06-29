@@ -601,23 +601,28 @@ class _MaintenancePageState extends State<MaintenancePage> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                search,
+                if (canAdd) ...[const SizedBox(height: 10), addButton],
+                const SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: AdminResultCount(count: resultCount, label: 'records'),
                 ),
-                const SizedBox(height: 10),
-                search,
-                if (canAdd) ...[const SizedBox(height: 10), addButton],
               ],
             );
           }
 
-          return Row(
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Row(
+                children: [
+                  Expanded(child: search),
+                  if (canAdd) ...[const SizedBox(width: 14), addButton],
+                ],
+              ),
+              const SizedBox(height: 12),
               AdminResultCount(count: resultCount, label: 'records'),
-              const SizedBox(width: 12),
-              Expanded(child: search),
-              if (canAdd) ...[const SizedBox(width: 14), addButton],
             ],
           );
         },
@@ -1374,6 +1379,16 @@ class _MaintenancePageState extends State<MaintenancePage> {
   }
 
   Future<void> _openWorkOrderForm({Map<String, dynamic>? record}) async {
+    final nativeRecord = record == null || _isNativeWorkOrder(record);
+    if (!nativeRecord) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Create a native work order before editing evidence.'),
+        ),
+      );
+      return;
+    }
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: false,
@@ -1381,13 +1396,11 @@ class _MaintenancePageState extends State<MaintenancePage> {
     );
     if (result == null || !mounted) return;
     try {
-      if ((record?['id']?.toString() ?? '').isEmpty) {
+      final id = _nativeWorkOrderId(record);
+      if (id.isEmpty) {
         await BackendApiService.createMaintenanceWorkOrder(result);
       } else {
-        await BackendApiService.updateMaintenanceWorkOrder(
-          record!['id'].toString(),
-          result,
-        );
+        await BackendApiService.updateMaintenanceWorkOrder(id, result);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1417,6 +1430,12 @@ class _MaintenancePageState extends State<MaintenancePage> {
         onCreateFromEvidence: (payload) async {
           await BackendApiService.createMaintenanceWorkOrder(payload);
           _reload();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Native work order created from evidence.'),
+            ),
+          );
         },
         onStatus: (status) async {
           await _updateWorkOrderStatus(record, status);
@@ -1436,8 +1455,16 @@ class _MaintenancePageState extends State<MaintenancePage> {
     Map<String, dynamic> record,
     String status,
   ) async {
-    final id = record['id']?.toString() ?? '';
-    if (id.isEmpty) return;
+    final id = _nativeWorkOrderId(record);
+    if (id.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Create a native work order before changing status.'),
+        ),
+      );
+      return;
+    }
     try {
       await BackendApiService.updateMaintenanceWorkOrder(id, {
         'status': status,
@@ -1467,8 +1494,16 @@ class _MaintenancePageState extends State<MaintenancePage> {
   }
 
   Future<void> _attachWorkOrderProof(Map<String, dynamic> record) async {
-    final id = record['id']?.toString() ?? '';
-    if (id.isEmpty) return;
+    final id = _nativeWorkOrderId(record);
+    if (id.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Create a native work order before attaching proof.'),
+        ),
+      );
+      return;
+    }
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
@@ -1647,11 +1682,10 @@ class _WorkOrderDialogState extends State<_WorkOrderDialog> {
     _notesController = TextEditingController(
       text: formatValue(record['notes']).replaceAll('N/A', ''),
     );
-    _priority = (record['priorityKey'] ?? record['priority'] ?? 'medium')
-        .toString()
-        .toLowerCase()
-        .replaceAll(' ', '_');
-    _sourceType = (record['sourceType'] ?? 'manual').toString();
+    _priority = _normalizeWorkOrderPriority(
+      record['priorityKey'] ?? record['priority'],
+    );
+    _sourceType = _normalizeWorkOrderSource(record['sourceType']);
   }
 
   @override
@@ -1894,11 +1928,10 @@ class _WorkOrderDetailsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final id = record['id']?.toString() ?? '';
-    final isNative = record['isNativeWorkOrder'] == true || id.isNotEmpty;
-    final status = (record['statusKey'] ?? record['status'] ?? 'open')
-        .toString()
-        .toLowerCase()
-        .replaceAll(' ', '_');
+    final isNative = _isNativeWorkOrder(record);
+    final status = _normalizeWorkOrderStatus(
+      record['statusKey'] ?? record['status'],
+    );
     final source = formatValue(record['sourceLabel'] ?? record['sourceType']);
     final attachments = _listOfMaps(record['attachments']);
     final terminal = {'completed', 'verified', 'voided'}.contains(status);
@@ -1949,6 +1982,14 @@ class _WorkOrderDetailsDialog extends StatelessWidget {
                             _TinyBadge(
                               label: source,
                               color: AppTheme.primaryBlue,
+                            ),
+                            _TinyBadge(
+                              label: isNative
+                                  ? 'Native Work Order'
+                                  : 'GeoTab Evidence',
+                              color: isNative
+                                  ? AppTheme.successGreen
+                                  : AppTheme.warningOrange,
                             ),
                             _TinyBadge(
                               label: formatValue(
@@ -2008,6 +2049,10 @@ class _WorkOrderDetailsDialog extends StatelessWidget {
                             formatValue(record['sourceSummary']),
                             style: AppTheme.settingsSubtitleStyle(context),
                           ),
+                        ],
+                        if (!isNative) ...[
+                          const SizedBox(height: 16),
+                          _EvidenceNotice(id: id),
                         ],
                       ],
                     ),
@@ -2144,18 +2189,126 @@ class _MetricPill extends StatelessWidget {
   }
 }
 
+class _EvidenceNotice extends StatelessWidget {
+  const _EvidenceNotice({required this.id});
+
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.warningOrange.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppTheme.warningOrange.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.info_outline_rounded,
+            color: AppTheme.warningOrange,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'This row is source evidence${id.isEmpty ? '' : ' ($id)'}. '
+              'Create a native work order before editing, changing status, or attaching proof.',
+              style: AppTheme.settingsSubtitleStyle(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+bool _isNativeWorkOrder(Map<String, dynamic>? record) {
+  return record?['isNativeWorkOrder'] == true;
+}
+
+String _nativeWorkOrderId(Map<String, dynamic>? record) {
+  if (!_isNativeWorkOrder(record)) return '';
+  return record?['id']?.toString() ?? '';
+}
+
+String _normalizeWorkOrderPriority(Object? value) {
+  final normalized = value
+      ?.toString()
+      .trim()
+      .toLowerCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+  return switch (normalized) {
+    'low' => 'low',
+    'medium' || 'normal' => 'medium',
+    'high' => 'high',
+    'critical' || 'urgent' => 'critical',
+    _ => 'medium',
+  };
+}
+
+String _normalizeWorkOrderSource(Object? value) {
+  final normalized = value
+      ?.toString()
+      .trim()
+      .toLowerCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+  if (normalized == null || normalized.isEmpty) return 'manual';
+  if (normalized.contains('fault')) return 'geotab_fault';
+  if (normalized.contains('dvir')) return 'geotab_dvir';
+  if (normalized.contains('status') || normalized.contains('offline')) {
+    return 'geotab_status';
+  }
+  if (normalized.contains('threshold') || normalized.contains('service')) {
+    return 'service_threshold';
+  }
+  return switch (normalized) {
+    'manual' => 'manual',
+    'geotab_fault' => 'geotab_fault',
+    'geotab_dvir' => 'geotab_dvir',
+    'geotab_status' => 'geotab_status',
+    'service_threshold' => 'service_threshold',
+    _ => 'manual',
+  };
+}
+
+String _normalizeWorkOrderStatus(Object? value) {
+  final normalized = value
+      ?.toString()
+      .trim()
+      .toLowerCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+  return switch (normalized) {
+    'assigned' => 'assigned',
+    'in_progress' || 'started' || 'active' => 'in_progress',
+    'waiting_parts' || 'waiting' || 'on_hold' => 'waiting_parts',
+    'completed' || 'complete' || 'done' => 'completed',
+    'verified' => 'verified',
+    'voided' || 'void' || 'cancelled' || 'canceled' => 'voided',
+    _ => 'open',
+  };
+}
+
 Map<String, dynamic> _payloadFromEvidence(Map<String, dynamic> record) {
-  final sourceType = (record['sourceType'] ?? 'manual').toString();
+  final sourceType = _normalizeWorkOrderSource(record['sourceType']);
   return {
     'vehiclePlate': formatValue(record['vehiclePlate'] ?? record['vehicle']),
     'title': formatValue(record['title'] ?? 'Maintenance Work Order'),
     'description': formatValue(
       record['description'] ?? record['sourceSummary'],
     ),
-    'priority': (record['priorityKey'] ?? record['priority'] ?? 'medium')
-        .toString()
-        .toLowerCase(),
-    'sourceType': sourceType == 'manual' ? 'manual' : sourceType,
+    'priority': _normalizeWorkOrderPriority(
+      record['priorityKey'] ?? record['priority'],
+    ),
+    'sourceType': sourceType,
     'sourceRecordId': record['sourceRecordId']?.toString(),
     'sourceSummary': formatValue(record['sourceSummary']),
     'status': 'open',

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../services/backend_api.dart';
 import '../services/fleet_sync_service.dart';
@@ -666,6 +667,16 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     bool compact = false,
   }) {
     final color = stat['color'] as Color;
+    if (!compact) {
+      return AdminSummaryCard(
+        title: stat['label'] as String,
+        value: stat['value'] as String,
+        subtitle: _dispatchStatSubtitle(stat['label'] as String),
+        icon: stat['icon'] as IconData,
+        color: color,
+      );
+    }
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,

@@ -550,10 +550,9 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
 
     final screenWidth = MediaQuery.sizeOf(context).width;
     final gap = screenWidth < 850 ? AppTheme.space12 : AppTheme.space16;
-    final contentWidth = screenWidth - (AppTheme.space24 * 2);
-    final columns = contentWidth >= 1000
+    final columns = screenWidth >= 1180
         ? 4
-        : contentWidth >= 620
+        : screenWidth >= 760
         ? 2
         : 1;
     if (columns == 1) {
@@ -566,12 +565,12 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
         ],
       );
     }
-    final cardWidth = (contentWidth - (gap * (columns - 1))) / columns;
-    return Wrap(
-      spacing: gap,
-      runSpacing: gap,
+    return Row(
       children: [
-        for (final card in cards) SizedBox(width: cardWidth, child: card),
+        for (var index = 0; index < cards.length; index++) ...[
+          Expanded(child: cards[index]),
+          if (index != cards.length - 1) SizedBox(width: gap),
+        ],
       ],
     );
   }
@@ -610,49 +609,73 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
     List<({Map<String, dynamic> vehicle, TelemetryReadingViewData fuel})> rows,
   ) {
     final screenWidth = MediaQuery.sizeOf(context).width;
+    final columns = screenWidth >= 1180
+        ? 4
+        : screenWidth >= 760
+        ? 2
+        : 1;
+    const gap = AppTheme.space12;
+    Widget tile(({Map<String, dynamic> vehicle, TelemetryReadingViewData fuel}) row) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            formatValue(row.vehicle['vehicle']),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTheme.getBodyStyle(context).copyWith(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 7),
+          TelemetryReadingTile(
+            reading: row.fuel,
+            icon: Icons.local_gas_station_rounded,
+            compact: true,
+            showHistory: false,
+          ),
+        ],
+      );
+    }
+
+    if (columns == 4) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var index = 0; index < rows.length; index++) ...[
+            Expanded(child: tile(rows[index])),
+            if (index != rows.length - 1) const SizedBox(width: gap),
+          ],
+        ],
+      );
+    }
+
+    if (columns == 1) {
+      return Column(
+        children: [
+          for (var index = 0; index < rows.length; index++) ...[
+            tile(rows[index]),
+            if (index != rows.length - 1) const SizedBox(height: gap),
+          ],
+        ],
+      );
+    }
+
     final contentWidth = screenWidth - (AppTheme.space24 * 2);
-    final columns = contentWidth >= 900 ? 4 : 2;
-    const gap = 12.0;
-    final width = (contentWidth - gap * (columns - 1)) / columns;
+    final width = (contentWidth - gap) / 2;
     return Wrap(
       spacing: gap,
       runSpacing: gap,
       children: rows
-          .map(
-            (row) => SizedBox(
-              width: width,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    formatValue(row.vehicle['vehicle']),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTheme.getBodyStyle(context).copyWith(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 7),
-                  TelemetryReadingTile(
-                    reading: row.fuel,
-                    icon: Icons.local_gas_station_rounded,
-                    compact: true,
-                    showHistory: false,
-                  ),
-                ],
-              ),
-            ),
-          )
+          .map((row) => SizedBox(width: width, child: tile(row)))
           .toList(),
     );
   }
 
   Future<void> _addFuelRecord() async {
-    final record = await showModalBottomSheet<Map<String, dynamic>>(
+    final record = await showDialog<Map<String, dynamic>>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.transparent,
       builder: (context) => const _AddFuelRecordSheet(),
     );
 
@@ -900,11 +923,6 @@ class _FuelExpensesPageState extends State<FuelExpensesPage> {
       subtitle: priceConfigured
           ? 'Estimated costs based on: $priceBasis'
           : 'Configure fuel price in Settings to show estimates',
-      action: FilledButton.icon(
-        onPressed: _addFuelRecord,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add record'),
-      ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: SizedBox(
@@ -1393,13 +1411,11 @@ class _ExecutivePanel extends StatelessWidget {
   final String title;
   final String subtitle;
   final Widget child;
-  final Widget? action;
 
   const _ExecutivePanel({
     required this.title,
     required this.subtitle,
     required this.child,
-    this.action,
   });
 
   @override
@@ -1430,7 +1446,6 @@ class _ExecutivePanel extends StatelessWidget {
                   ],
                 ),
               ),
-              if (action != null) action!,
             ],
           ),
           const SizedBox(height: 12),
@@ -1662,7 +1677,14 @@ class _AddFuelRecordSheetState extends State<_AddFuelRecordSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final viewInsets = MediaQuery.of(context).viewInsets;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final media = MediaQuery.of(context);
+    final sw = media.size.width;
+    final sh = media.size.height;
+    final keyboardH = media.viewInsets.bottom;
+    final isVerySmall = sw < 360;
+    final isMobile = sw < 600;
+    final verticalInset = isVerySmall ? 16.0 : 24.0;
     final vehicles = vehiclesNotifier.value;
     final selectedVehicle = vehicles.cast<Map<String, dynamic>?>().firstWhere(
       (vehicle) => vehicle?['plate'] == _selectedVehiclePlate,
@@ -1670,133 +1692,242 @@ class _AddFuelRecordSheetState extends State<_AddFuelRecordSheet> {
     );
     final maxLiters = _toDouble(selectedVehicle?['fuelCapacity']);
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: viewInsets.bottom),
+    return Dialog(
+      backgroundColor: AppTheme.transparent,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isVerySmall ? 8 : (isMobile ? 16 : 80),
+        vertical: verticalInset,
+      ),
       child: Container(
-        decoration: BoxDecoration(
-          color: AppTheme.getCardBg(context),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        constraints: BoxConstraints(
+          maxWidth: isVerySmall ? sw - 16 : (isMobile ? 520 : 620),
+          maxHeight: sh - keyboardH - verticalInset * 2,
         ),
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Add refuel record',
-                  style: AppTheme.getHeadingStyle(context, fontSize: 22),
+        decoration: BoxDecoration(
+          color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+          borderRadius: BorderRadius.circular(isVerySmall ? 14 : 24),
+          border: Border.all(
+            color: isDark
+                ? AppTheme.white.withAlpha(20)
+                : AppTheme.black.withAlpha(20),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.black.withAlpha(77),
+              blurRadius: 40,
+              offset: const Offset(0, 16),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: EdgeInsets.all(isVerySmall ? 16 : 24),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [AppTheme.colorFF4B7BE5, AppTheme.colorFF1B2A4A],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'This dispatch-side entry is capacity-aware and keeps the dashboard usable even before a live fill-up sync arrives.',
-                  style: AppTheme.getSubtitleStyle(context),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(isVerySmall ? 14 : 24),
+                  topRight: Radius.circular(isVerySmall ? 14 : 24),
                 ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: _selectedVehiclePlate,
-                  decoration: const InputDecoration(labelText: 'Vehicle'),
-                  items: vehicles
-                      .map(
-                        (vehicle) => DropdownMenuItem<String>(
-                          value: vehicle['plate']?.toString(),
-                          child: Text(
-                            vehicle['plate']?.toString() ?? 'Unknown',
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.white.withAlpha(38),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.local_gas_station_rounded,
+                      color: AppTheme.white,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'New Fuel Record',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.white,
                           ),
                         ),
-                      )
-                      .toList(),
-                  hint: const Text('Select...'),
-                  validator: (value) =>
-                      FormValidation.requiredSelection('vehicle', value),
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedVehiclePlate = value;
-                    });
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _stationController,
-                  decoration: const InputDecoration(labelText: 'Station'),
-                  validator: (value) =>
-                      FormValidation.requiredField('Station', value),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _litersController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: maxLiters > 0
-                        ? 'Liters (max ${maxLiters.toStringAsFixed(0)}L)'
-                        : 'Liters',
+                        const SizedBox(height: 4),
+                        Text(
+                          'Manual refuel entry for dispatch and finance review.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppTheme.white.withAlpha(210),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  validator: (value) {
-                    final liters = _toDouble(value);
-                    final numberError = FormValidation.positiveNumber(
-                      'Liters',
-                      value,
-                    );
-                    if (numberError != null) return numberError;
-                    if (maxLiters > 0 && liters > maxLiters) {
-                      return 'Cannot exceed ${maxLiters.toStringAsFixed(0)}L';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _priceController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Price per liter',
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded, color: AppTheme.white),
                   ),
-                  validator: (value) =>
-                      FormValidation.positiveNumber('Price per liter', value),
-                ),
-                const SizedBox(height: 22),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () {
-                      if (!_formKey.currentState!.validate()) {
-                        return;
-                      }
-
-                      final liters = _toDouble(_litersController.text);
-                      final price = _toDouble(_priceController.text);
-                      final total = liters * price;
-
-                      Navigator.pop(context, {
-                        'vehiclePlate': _selectedVehiclePlate ?? 'Unknown',
-                        'driverName':
-                            selectedVehicle?['driver'] ?? 'Unassigned',
-                        'eventAt': DateTime.now().toIso8601String(),
-                        'stationName': _stationController.text.trim(),
-                        'eventType': 'manual_record',
-                        'sourceType': 'manual',
-                        'reviewStatus': 'confirmed',
-                        'confidence': 'manual',
-                        'fuelType': 'diesel',
-                        'vehicle': _selectedVehiclePlate ?? 'Unknown',
-                        'driver': selectedVehicle?['driver'] ?? 'Unassigned',
-                        'station': _stationController.text.trim(),
-                        'date': _displayDate(DateTime.now()),
-                        'liters': liters,
-                        'volumeLiters': liters,
-                        'pricePerLiter': price,
-                        'cost': total,
-                        'totalCost': total,
-                        'source': 'Manual',
-                      });
-                    },
-                    child: const Text('Save record'),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
+            Flexible(
+              child: Form(
+                key: _formKey,
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(isVerySmall ? 16 : 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Fuel purchase details',
+                        style: AppTheme.getHeadingStyle(context, fontSize: 18),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Use this when GeoTab fuel transactions are not yet available or a receipt must be recorded manually.',
+                        style: AppTheme.getSubtitleStyle(context),
+                      ),
+                      const SizedBox(height: 18),
+                      DropdownButtonFormField<String>(
+                        initialValue: _selectedVehiclePlate,
+                        decoration: const InputDecoration(labelText: 'Vehicle'),
+                        items: vehicles
+                            .map(
+                              (vehicle) => DropdownMenuItem<String>(
+                                value: vehicle['plate']?.toString(),
+                                child: Text(
+                                  vehicle['plate']?.toString() ?? 'Unknown',
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        hint: const Text('Select...'),
+                        validator: (value) =>
+                            FormValidation.requiredSelection('vehicle', value),
+                        onChanged: (value) {
+                          setState(() {
+                            _selectedVehiclePlate = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _stationController,
+                        decoration: const InputDecoration(labelText: 'Station'),
+                        validator: (value) =>
+                            FormValidation.requiredField('Station', value),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _litersController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: maxLiters > 0
+                                    ? 'Liters (max ${maxLiters.toStringAsFixed(0)}L)'
+                                    : 'Liters',
+                              ),
+                              validator: (value) {
+                                final liters = _toDouble(value);
+                                final numberError =
+                                    FormValidation.positiveNumber(
+                                  'Liters',
+                                  value,
+                                );
+                                if (numberError != null) return numberError;
+                                if (maxLiters > 0 && liters > maxLiters) {
+                                  return 'Cannot exceed ${maxLiters.toStringAsFixed(0)}L';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _priceController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Price per liter',
+                              ),
+                              validator: (value) =>
+                                  FormValidation.positiveNumber(
+                                'Price per liter',
+                                value,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 22),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('Cancel'),
+                          ),
+                          const SizedBox(width: 12),
+                          FilledButton.icon(
+                            onPressed: () {
+                              if (!_formKey.currentState!.validate()) {
+                                return;
+                              }
+
+                              final liters = _toDouble(_litersController.text);
+                              final price = _toDouble(_priceController.text);
+                              final total = liters * price;
+
+                              Navigator.pop(context, {
+                                'vehiclePlate':
+                                    _selectedVehiclePlate ?? 'Unknown',
+                                'driverName':
+                                    selectedVehicle?['driver'] ?? 'Unassigned',
+                                'eventAt': DateTime.now().toIso8601String(),
+                                'stationName':
+                                    _stationController.text.trim(),
+                                'eventType': 'manual_record',
+                                'sourceType': 'manual',
+                                'reviewStatus': 'confirmed',
+                                'confidence': 'manual',
+                                'fuelType': 'diesel',
+                                'vehicle': _selectedVehiclePlate ?? 'Unknown',
+                                'driver':
+                                    selectedVehicle?['driver'] ?? 'Unassigned',
+                                'station': _stationController.text.trim(),
+                                'date': _displayDate(DateTime.now()),
+                                'liters': liters,
+                                'volumeLiters': liters,
+                                'pricePerLiter': price,
+                                'cost': total,
+                                'totalCost': total,
+                                'source': 'Manual',
+                              });
+                            },
+                            icon: const Icon(Icons.save_rounded),
+                            label: const Text('Save record'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
