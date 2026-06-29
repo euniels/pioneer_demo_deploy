@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'backend_api.dart';
 import 'local_fleet_mirror_service.dart';
 import 'notification_service.dart';
+import '../config/pioneer_runtime_config.dart';
 import '../theme/app_theme.dart';
 
 final ValueNotifier<List<Map<String, dynamic>>> vehiclesNotifier =
@@ -14,8 +15,7 @@ List<Map<String, dynamic>> _initialVehicles() => [];
 
 List<Map<String, dynamic>> includeDemoLiveVehicles(
   List<Map<String, dynamic>> vehicles,
-) =>
-    _withDemoLiveVehicles(vehicles);
+) => _withDemoLiveVehicles(vehicles);
 
 void addVehicle(Map<String, dynamic> vehicle) {
   vehiclesNotifier.value = [...vehiclesNotifier.value, vehicle];
@@ -307,9 +307,14 @@ List<Map<String, dynamic>> applyFleetLivePayload(
 List<Map<String, dynamic>> _withDemoLiveVehicles(
   List<Map<String, dynamic>> vehicles,
 ) {
+  if (!PioneerRuntimeConfig.showMockData) {
+    return vehicles;
+  }
+
   final existingKeys = {
     for (final vehicle in vehicles) _liveVehicleKey(vehicle),
-    for (final vehicle in vehicles) _plateKey(vehicle['plate']?.toString() ?? ''),
+    for (final vehicle in vehicles)
+      _plateKey(vehicle['plate']?.toString() ?? ''),
   };
   final merged = [...vehicles];
 

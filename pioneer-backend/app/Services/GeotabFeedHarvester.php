@@ -461,7 +461,7 @@ class GeotabFeedHarvester
         $required = [
             'geotab:feed-sync' => 600,
             'geotab:snapshot-warm' => 300,
-            'geotab:warm-session' => 1200,
+            'geotab:writeback-process --limit=10' => 300,
         ];
         $ages = [];
         $fresh = [];

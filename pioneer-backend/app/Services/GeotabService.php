@@ -985,7 +985,13 @@ class GeotabService
             $search['toDate'] = $this->toUtcString($to);
         }
 
-        return $this->getEntities('StatusData', $search, $limit);
+        $rows = $this->getEntities('StatusData', $search, $limit);
+        usort($rows, fn (array $a, array $b): int => strcmp(
+            (string) data_get($b, 'dateTime', ''),
+            (string) data_get($a, 'dateTime', ''),
+        ));
+
+        return $rows;
     }
 
     public function getStatusHistory(
@@ -1030,6 +1036,14 @@ class GeotabService
             $needle = trim((string) $candidate);
             if ($needle === '') {
                 continue;
+            }
+
+            if (str_starts_with($needle, 'Diagnostic')) {
+                return [
+                    'id' => $needle,
+                    'name' => $needle,
+                    'source' => 'SourceGeotabGoId',
+                ];
             }
 
             $selected = $this->selectDiagnosticMatch($diagnostics, $needle);
