@@ -10,16 +10,15 @@ import '../widgets/signature_pad.dart';
 import '../services/backend_api.dart';
 import '../services/clients_store.dart';
 import '../services/crud_permissions.dart';
-import '../services/drivers_store.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/page_cache_service.dart';
 import '../services/trips_store.dart';
-import '../services/vehicles_store.dart';
 import '../services/notification_service.dart';
 import '../services/soa_exporter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_theme.dart';
+import '../utils/dispatch_workflow_policy.dart';
 import '../utils/form_validation.dart';
 import '../utils/workflow_status_helper.dart';
 import '../widgets/admin_page_controls.dart';
@@ -1307,8 +1306,7 @@ class _TripsPageState extends State<TripsPage> {
   }
 
   int _tripPhase(Map<String, dynamic> trip) {
-    final raw = trip['workflowPhaseNumber'];
-    return raw is num ? raw.toInt().clamp(1, 12) : 1;
+    return DispatchWorkflowPolicy.phaseNumber(trip);
   }
 
   void _toggleTripSelection(String tripId, bool selected) {
@@ -1348,7 +1346,17 @@ class _TripsPageState extends State<TripsPage> {
 
   Future<void> _advanceTrip(Map<String, dynamic> trip) async {
     final current = _tripPhase(trip);
-    if (!_tripCanChange(trip) || current >= 12) return;
+    if (!_tripCanChange(trip) || current >= 11) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Completion is handled through POD review and billing.',
+          ),
+        ),
+      );
+      return;
+    }
     final next = current + 1;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1374,17 +1382,14 @@ class _TripsPageState extends State<TripsPage> {
     try {
       await updateTrip(trip['tripId'].toString(), {
         'workflowPhaseNumber': next,
-        if (next >= 10 && next < 12) 'status': 'dispatched',
-        if (next == 12) 'status': 'completed',
+        if (next >= 10) 'status': 'dispatched',
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           content: Text(
-            next == 12
-                ? 'Trip completed. Billing is now available for this trip.'
-                : 'Trip advanced to workflow phase $next.',
+            'Trip advanced to workflow phase $next.',
           ),
         ),
       );
@@ -3234,6 +3239,17 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
   void _showAdvanceWorkflowConfirmation(BuildContext context, bool isDark) {
     final currentPhase = _workflowPhaseNumber(trip);
     final nextPhase = (currentPhase + 1).clamp(1, 12);
+    if (currentPhase >= 11) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Completion is handled through POD review and billing.',
+          ),
+        ),
+      );
+      return;
+    }
 
     showDialog(
       context: context,
@@ -3265,8 +3281,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
             onPressed: () async {
               final updates = <String, dynamic>{
                 'workflowPhaseNumber': nextPhase,
-                if (nextPhase >= 10 && nextPhase < 12) 'status': 'dispatched',
-                if (nextPhase == 12) 'status': 'completed',
+                if (nextPhase >= 10) 'status': 'dispatched',
               };
               try {
                 await updateTrip(trip['tripId'] as String, updates);
@@ -3276,9 +3291,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                   SnackBar(
                     behavior: SnackBarBehavior.floating,
                     content: Text(
-                      nextPhase == 12
-                          ? 'Trip completed. Billing is now available for this trip.'
-                          : 'Trip advanced to workflow phase $nextPhase.',
+                      'Trip advanced to workflow phase $nextPhase.',
                     ),
                   ),
                 );
@@ -4395,10 +4408,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
   }
 
   int _workflowPhaseNumber(Map<String, dynamic> trip) {
-    final raw = trip['workflowPhaseNumber'];
-    if (raw is num) return raw.toInt().clamp(1, 12);
-    final parsed = int.tryParse(raw?.toString() ?? '');
-    return (parsed ?? 7).clamp(1, 12);
+    return DispatchWorkflowPolicy.phaseNumber(trip, fallback: 7);
   }
 
   Widget _buildInfoRow(
@@ -5561,36 +5571,9 @@ class _TripLifecycleDialogState extends State<_TripLifecycleDialog> {
                           _freeDeliveryBanner(isDark, freeDeliveryThreshold),
                         ],
                         const SizedBox(height: 20),
-                        _sectionTitle('Assignment and schedule', isDark),
+                        _sectionTitle('Schedule and dispatch handoff', isDark),
                         const SizedBox(height: 12),
-                        _responsiveRow(isMobile, [
-                          _dropdownField(
-                            label: 'Assigned vehicle',
-                            value: _vehicle,
-                            values: _vehicleOptions,
-                            icon: Icons.local_shipping_rounded,
-                            isDark: isDark,
-                            validator: (value) =>
-                                value == null || value.trim().isEmpty
-                                ? 'Vehicle is required'
-                                : null,
-                            onChanged: (value) =>
-                                setState(() => _vehicle = value),
-                          ),
-                          _dropdownField(
-                            label: 'Assigned driver',
-                            value: _driver,
-                            values: _driverOptions,
-                            icon: Icons.badge_rounded,
-                            isDark: isDark,
-                            validator: (value) =>
-                                value == null || value.trim().isEmpty
-                                ? 'Driver is required'
-                                : null,
-                            onChanged: (value) =>
-                                setState(() => _driver = value),
-                          ),
-                        ]),
+                        _assignmentHandoffNotice(isDark),
                         const SizedBox(height: 12),
                         _responsiveRow(isMobile, [
                           _dateTile(
@@ -5954,6 +5937,69 @@ class _TripLifecycleDialogState extends State<_TripLifecycleDialog> {
     );
   }
 
+  Widget _assignmentHandoffNotice(bool isDark) {
+    final assignedVehicle = _nonEmpty(widget.initialTrip?['vehicle']);
+    final assignedDriver = _nonEmpty(widget.initialTrip?['driver']);
+    final hasAssignment = assignedVehicle != null || assignedDriver != null;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.26),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.route_rounded,
+              color: AppTheme.colorFF4B7BE5,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Driver and vehicle are assigned in Dispatch Queue.',
+                  style: TextStyle(
+                    color: isDark ? AppTheme.white : AppTheme.colorFF1B2A4A,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  hasAssignment
+                      ? 'Current assignment is preserved: ${assignedVehicle ?? 'Unassigned vehicle'} / ${assignedDriver ?? 'Unassigned driver'}.'
+                      : 'Create the trip request first, then Dispatch will select the available driver and truck before starting the delivery.',
+                  style: TextStyle(
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray700,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickDateTime({
     required DateTime? current,
     required ValueChanged<DateTime> onSelected,
@@ -6019,8 +6065,8 @@ class _TripLifecycleDialogState extends State<_TripLifecycleDialog> {
       'totalWeightKg': double.tryParse(_weightController.text.trim()) ?? 0,
       'orderValue': orderValue,
       'amount': _formatCurrency(orderValue),
-      'vehicle': _vehicle ?? '',
-      'driver': _driver ?? '',
+      'vehicle': _editing ? (_vehicle ?? '') : '',
+      'driver': _editing ? (_driver ?? '') : '',
       'scheduledDepartureAt': scheduled.toIso8601String(),
       'estimatedArrivalAt': _estimatedArrival?.toIso8601String(),
       'specialInstructions': _instructionsController.text.trim(),
@@ -6094,41 +6140,6 @@ class _TripLifecycleDialogState extends State<_TripLifecycleDialog> {
       if (destination.isNotEmpty) places.add(destination);
     }
     return places.toList()..sort();
-  }
-
-  List<String> get _vehicleOptions {
-    final values =
-        vehiclesNotifier.value
-            .where((vehicle) {
-              final status = vehicle['status']?.toString().toLowerCase() ?? '';
-              final plate = vehicle['plate']?.toString().trim() ?? '';
-              return plate.isNotEmpty &&
-                  (status == 'available' || plate == (_vehicle ?? ''));
-            })
-            .map((vehicle) => vehicle['plate'].toString())
-            .toSet()
-            .toList()
-          ..sort();
-    if (_vehicle != null && !values.contains(_vehicle)) values.add(_vehicle!);
-    return values;
-  }
-
-  List<String> get _driverOptions {
-    final values =
-        driversNotifier.value
-            .where((driver) {
-              final status = driver['status']?.toString().toLowerCase() ?? '';
-              final name = driver['name']?.toString().trim() ?? '';
-              return name.isNotEmpty &&
-                  (status != 'inactive' && status != 'deactivated' ||
-                      name == (_driver ?? ''));
-            })
-            .map((driver) => driver['name'].toString())
-            .toSet()
-            .toList()
-          ..sort();
-    if (_driver != null && !values.contains(_driver)) values.add(_driver!);
-    return values;
   }
 
   double get _orderValue {

@@ -1787,10 +1787,10 @@ String clientTrackingHeadlineStatus(Map<String, dynamic> data) {
   if (_isCompletedTrackingStatus(data['status']) || phase >= 12) {
     return 'DELIVERED';
   }
-  if (phase >= 8 || normalized.contains('arriv')) {
+  if (phase >= 11 || normalized.contains('arriv')) {
     return 'ARRIVED AT DESTINATION';
   }
-  if (phase >= 7 ||
+  if (phase >= 10 ||
       (!data.containsKey('workflowPhaseNumber') &&
           (normalized.contains('transit') ||
               normalized.contains('active') ||
@@ -1804,8 +1804,8 @@ int clientTrackingPublicTimelineIndex(Map<String, dynamic> data) {
   final phase = _workflowPhaseNumber(data);
   final normalized = data['status']?.toString().trim().toLowerCase() ?? '';
   if (_isCompletedTrackingStatus(data['status']) || phase >= 12) return 4;
-  if (phase >= 8 || normalized.contains('arriv')) return 3;
-  if (phase >= 7 ||
+  if (phase >= 11 || normalized.contains('arriv')) return 3;
+  if (phase >= 10 ||
       (!data.containsKey('workflowPhaseNumber') &&
           (normalized.contains('transit') ||
               normalized.contains('active') ||
@@ -1851,10 +1851,9 @@ String clientTrackingWorkflowStatus(Map<String, dynamic> data) {
   final phase = _workflowPhaseNumber(data);
   if (phase <= 2) return 'Your delivery request is being prepared';
   if (phase <= 6) return 'Your delivery is being assigned';
-  if (phase == 7) return 'Your delivery is on its way';
-  if (phase == 8) return 'Your delivery has arrived';
-  if (phase <= 10) return 'Proof of delivery is being confirmed';
-  if (phase == 11) return 'Your invoice is being prepared';
+  if (phase <= 9) return 'Your delivery is being arranged';
+  if (phase == 10) return 'Your delivery is on its way';
+  if (phase == 11) return 'Your delivery has arrived';
   return 'Delivery complete';
 }
 
@@ -1869,10 +1868,9 @@ String clientTrackingWorkflowMilestone(Map<String, dynamic> data) {
   if (phase <= 6) {
     return 'Next: We assign your delivery truck and schedule.';
   }
-  if (phase == 7) return 'Next: Your truck travels to your destination.';
-  if (phase == 8) return 'Next: Receive the delivery and confirm arrival.';
-  if (phase <= 10) return 'Next: Driver submits and Pioneer verifies POD.';
-  if (phase == 11) return 'Next: Accounting prepares the delivery invoice.';
+  if (phase <= 9) return 'Next: Pioneer confirms dispatch resources.';
+  if (phase == 10) return 'Next: Your truck travels to your destination.';
+  if (phase == 11) return 'Next: Driver submits and Pioneer verifies POD.';
   return 'Delivery and billing review are complete.';
 }
 

@@ -2689,17 +2689,26 @@ class GeotabController extends Controller
     {
         $state = $this->workflowState();
         $customTrips = $state['customTrips'] ?? [];
+        $updates = $this->workflowTripUpdates($request);
+        $currentTrip = is_array($customTrips[$tripId] ?? null)
+            ? $customTrips[$tripId]
+            : (is_array($state['tripOverrides'][$tripId] ?? null) ? $state['tripOverrides'][$tripId] : []);
+        $proposedTrip = array_merge($currentTrip, $updates);
+        $transitionError = $this->workflowTransitionError($request, $proposedTrip);
+        if ($transitionError !== null) {
+            return $this->respondError($transitionError, 422);
+        }
 
         if (isset($customTrips[$tripId]) && is_array($customTrips[$tripId])) {
             $customTrips[$tripId] = $this->formatWorkflowTrip(array_merge(
                 $customTrips[$tripId],
-                $this->workflowTripUpdates($request)
+                $updates
             ));
             $state['customTrips'] = $customTrips;
         } else {
             $state['tripOverrides'][$tripId] = array_merge(
                 is_array($state['tripOverrides'][$tripId] ?? null) ? $state['tripOverrides'][$tripId] : [],
-                $this->workflowTripUpdates($request)
+                $updates
             );
         }
 
@@ -10562,11 +10571,35 @@ class GeotabController extends Controller
             $updates['arrivalState'] = 'pending_approval';
         } elseif (($updates['status'] ?? '') === 'dispatched') {
             $updates['startedAt'] = $updates['startedAt'] ?? now()->toIso8601String();
-            $updates['arrivalState'] = 'enroute';
+            $phaseNumber = (int) ($updates['workflowPhaseNumber'] ?? 10);
+            $updates['arrivalState'] = $phaseNumber >= 11 ? 'arrived' : 'enroute';
+            $updates['arrivedAtDestination'] = $phaseNumber >= 11;
         }
         $updates['sortAt'] = now()->toIso8601String();
 
         return $updates;
+    }
+
+    private function workflowTransitionError(Request $request, array $trip): ?string
+    {
+        $phase = isset($trip['workflowPhaseNumber'])
+            ? max(1, min(12, (int) $trip['workflowPhaseNumber']))
+            : null;
+        $status = $this->normalizeWorkflowStatus($trip['status'] ?? 'pending');
+        $driver = trim((string) ($trip['driver'] ?? ''));
+        $vehicle = trim((string) ($trip['vehicle'] ?? ''));
+
+        if ($phase !== null && $phase >= 10 && ($driver === '' || $vehicle === '')) {
+            return 'A driver and vehicle are required before a trip can start dispatch.';
+        }
+
+        $requestsCompletion = $status === 'completed' || $phase === 12;
+        $hasCompletionTimestamp = trim((string) $request->input('endedAt', '')) !== '';
+        if ($requestsCompletion && ! $hasCompletionTimestamp) {
+            return 'Trip completion must go through POD review; dispatch phase updates cannot complete a trip.';
+        }
+
+        return null;
     }
 
     private function queueWorkflowPhaseWriteBack(string $tripId, array $trip, int $phaseNumber): void
@@ -10646,6 +10679,9 @@ class GeotabController extends Controller
         $hasAssignment = trim((string) ($trip['vehicle'] ?? '')) !== '' || trim((string) ($trip['driver'] ?? '')) !== '';
         $isCompleted = $status === 'completed';
         $isDispatched = $status === 'dispatched';
+        $hasArrived = $isCompleted
+            || ($trip['arrivedAtDestination'] ?? false) === true
+            || in_array(strtolower(trim((string) ($trip['arrivalState'] ?? ''))), ['arrived', 'completed'], true);
         $isDelivery = in_array($fulfillmentMethod, ['free_delivery', 'paid_delivery'], true);
         $explicitPhaseNumber = ($trip['workflowPhaseLocked'] ?? false) === true && isset($trip['workflowPhaseNumber'])
             ? max(1, min(12, (int) $trip['workflowPhaseNumber']))
@@ -10728,7 +10764,7 @@ class GeotabController extends Controller
                 'key' => 'dispatch',
                 'label' => 'Delivery dispatched',
                 'phase' => 'execution',
-                'status' => $isDispatched || $isCompleted ? 'done' : ($isDelivery ? 'pending' : 'not_required'),
+                'status' => $isCompleted || $hasArrived ? 'done' : ($isDispatched ? 'active' : ($isDelivery ? 'pending' : 'not_required')),
                 'owner' => 'Driver',
                 'detail' => 'Driver departs and live tracking begins.',
             ],
@@ -10736,7 +10772,7 @@ class GeotabController extends Controller
                 'key' => 'arrival',
                 'label' => 'Arrival at client location',
                 'phase' => 'execution',
-                'status' => $isCompleted ? 'done' : ($isDispatched ? 'active' : 'pending'),
+                'status' => $isCompleted ? 'done' : ($hasArrived ? 'active' : 'pending'),
                 'owner' => 'Driver',
                 'detail' => 'Sales notifies client through Viber on arrival.',
             ],
@@ -10772,7 +10808,11 @@ class GeotabController extends Controller
             'phaseNumber' => $phaseNumber,
             'group' => $this->workflowGroupForPhase($phaseNumber),
             'phaseLabel' => match ($phase) {
-                'sales' => 'Inquiry & quotation',
+                'request' => 'Trip request',
+                'assignment' => 'Dispatch assignment',
+                'ready' => 'Ready to dispatch',
+                'transit' => 'In transit',
+                'arrived' => 'Arrived / POD needed',
                 'execution' => 'Delivery execution',
                 'completion' => 'Completion & POD',
                 default => 'Fulfillment strategy',
@@ -10802,9 +10842,11 @@ class GeotabController extends Controller
     private function workflowPhaseSlug(int $phaseNumber, string $fallback): string
     {
         return match (true) {
-            $phaseNumber <= 6 => 'sales',
-            $phaseNumber <= 9 => 'logistics',
-            $phaseNumber <= 11 => 'execution',
+            $phaseNumber <= 2 => 'request',
+            $phaseNumber <= 6 => 'assignment',
+            $phaseNumber <= 9 => 'ready',
+            $phaseNumber === 10 => 'transit',
+            $phaseNumber === 11 => 'arrived',
             $phaseNumber >= 12 => 'completion',
             default => $fallback,
         };
@@ -10813,27 +10855,31 @@ class GeotabController extends Controller
     private function workflowGroupForPhase(int $phaseNumber): string
     {
         return match (true) {
+            $phaseNumber <= 2 => 'Pending Details',
             $phaseNumber <= 6 => 'Pending Assignment',
             $phaseNumber <= 9 => 'Ready to Dispatch',
-            $phaseNumber <= 11 => 'In Transit',
-            default => 'Completed',
+            $phaseNumber === 10 => 'In Transit',
+            $phaseNumber === 11 => 'Arrived / POD Needed',
+            default => 'Completed / POD Review Handoff',
         };
     }
 
     private function workflowPhaseMilestone(int $phaseNumber): string
     {
         return match (true) {
-            $phaseNumber <= 6 => 'Order details and quotation are being confirmed.',
-            $phaseNumber <= 9 => 'Delivery resources and receiving schedule are being arranged.',
-            $phaseNumber === 10 => 'Delivery is ready to leave the warehouse.',
-            $phaseNumber === 11 => 'Driver is arriving at the client location.',
-            default => 'Delivery is complete.',
+            $phaseNumber <= 2 => 'Complete the delivery trip details.',
+            $phaseNumber <= 6 => 'Assign vehicle, driver, and dispatch notification.',
+            $phaseNumber <= 9 => 'Start dispatch when driver and vehicle are ready.',
+            $phaseNumber === 10 => 'Mark arrived when the vehicle reaches the destination.',
+            $phaseNumber === 11 => 'Waiting for POD/admin review before completion.',
+            default => 'Accounting reviews billing after POD verification.',
         };
     }
 
     private function clientWorkflowStatus(int $phaseNumber): string
     {
         return match (true) {
+            $phaseNumber <= 2 => 'Your delivery request is being prepared',
             $phaseNumber <= 6 => 'Your order is being prepared',
             $phaseNumber <= 9 => 'Your delivery is being arranged',
             $phaseNumber === 10 => 'Your delivery is on its way',
@@ -10845,6 +10891,7 @@ class GeotabController extends Controller
     private function clientWorkflowMilestone(int $phaseNumber): string
     {
         return match (true) {
+            $phaseNumber <= 2 => 'Next: Pioneer confirms the delivery details.',
             $phaseNumber <= 6 => 'Next: Pioneer confirms items, quotation, and order details.',
             $phaseNumber <= 9 => 'Next: Pioneer assigns the vehicle, driver, and delivery schedule.',
             $phaseNumber === 10 => 'Next: Track the truck as it travels to your location.',
