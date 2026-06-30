@@ -167,6 +167,134 @@ class GoogleMapsEnrichmentService
     }
 
     /**
+     * @param  array<string, mixed>  $coordinate
+     * @return array<string, mixed>|null
+     */
+    public function currentWeather(array $coordinate): ?array
+    {
+        $point = $this->validPoint($coordinate);
+        if ($point === null || ! $this->isConfigured()) {
+            return null;
+        }
+
+        $cacheKey = 'google_weather_current_v1_'.md5(json_encode($this->roundedPoint($point, 3)));
+
+        return Cache::remember($cacheKey, now()->addMinutes(20), function () use ($point): ?array {
+            try {
+                $response = $this->httpClient()
+                    ->get('https://weather.googleapis.com/v1/currentConditions:lookup', [
+                        'location.latitude' => $point['latitude'],
+                        'location.longitude' => $point['longitude'],
+                        'unitsSystem' => 'METRIC',
+                        'languageCode' => 'en',
+                        'key' => $this->serverKey(),
+                    ]);
+
+                if (! $response->successful()) {
+                    throw new \RuntimeException('Weather API returned HTTP '.$response->status().'.');
+                }
+
+                $payload = $response->json();
+                $temperature = data_get($payload, 'temperature.degrees');
+                $feelsLike = data_get($payload, 'feelsLikeTemperature.degrees');
+                $humidity = data_get($payload, 'relativeHumidity');
+                $condition = trim((string) data_get($payload, 'weatherCondition.description.text', ''));
+
+                if (! is_numeric($temperature) && ! is_numeric($humidity) && $condition === '') {
+                    return null;
+                }
+
+                return [
+                    'temperatureC' => is_numeric($temperature) ? round((float) $temperature, 1) : null,
+                    'feelsLikeC' => is_numeric($feelsLike) ? round((float) $feelsLike, 1) : null,
+                    'relativeHumidity' => is_numeric($humidity) ? round((float) $humidity, 1) : null,
+                    'condition' => $condition !== '' ? $condition : null,
+                    'isDaytime' => data_get($payload, 'isDaytime'),
+                    'uvIndex' => data_get($payload, 'uvIndex'),
+                    'precipitationProbability' => data_get($payload, 'precipitation.probability.percent'),
+                    'source' => 'google_weather_current_conditions',
+                    'updatedAt' => (string) (data_get($payload, 'currentTime') ?: now()->toIso8601String()),
+                ];
+            } catch (\Throwable $e) {
+                $this->logFailure('weather.current_conditions', $e);
+
+                return null;
+            }
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $origin
+     * @param  array<string, mixed>  $destination
+     * @return array<string, mixed>|null
+     */
+    public function trafficAwareRoute(string $cacheScope, array $origin, array $destination): ?array
+    {
+        $originPoint = $this->validPoint($origin);
+        $destinationPoint = $this->validPoint($destination);
+        if ($originPoint === null || $destinationPoint === null || ! $this->isConfigured()) {
+            return null;
+        }
+
+        $cacheKey = 'google_routes_traffic_v1_'.md5($cacheScope.'|'.json_encode([
+            'origin' => $this->roundedPoint($originPoint, 3),
+            'destination' => $this->roundedPoint($destinationPoint, 3),
+        ]));
+
+        return Cache::remember($cacheKey, now()->addMinutes(3), function () use ($originPoint, $destinationPoint): ?array {
+            try {
+                $response = $this->httpClient()
+                    ->withHeaders([
+                        'X-Goog-Api-Key' => $this->serverKey(),
+                        'X-Goog-FieldMask' => 'routes.duration,routes.staticDuration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals',
+                    ])
+                    ->post('https://routes.googleapis.com/directions/v2:computeRoutes', [
+                        'origin' => $this->routesWaypoint($originPoint),
+                        'destination' => $this->routesWaypoint($destinationPoint),
+                        'travelMode' => 'DRIVE',
+                        'routingPreference' => 'TRAFFIC_AWARE_OPTIMAL',
+                        'computeAlternativeRoutes' => false,
+                        'polylineQuality' => 'OVERVIEW',
+                        'polylineEncoding' => 'ENCODED_POLYLINE',
+                    ]);
+
+                if (! $response->successful()) {
+                    throw new \RuntimeException('Routes traffic API returned HTTP '.$response->status().'.');
+                }
+
+                $route = data_get($response->json(), 'routes.0');
+                if (! is_array($route)) {
+                    return null;
+                }
+
+                $durationSeconds = $this->googleDurationSeconds(data_get($route, 'duration'));
+                $staticDurationSeconds = $this->googleDurationSeconds(data_get($route, 'staticDuration'));
+                $delaySeconds = ($durationSeconds !== null && $staticDurationSeconds !== null)
+                    ? max(0, $durationSeconds - $staticDurationSeconds)
+                    : null;
+
+                return [
+                    'durationSeconds' => $durationSeconds,
+                    'staticDurationSeconds' => $staticDurationSeconds,
+                    'delaySeconds' => $delaySeconds,
+                    'eta' => $durationSeconds !== null ? now()->addSeconds($durationSeconds)->toIso8601String() : null,
+                    'distanceMeters' => data_get($route, 'distanceMeters'),
+                    'encodedPolyline' => data_get($route, 'polyline.encodedPolyline'),
+                    'speedReadingIntervals' => data_get($route, 'travelAdvisory.speedReadingIntervals', []),
+                    'severity' => $this->trafficSeverity($durationSeconds, $staticDurationSeconds, $delaySeconds),
+                    'source' => 'google_routes_traffic_aware',
+                    'updatedAt' => now()->toIso8601String(),
+                    'cachedForSeconds' => 180,
+                ];
+            } catch (\Throwable $e) {
+                $this->logFailure('routes.traffic_aware', $e);
+
+                return null;
+            }
+        });
+    }
+
+    /**
      * @param  array<string, mixed>  $depot
      * @param  array<int, array<string, mixed>>  $stops
      * @return array<string, mixed>
@@ -410,9 +538,11 @@ class GoogleMapsEnrichmentService
 
     private function httpClient(): PendingRequest
     {
-        return Http::acceptJson()
+        $request = Http::acceptJson()
             ->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)
             ->timeout(self::READ_TIMEOUT_SECONDS);
+
+        return app()->environment('local') ? $request->withoutVerifying() : $request;
     }
 
     /**
@@ -488,6 +618,40 @@ class GoogleMapsEnrichmentService
             + cos(deg2rad($fromLat)) * cos(deg2rad($toLat)) * sin($lngDelta / 2) ** 2;
 
         return $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
+    }
+
+    private function googleDurationSeconds(mixed $duration): ?int
+    {
+        $raw = trim((string) $duration);
+        if ($raw === '') {
+            return null;
+        }
+
+        if (str_ends_with($raw, 's')) {
+            $raw = substr($raw, 0, -1);
+        }
+
+        return is_numeric($raw) ? max(0, (int) round((float) $raw)) : null;
+    }
+
+    private function trafficSeverity(?int $durationSeconds, ?int $staticDurationSeconds, ?int $delaySeconds): string
+    {
+        if ($durationSeconds === null || $staticDurationSeconds === null || $staticDurationSeconds <= 0 || $delaySeconds === null) {
+            return 'unknown';
+        }
+
+        $ratio = $durationSeconds / $staticDurationSeconds;
+        if ($delaySeconds >= 900 || $ratio >= 1.55) {
+            return 'heavy';
+        }
+        if ($delaySeconds >= 420 || $ratio >= 1.25) {
+            return 'moderate';
+        }
+        if ($delaySeconds >= 120 || $ratio >= 1.1) {
+            return 'light';
+        }
+
+        return 'clear';
     }
 
     /**

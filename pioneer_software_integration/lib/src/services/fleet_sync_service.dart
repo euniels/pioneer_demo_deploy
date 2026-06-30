@@ -95,6 +95,9 @@ Future<void> _warmOperationalCachesSequential({
       () => BackendApiService.getFleetSummaryMaintenance(
         forceRefresh: forceRefresh,
       ),
+      () => BackendApiService.getFleetRoutes(forceRefresh: forceRefresh),
+      () => BackendApiService.getFleetZones(forceRefresh: forceRefresh),
+      () => BackendApiService.getFleetTrips(forceRefresh: forceRefresh),
     ]);
   }
 

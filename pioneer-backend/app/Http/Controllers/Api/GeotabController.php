@@ -2578,7 +2578,17 @@ class GeotabController extends Controller
 
     public function trips(Request $request): JsonResponse
     {
-        return $this->respondData($this->privacyFilteredTripsForRequest($request, $this->snapshot()['trips']));
+        $snapshot = $this->snapshot();
+        $trips = is_array($snapshot['trips'] ?? null) ? $snapshot['trips'] : [];
+
+        if ($trips === []) {
+            $routePlans = $this->geotabRoutesForFleetEndpoint($snapshot, empty($snapshot['routes'] ?? []));
+            if ($routePlans !== []) {
+                $trips = $this->plannedTripsFromRoutes($routePlans, []);
+            }
+        }
+
+        return $this->respondData($this->privacyFilteredTripsForRequest($request, $trips));
     }
 
     public function trip(Request $request, string $tripId): JsonResponse
@@ -2838,19 +2848,16 @@ class GeotabController extends Controller
         ]);
     }
 
-    public function routes(): JsonResponse
+    public function routes(Request $request): JsonResponse
     {
         $localRoutes = $this->localFleetRoutes();
-        $geotabRoutes = array_map(
-            fn (array $route): array => [
-                ...$route,
-                'source' => $route['source'] ?? 'geotab_route_plan',
-                'managedLocally' => false,
-            ],
-            $this->snapshot()['routes'],
+        $snapshot = $this->snapshot();
+        $geotabRoutes = $this->geotabRoutesForFleetEndpoint(
+            $snapshot,
+            $request->boolean('fresh') || empty($snapshot['routes'] ?? []),
         );
 
-        return $this->respondData([...$localRoutes, ...$geotabRoutes]);
+        return $this->respondData($this->mergeFleetRoutes($localRoutes, $geotabRoutes));
     }
 
     public function fleetRoute(string $routeId): JsonResponse
@@ -3044,6 +3051,213 @@ class GeotabController extends Controller
             ->map(fn (FleetRoute $route): array => $this->formatFleetRoute($route))
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     * @return array<int, array<string, mixed>>
+     */
+    private function geotabRoutesForFleetEndpoint(array $snapshot, bool $preferFresh): array
+    {
+        if ($preferFresh) {
+            $fresh = $this->freshGeotabRouteViews();
+            if ($fresh !== []) {
+                return $fresh;
+            }
+        }
+
+        return array_values(array_map(
+            fn (array $route): array => $this->normalizeImportedFleetRoute($route),
+            array_filter(
+                (array) ($snapshot['routes'] ?? []),
+                fn (mixed $route): bool => is_array($route)
+                    && ($route['managedLocally'] ?? false) !== true
+                    && ($route['source'] ?? null) !== 'pioneer_route',
+            ),
+        ));
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function freshGeotabRouteViews(): array
+    {
+        if (! $this->geotab->isConfigured()) {
+            return [];
+        }
+
+        $zones = $this->safeGet(fn () => $this->geotab->getZones(now(), 500), ['stage' => 'fleet_routes_fresh_zones']);
+        $routes = $this->safeGet(fn () => $this->geotab->getRoutes(null, null, 500), ['stage' => 'fleet_routes_fresh_routes']);
+        $routePlanItems = $this->safeGet(fn () => $this->geotab->getRoutePlanItems(null, null, 1000), ['stage' => 'fleet_routes_fresh_plan_items']);
+
+        $zoneIndex = [];
+        foreach ($zones as $zone) {
+            if (! is_array($zone)) {
+                continue;
+            }
+            $zoneId = $this->idFromValue($zone);
+            if ($zoneId !== '') {
+                $zoneIndex[$zoneId] = $zone;
+            }
+        }
+
+        $routePlanItemsByRoute = $this->routePlanItemsByRoute($routePlanItems);
+        $views = [];
+        foreach ($routes as $route) {
+            if (! is_array($route)) {
+                continue;
+            }
+            $routeId = $this->idFromValue($route);
+            $view = $this->formatRoute($route, $zoneIndex, $routePlanItemsByRoute[$routeId] ?? []);
+            if ($view !== null) {
+                $views[] = $this->normalizeImportedFleetRoute($view);
+            }
+        }
+
+        if ($views !== []) {
+            $this->feedHarvester->persistRouteStops($views);
+        }
+
+        return $views;
+    }
+
+    /**
+     * @param  array<string, mixed>  $route
+     * @return array<string, mixed>
+     */
+    private function normalizeImportedFleetRoute(array $route): array
+    {
+        $routeId = trim((string) ($route['geotabRouteId'] ?? $route['routeId'] ?? $route['id'] ?? ''));
+        $name = $this->sanitizeText($route['name'] ?? $route['routeName'] ?? '', 'Unnamed Route');
+        $stops = array_values(array_filter(
+            array_map(fn (mixed $stop): ?array => is_array($stop) ? $this->normalizeImportedFleetRouteStop($stop) : null, (array) ($route['stops'] ?? $route['routedPlaces'] ?? [])),
+        ));
+        $plannedPath = (array) ($route['plannedPath'] ?? []);
+        if ($plannedPath === [] && $stops !== []) {
+            $plannedPath = array_values(array_filter(array_map(
+                fn (array $stop): ?array => isset($stop['latitude'], $stop['longitude'])
+                    ? ['latitude' => $stop['latitude'], 'longitude' => $stop['longitude']]
+                    : null,
+                $stops,
+            )));
+        }
+
+        return [
+            ...$route,
+            'id' => $route['id'] ?? ($routeId !== '' ? 'geotab-route-'.$routeId : 'geotab-route-'.sha1($name.json_encode($plannedPath))),
+            'routeId' => $routeId,
+            'geotabRouteId' => $routeId,
+            'name' => $name,
+            'routeName' => $name,
+            'assignedVehicle' => $this->sanitizeText($route['assignedVehicle'] ?? $route['assignedAsset'] ?? '', 'Unassigned'),
+            'assignedVehiclePlate' => $route['assignedVehiclePlate'] ?? $route['assignedAsset'] ?? null,
+            'assignedVehicleGeotabId' => $route['assignedVehicleGeotabId'] ?? $route['deviceId'] ?? null,
+            'deviceId' => $route['deviceId'] ?? $route['assignedVehicleGeotabId'] ?? null,
+            'status' => $route['status'] ?? 'active',
+            'syncStatus' => 'synced',
+            'syncLabel' => 'GeoTab: Up to date',
+            'hasLocalGeotabChanges' => false,
+            'canPushToGeotab' => false,
+            'stopCount' => count($stops),
+            'stops' => $stops,
+            'routedPlaces' => $stops,
+            'plannedPath' => $plannedPath,
+            'routeAvailable' => count($plannedPath) >= 2 || count($stops) >= 2,
+            'managedLocally' => false,
+            'source' => $route['source'] ?? 'geotab_route_plan',
+            'isRoutePlan' => true,
+            'inUseByActiveTrip' => false,
+            'readOnlyReason' => 'Imported from GeoTab. Edit it in MyGeotab or create a managed PioneerPath route.',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $stop
+     * @return array<string, mixed>
+     */
+    private function normalizeImportedFleetRouteStop(array $stop): array
+    {
+        $center = $this->coordinateParts($stop['center'] ?? null);
+        $latitude = $stop['latitude'] ?? $center['latitude'] ?? null;
+        $longitude = $stop['longitude'] ?? $center['longitude'] ?? null;
+
+        return [
+            ...$stop,
+            'id' => (string) ($stop['id'] ?? $stop['zoneId'] ?? sha1(json_encode($stop))),
+            'sequence' => (int) ($stop['sequence'] ?? 0),
+            'name' => $this->sanitizeText($stop['name'] ?? '', 'Unknown Zone'),
+            'zoneId' => $stop['zoneId'] ?? null,
+            'latitude' => is_numeric($latitude) ? (float) $latitude : null,
+            'longitude' => is_numeric($longitude) ? (float) $longitude : null,
+            'estimatedStopDurationMinutes' => $stop['estimatedStopDurationMinutes'] ?? null,
+            'center' => $center,
+            'points' => is_array($stop['points'] ?? null) ? array_values($stop['points']) : [],
+        ];
+    }
+
+    /**
+     * Prefer locally managed route rows over their imported GeoTab equivalent.
+     *
+     * @param  array<int, array<string, mixed>>  $localRoutes
+     * @param  array<int, array<string, mixed>>  $geotabRoutes
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergeFleetRoutes(array $localRoutes, array $geotabRoutes): array
+    {
+        $merged = [];
+        $seen = [];
+
+        foreach ([...$localRoutes, ...$geotabRoutes] as $route) {
+            if (! is_array($route)) {
+                continue;
+            }
+
+            $keys = $this->fleetRouteMergeKeys($route);
+            $alreadyListed = false;
+            foreach ($keys as $key) {
+                if (isset($seen[$key])) {
+                    $alreadyListed = true;
+                    break;
+                }
+            }
+            if ($alreadyListed) {
+                continue;
+            }
+
+            $merged[] = $route;
+            foreach ($keys as $key) {
+                $seen[$key] = true;
+            }
+        }
+
+        return $merged;
+    }
+
+    /**
+     * @param  array<string, mixed>  $route
+     * @return array<int, string>
+     */
+    private function fleetRouteMergeKeys(array $route): array
+    {
+        $keys = [];
+        $geotabId = trim((string) ($route['geotabRouteId'] ?? $route['routeId'] ?? ''));
+        if ($geotabId !== '' && ! str_starts_with($geotabId, 'local-route-')) {
+            $keys[] = 'geotab:'.$geotabId;
+        }
+
+        $name = mb_strtolower(trim((string) ($route['name'] ?? $route['routeName'] ?? '')));
+        $stops = $route['stops'] ?? $route['routedPlaces'] ?? [];
+        if ($name !== '' && is_array($stops) && $stops !== []) {
+            $stopKey = implode(';', array_map(
+                fn (mixed $stop): string => is_array($stop)
+                    ? trim((string) ($stop['zoneId'] ?? '')).':'.round((float) ($stop['latitude'] ?? data_get($stop, 'center.latitude', 0)), 5).','.round((float) ($stop['longitude'] ?? data_get($stop, 'center.longitude', 0)), 5)
+                    : '',
+                $stops,
+            ));
+            $keys[] = 'shape:'.sha1($name.'|'.$stopKey);
+        }
+
+        return $keys;
     }
 
     private function formatFleetRoute(FleetRoute $route, bool $includeDeleted = false): array
@@ -3538,6 +3752,99 @@ class GeotabController extends Controller
     }
 
     /**
+     * @param  array<string, mixed>  $snapshot
+     * @return array<int, array<string, mixed>>
+     */
+    private function geotabZonesForFleetEndpoint(array $snapshot, bool $preferFresh): array
+    {
+        if ($preferFresh) {
+            $fresh = $this->freshGeotabZoneViews();
+            if ($fresh !== []) {
+                return $fresh;
+            }
+        }
+
+        $snapshotZones = array_filter(
+            (array) ($snapshot['zones'] ?? []),
+            fn (mixed $zone): bool => is_array($zone)
+                && ($zone['managedLocally'] ?? false) !== true
+                && ($zone['source'] ?? null) !== 'pioneer_zone',
+        );
+
+        return array_values(array_map(
+            fn (array $zone): array => $this->normalizeImportedFleetZone($zone),
+            $snapshotZones,
+        ));
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function freshGeotabZoneViews(): array
+    {
+        if (! $this->geotab->isConfigured()) {
+            return [];
+        }
+
+        $zones = $this->safeGet(fn () => $this->geotab->getZones(now(), 1000), ['stage' => 'fleet_zones_fresh']);
+
+        return array_values(array_filter(array_map(
+            fn (mixed $zone): ?array => is_array($zone)
+                ? $this->normalizeImportedFleetZone($this->formatZone($zone))
+                : null,
+            $zones,
+        )));
+    }
+
+    /**
+     * @param  array<string, mixed>  $zone
+     * @return array<string, mixed>
+     */
+    private function normalizeImportedFleetZone(array $zone): array
+    {
+        $points = $this->normalizedZonePoints(
+            is_array($zone['boundaryPoints'] ?? null)
+                ? $zone['boundaryPoints']
+                : (is_array($zone['points'] ?? null) ? $zone['points'] : []),
+        );
+        $center = $this->zoneCenterFromPoints(
+            $points,
+            $zone['centerLatitude'] ?? data_get($zone, 'center.latitude'),
+            $zone['centerLongitude'] ?? data_get($zone, 'center.longitude'),
+        );
+        $geotabId = trim((string) ($zone['geotabZoneId'] ?? $zone['zoneId'] ?? $zone['id'] ?? ''));
+        $type = $this->readableZoneType($zone['zoneType'] ?? $zone['type'] ?? null);
+
+        return [
+            ...$zone,
+            'id' => $zone['id'] ?? ($geotabId !== '' ? 'geotab-zone-'.$geotabId : 'geotab-zone-'.sha1(($zone['name'] ?? '').json_encode($points))),
+            'zoneId' => $geotabId,
+            'geotabZoneId' => $geotabId,
+            'name' => $this->sanitizeText($zone['name'] ?? '', 'Unnamed Zone'),
+            'comment' => $this->sanitizeText($zone['comment'] ?? $zone['notes'] ?? '', ''),
+            'type' => $type,
+            'zoneType' => $type,
+            'clientId' => $zone['clientId'] ?? null,
+            'clientName' => $zone['clientName'] ?? null,
+            'clientAssociation' => $zone['clientAssociation'] ?? $zone['clientName'] ?? null,
+            'notes' => $zone['notes'] ?? $zone['comment'] ?? null,
+            'center' => $center,
+            'centerLatitude' => $center['latitude'],
+            'centerLongitude' => $center['longitude'],
+            'points' => $points,
+            'boundaryPoints' => $points,
+            'displayed' => $zone['displayed'] ?? true,
+            'status' => $zone['status'] ?? 'active',
+            'syncStatus' => 'synced',
+            'syncLabel' => 'GeoTab: Up to date',
+            'hasLocalGeotabChanges' => false,
+            'canPushToGeotab' => false,
+            'managedLocally' => false,
+            'source' => $zone['source'] ?? 'geotab_zone',
+        ];
+    }
+
+    /**
      * Prefer locally managed zone rows over their imported GeoTab equivalent.
      * Local rows retain edit/sync state and must not be displayed twice.
      *
@@ -3883,25 +4190,13 @@ class GeotabController extends Controller
         ]);
     }
 
-    public function zones(): JsonResponse
+    public function zones(Request $request): JsonResponse
     {
         $localZones = $this->localFleetZones();
-        $snapshotZones = array_filter(
-            $this->snapshot()['zones'],
-            fn (array $zone): bool => ($zone['managedLocally'] ?? false) !== true
-                && ($zone['source'] ?? null) !== 'pioneer_zone',
-        );
-        $geotabZones = array_map(
-            fn (array $zone): array => [
-                ...$zone,
-                'source' => $zone['source'] ?? 'geotab_zone',
-                'managedLocally' => false,
-                'syncStatus' => 'synced',
-                'syncLabel' => 'GeoTab: Up to date',
-                'type' => $this->readableZoneType($zone['type'] ?? $zone['zoneType'] ?? null),
-                'zoneType' => $this->readableZoneType($zone['zoneType'] ?? $zone['type'] ?? null),
-            ],
-            $snapshotZones,
+        $snapshot = $this->snapshot();
+        $geotabZones = $this->geotabZonesForFleetEndpoint(
+            $snapshot,
+            $request->boolean('fresh') || empty($snapshot['zones'] ?? []),
         );
 
         return $this->respondData($this->mergeFleetZones($localZones, $geotabZones));
@@ -5658,6 +5953,7 @@ class GeotabController extends Controller
         $vehicles = array_values(array_map(function (array $vehicle) use ($zones): array {
             $latitude = (float) ($vehicle['latitude'] ?? 0);
             $longitude = (float) ($vehicle['longitude'] ?? 0);
+            $coordinate = ['latitude' => $latitude, 'longitude' => $longitude];
             $currentZone = ($latitude !== 0.0 || $longitude !== 0.0)
                 ? $this->zoneNameForCoordinate($latitude, $longitude, $zones)
                 : ($vehicle['currentZone'] ?? null);
@@ -5669,11 +5965,21 @@ class GeotabController extends Controller
             $sourceAgeMs = is_numeric($sourceAgeMs) && $sourceAgeMs >= 0
                 ? (int) round((float) $sourceAgeMs)
                 : null;
-            $syncState = $sourceAgeMs !== null && $sourceAgeMs > 20000
+            $syncState = $sourceAgeMs !== null && $sourceAgeMs > 300000
                 ? 'stale'
                 : (($vehicle['syncState'] ?? 'live'));
             $ignitionOn = (($vehicle['ignitionOn'] ?? false) === true) || $isDriving;
             $motionState = $this->liveVehicleMotionState($syncState, $isDriving, $ignitionOn, $reportedSpeed);
+            $routeStops = is_array($vehicle['routeStops'] ?? null) ? $vehicle['routeStops'] : [];
+            $navigationTarget = $this->liveNavigationTarget($vehicle, $currentZone);
+            $weather = $this->googleMaps->currentWeather($coordinate);
+            $traffic = $navigationTarget !== null
+                ? $this->googleMaps->trafficAwareRoute(
+                    (string) ($vehicle['geotabId'] ?? $vehicle['plate'] ?? 'vehicle'),
+                    $coordinate,
+                    $navigationTarget['coordinate'],
+                )
+                : null;
 
             return [
                 'geotabId' => $vehicle['geotabId'] ?? '',
@@ -5720,9 +6026,34 @@ class GeotabController extends Controller
                 'currentZone' => $currentZone,
                 'destinationZone' => $destinationZone,
                 'arrivalState' => $this->arrivalState($isDriving, $currentZone, $destinationZone),
-                'currentLocationLabel' => $currentZone ?? ($vehicle['currentLocationLabel'] ?? null),
+                'currentLocationLabel' => $vehicle['currentLocationLabel'] ?? $currentZone,
                 'routeName' => $vehicle['routeName'] ?? $vehicle['assignedRoute'] ?? null,
-                'routeStops' => $vehicle['routeStops'] ?? [],
+                'routeStops' => $routeStops,
+                'navigationTarget' => $navigationTarget,
+                'weather' => $weather,
+                'environment' => [
+                    'weather' => $weather,
+                    'temperatureC' => $weather['temperatureC'] ?? data_get($vehicle, 'diagnostics.outsideTemperature.value'),
+                    'relativeHumidity' => $weather['relativeHumidity'] ?? data_get($vehicle, 'diagnostics.relativeHumidity.value'),
+                    'source' => $weather['source'] ?? data_get($vehicle, 'diagnostics.outsideTemperature.source', 'vehicle_diagnostics'),
+                ],
+                'traffic' => $traffic !== null ? [
+                    ...$traffic,
+                    'targetName' => $navigationTarget['name'] ?? null,
+                    'targetSequence' => $navigationTarget['sequence'] ?? null,
+                    'distanceKm' => isset($traffic['distanceMeters']) && is_numeric($traffic['distanceMeters'])
+                        ? round(((float) $traffic['distanceMeters']) / 1000, 1)
+                        : null,
+                    'delayMinutes' => isset($traffic['delaySeconds']) && is_numeric($traffic['delaySeconds'])
+                        ? (int) ceil(((float) $traffic['delaySeconds']) / 60)
+                        : null,
+                ] : null,
+                'trafficAwareness' => [
+                    'configured' => $this->googleMaps->isConfigured(),
+                    'available' => $traffic !== null,
+                    'severity' => $traffic['severity'] ?? 'unknown',
+                    'source' => $traffic['source'] ?? 'unavailable',
+                ],
                 'healthStatus' => $vehicle['healthStatus'] ?? 'healthy',
                 'healthScore' => $vehicle['healthScore'] ?? null,
                 'healthAlerts' => $vehicle['healthAlerts'] ?? [],
@@ -5746,16 +6077,42 @@ class GeotabController extends Controller
         ];
     }
 
-    private function liveVehicleMotionState(string $syncState, bool $isDriving, bool $ignitionOn, float $speedKph): array
+    private function liveNavigationTarget(array $vehicle, ?string $currentZone): ?array
     {
-        $normalizedSyncState = strtolower(trim($syncState));
-        if (in_array($normalizedSyncState, ['offline_cached', 'stale'], true)) {
-            return [
-                'state' => $normalizedSyncState === 'offline_cached' ? 'offline' : 'stale',
-                'label' => $normalizedSyncState === 'offline_cached' ? 'Offline cached' : 'Stale data',
-            ];
+        $routeStops = is_array($vehicle['routeStops'] ?? null) ? $vehicle['routeStops'] : [];
+        if ($routeStops === []) {
+            return null;
         }
 
+        $fallback = null;
+        foreach ($routeStops as $index => $stop) {
+            if (! is_array($stop)) {
+                continue;
+            }
+
+            $coordinate = $this->coordinateParts(data_get($stop, 'center', $stop));
+            if ($coordinate === null) {
+                continue;
+            }
+
+            $name = $this->sanitizeText(data_get($stop, 'name', data_get($stop, 'zoneName', 'Route stop')), 'Route stop');
+            $target = [
+                'name' => $name,
+                'sequence' => (int) data_get($stop, 'sequence', $index + 1),
+                'coordinate' => $coordinate,
+            ];
+            $fallback = $target;
+
+            if ($currentZone === null || trim($currentZone) === '' || strcasecmp($name, $currentZone) !== 0) {
+                return $target;
+            }
+        }
+
+        return $fallback;
+    }
+
+    private function liveVehicleMotionState(string $syncState, bool $isDriving, bool $ignitionOn, float $speedKph): array
+    {
         if ($isDriving || $speedKph > 1.0) {
             return [
                 'state' => 'moving',
@@ -5767,6 +6124,14 @@ class GeotabController extends Controller
             return [
                 'state' => 'idle',
                 'label' => 'Idle - ignition on',
+            ];
+        }
+
+        $normalizedSyncState = strtolower(trim($syncState));
+        if (in_array($normalizedSyncState, ['offline_cached', 'stale'], true)) {
+            return [
+                'state' => $normalizedSyncState === 'offline_cached' ? 'offline' : 'stale',
+                'label' => $normalizedSyncState === 'offline_cached' ? 'Offline cached' : 'Stale data',
             ];
         }
 
@@ -8431,15 +8796,29 @@ class GeotabController extends Controller
                 $points[] = $coords;
             }
         }
+        $center = $this->zoneCenterFromPoints($points);
+        $zoneId = $this->idFromValue($zone);
+        $type = $this->zoneTypeLabel($zone);
 
         return [
-            'zoneId' => $this->idFromValue($zone),
+            'id' => $zoneId !== '' ? 'geotab-zone-'.$zoneId : 'geotab-zone-'.sha1((string) data_get($zone, 'name', '').json_encode($points)),
+            'zoneId' => $zoneId,
+            'geotabZoneId' => $zoneId,
             'name' => $this->sanitizeText(data_get($zone, 'name', ''), 'Unnamed Zone'),
             'comment' => $this->sanitizeText(data_get($zone, 'comment', ''), ''),
-            'type' => $this->zoneTypeLabel($zone),
-            'zoneType' => $this->zoneTypeLabel($zone),
+            'type' => $type,
+            'zoneType' => $type,
             'displayed' => data_get($zone, 'displayed') !== false,
+            'center' => $center,
+            'centerLatitude' => $center['latitude'],
+            'centerLongitude' => $center['longitude'],
             'points' => $points,
+            'boundaryPoints' => $points,
+            'status' => 'active',
+            'syncStatus' => 'synced',
+            'syncLabel' => 'GeoTab: Up to date',
+            'managedLocally' => false,
+            'source' => 'geotab_zone',
         ];
     }
 
@@ -8487,22 +8866,40 @@ class GeotabController extends Controller
         $stops = $this->uniqueRouteStops($stops);
         usort($stops, fn (array $a, array $b): int => ((int) ($a['sequence'] ?? 0)) <=> ((int) ($b['sequence'] ?? 0)));
         $plannedPath = $this->plannedPathFromStops($stops);
+        $name = $this->sanitizeText(data_get($route, 'name', ''), 'Unnamed Route');
+        $deviceId = $this->idFromValue(data_get($route, 'device'));
+        $assignedAsset = $this->sanitizeText(
+            data_get($route, 'device.name', data_get($route, 'device.licensePlate', '')),
+            '',
+        );
 
         return [
+            'id' => 'geotab-route-'.$routeId,
             'routeId' => $routeId,
-            'name' => $this->sanitizeText(data_get($route, 'name', ''), 'Unnamed Route'),
-            'deviceId' => $this->idFromValue(data_get($route, 'device')),
-            'assignedAsset' => $this->sanitizeText(
-                data_get($route, 'device.name', data_get($route, 'device.licensePlate', '')),
-                '',
-            ),
+            'geotabRouteId' => $routeId,
+            'name' => $name,
+            'routeName' => $name,
+            'deviceId' => $deviceId,
+            'assignedVehicleGeotabId' => $deviceId,
+            'assignedAsset' => $assignedAsset,
+            'assignedVehicle' => $assignedAsset !== '' ? $assignedAsset : 'Unassigned',
+            'assignedVehiclePlate' => $assignedAsset !== '' ? $assignedAsset : null,
             'routeType' => $this->stringValue(data_get($route, 'routeType')),
             'startTime' => data_get($route, 'startTime'),
             'endTime' => data_get($route, 'endTime'),
+            'status' => 'active',
+            'syncStatus' => 'synced',
+            'syncLabel' => 'GeoTab: Up to date',
+            'hasLocalGeotabChanges' => false,
+            'canPushToGeotab' => false,
             'stopCount' => count($stops),
             'plannedPath' => $plannedPath,
             'routeAvailable' => count($plannedPath) >= 2,
             'stops' => $stops,
+            'routedPlaces' => $stops,
+            'managedLocally' => false,
+            'source' => 'geotab_route_plan',
+            'isRoutePlan' => true,
         ];
     }
 
@@ -8535,17 +8932,21 @@ class GeotabController extends Controller
             return null;
         }
 
+        $center = $this->zoneCenter($zone);
+
         return [
             'sequence' => (int) data_get($planItem, 'sequence', 0),
             'zoneId' => $zoneId,
             'name' => $zone !== null
                 ? $this->sanitizeText(data_get($zone, 'name', ''), 'Unknown Zone')
                 : 'Unknown Zone',
+            'latitude' => $center['latitude'] ?? null,
+            'longitude' => $center['longitude'] ?? null,
             'eta' => data_get($planItem, 'dateTime'),
             'expectedDistanceToArrival' => data_get($planItem, 'expectedDistanceToArrival'),
             'expectedStopDurationMinutes' => $this->geotabDurationToMinutes(data_get($planItem, 'expectedStopDuration')),
             'passCount' => (int) data_get($planItem, 'passCount', 0),
-            'center' => $this->zoneCenter($zone),
+            'center' => $center,
             'points' => $zone !== null
                 ? array_values(array_filter(array_map(
                     fn (mixed $point): ?array => $this->coordinateParts($point),

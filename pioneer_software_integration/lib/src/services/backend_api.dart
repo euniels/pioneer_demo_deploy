@@ -15,7 +15,8 @@ class BackendApiException implements Exception {
   final Duration? retryAfter;
   final String? category;
 
-  const BackendApiException(this.message, {
+  const BackendApiException(
+    this.message, {
     this.statusCode,
     this.retryAfter,
     this.category,
@@ -546,8 +547,8 @@ class BackendApiService {
     bool forceRefresh = false,
   }) async {
     return _getList(
-      '/fleet/routes',
-      cacheTtl: _defaultCacheTtl,
+      forceRefresh ? '/fleet/routes?fresh=1' : '/fleet/routes',
+      cacheTtl: const Duration(seconds: 45),
       forceRefresh: forceRefresh,
     );
   }
@@ -558,10 +559,10 @@ class BackendApiService {
     bool forceRefresh = false,
   }) {
     return _getListPage(
-      '/fleet/routes',
+      forceRefresh ? '/fleet/routes?fresh=1' : '/fleet/routes',
       page: page,
       perPage: perPage,
-      cacheTtl: _defaultCacheTtl,
+      cacheTtl: const Duration(seconds: 45),
       forceRefresh: forceRefresh,
     );
   }
@@ -580,8 +581,8 @@ class BackendApiService {
     bool forceRefresh = false,
   }) async {
     return _getList(
-      '/fleet/zones',
-      cacheTtl: _defaultCacheTtl,
+      forceRefresh ? '/fleet/zones?fresh=1' : '/fleet/zones',
+      cacheTtl: const Duration(seconds: 60),
       forceRefresh: forceRefresh,
     );
   }
@@ -592,10 +593,10 @@ class BackendApiService {
     bool forceRefresh = false,
   }) {
     return _getListPage(
-      '/fleet/zones',
+      forceRefresh ? '/fleet/zones?fresh=1' : '/fleet/zones',
       page: page,
       perPage: perPage,
-      cacheTtl: _defaultCacheTtl,
+      cacheTtl: const Duration(seconds: 60),
       forceRefresh: forceRefresh,
     );
   }
@@ -2746,7 +2747,9 @@ Duration _retryAfterForResponse(http.Response response) {
   try {
     final decoded = jsonDecode(response.body);
     if (decoded is Map) {
-      final bodySeconds = int.tryParse((decoded['retryAfter'] ?? '').toString());
+      final bodySeconds = int.tryParse(
+        (decoded['retryAfter'] ?? '').toString(),
+      );
       if (bodySeconds != null && bodySeconds > 0) {
         return Duration(seconds: bodySeconds.clamp(1, 300));
       }

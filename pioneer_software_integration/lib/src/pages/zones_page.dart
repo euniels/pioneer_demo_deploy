@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
 import '../services/geotab_sync_status_service.dart';
+import '../services/page_cache_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
 import '../widgets/app_state_widgets.dart';
@@ -69,6 +70,9 @@ class ZonesPage extends StatefulWidget {
 }
 
 class _ZonesPageState extends State<ZonesPage> {
+  static const String _zonesCacheKey = 'zones_page:fleet_zones';
+  static const Duration _zonesCacheTtl = Duration(seconds: 60);
+
   List<Map<String, dynamic>> _zones = const [];
   String _searchQuery = '';
   bool _showGridView = true;
@@ -111,9 +115,14 @@ class _ZonesPageState extends State<ZonesPage> {
       _error = null;
     });
     try {
-      final zones = await BackendApiService.getFleetZones(
-        forceRefresh: forceRefresh,
-      );
+      final zones =
+          await PageCacheService.getOrLoad<List<Map<String, dynamic>>>(
+            key: _zonesCacheKey,
+            ttl: _zonesCacheTtl,
+            forceRefresh: forceRefresh,
+            loader: () =>
+                BackendApiService.getFleetZones(forceRefresh: forceRefresh),
+          );
       if (!mounted) return;
       setState(() {
         _zones = zones.where((zone) => zone['status'] != 'deleted').toList();
@@ -708,7 +717,9 @@ class _ZonesPageState extends State<ZonesPage> {
   }
 
   Widget _buildZoneSummaryCards(bool isDark, bool isMobile) {
-    final synced = _zones.where((zone) => zone['syncStatus'] == 'synced').length;
+    final synced = _zones
+        .where((zone) => zone['syncStatus'] == 'synced')
+        .length;
     final pending = _zones
         .where((zone) => zone['syncStatus'] == 'pending_approval')
         .length;
@@ -1143,7 +1154,9 @@ class _ZoneCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: accent.withValues(alpha: isDark ? 0.34 : 0.22)),
+        border: Border.all(
+          color: accent.withValues(alpha: isDark ? 0.34 : 0.22),
+        ),
         boxShadow: [
           BoxShadow(
             color: accent.withValues(alpha: isDark ? 0.12 : 0.07),
@@ -1373,7 +1386,6 @@ class _ZoneActionButton extends StatelessWidget {
   }
 }
 
-
 class _ZoneEditorDialog extends StatefulWidget {
   const _ZoneEditorDialog({this.zone});
 
@@ -1440,9 +1452,7 @@ class _ZoneEditorDialogState extends State<_ZoneEditorDialog> {
                   gradient: LinearGradient(
                     colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
                   ),
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(20),
-                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                 ),
                 child: Row(
                   children: [
@@ -1476,163 +1486,174 @@ class _ZoneEditorDialogState extends State<_ZoneEditorDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _name,
-                        validator: (value) =>
-                            value == null || value.trim().isEmpty
-                            ? 'Zone name required'
-                            : null,
-                        decoration: const InputDecoration(
-                          labelText: 'Zone name',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _zoneType,
-                        hint: const Text('Select...'),
-                        decoration: const InputDecoration(
-                          labelText: 'Zone type',
-                        ),
-                        items: _zoneTypeOptions
-                            .map(
-                              (type) => DropdownMenuItem(
-                                value: type,
-                                child: Text(type),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) =>
-                            setState(() => _zoneType = value ?? 'Custom Zone'),
-                        validator: (value) => FormValidation.requiredSelection(
-                          'zone type',
-                          value,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _clientName,
-                  decoration: const InputDecoration(
-                    labelText: 'Client association',
-                    hintText: 'Optional client name',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _notes,
-                  minLines: 2,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes',
-                    hintText: 'Optional operating notes for this geofence',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: PioneerGoogleMap(
-                      initialCenter: _points.isNotEmpty
-                          ? _points.first
-                          : const gmaps.LatLng(14.2788, 121.1248),
-                      initialZoom: 14,
-                      onTap: (point) => setState(() {
-                        if (_polygonClosed) {
-                          return;
-                        }
-                        if (_points.isNotEmpty &&
-                            _distanceMeters(_points.first, point) < 18 &&
-                            _points.length >= 3) {
-                          _polygonClosed = true;
-                          return;
-                        }
-                        _points.add(point);
-                      }),
-                      markers: _points.asMap().entries.map((entry) {
-                        return gmaps.Marker(
-                          markerId: gmaps.MarkerId('zone-point-${entry.key}'),
-                          position: entry.value,
-                          infoWindow: gmaps.InfoWindow(
-                            title: 'Point ${entry.key + 1}',
-                          ),
-                        );
-                      }).toSet(),
-                      polygons: _points.length >= 3
-                          ? {
-                              gmaps.Polygon(
-                                polygonId: const gmaps.PolygonId('draft-zone'),
-                                points: _points,
-                                fillColor: AppTheme.primaryBlue.withValues(
-                                  alpha: 0.16,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: _name,
+                                validator: (value) =>
+                                    value == null || value.trim().isEmpty
+                                    ? 'Zone name required'
+                                    : null,
+                                decoration: const InputDecoration(
+                                  labelText: 'Zone name',
                                 ),
-                                strokeColor: AppTheme.primaryBlue,
-                                strokeWidth: 3,
                               ),
-                            }
-                          : const <gmaps.Polygon>{},
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _points.length < 3
-                            ? 'Tap the map to add at least 3 polygon points.'
-                            : _polygonClosed
-                            ? '${_points.length} polygon points closed. Center will be computed automatically.'
-                            : '${_points.length} points added. Tap the first point again or press Done to close.',
-                        style: AppTheme.getSubtitleStyle(context),
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: _points.length < 3
-                          ? null
-                          : () => setState(() => _polygonClosed = true),
-                      icon: const Icon(Icons.check_circle_outline_rounded),
-                      label: const Text('Done'),
-                    ),
-                    TextButton.icon(
-                      onPressed: _points.isEmpty
-                          ? null
-                          : () => setState(() {
-                              _polygonClosed = false;
-                              _points.removeLast();
-                            }),
-                      icon: const Icon(Icons.undo_rounded),
-                      label: const Text('Undo point'),
-                    ),
-                    TextButton.icon(
-                      onPressed: _points.isEmpty
-                          ? null
-                          : () => setState(() {
-                              _polygonClosed = false;
-                              _points.clear();
-                            }),
-                      icon: const Icon(Icons.clear_rounded),
-                      label: const Text('Clear'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: _saving ? null : _save,
-                      icon: _saving
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.save_rounded),
-                      label: const Text('Save'),
-                    ),
-                  ],
-                ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _zoneType,
+                                hint: const Text('Select...'),
+                                decoration: const InputDecoration(
+                                  labelText: 'Zone type',
+                                ),
+                                items: _zoneTypeOptions
+                                    .map(
+                                      (type) => DropdownMenuItem(
+                                        value: type,
+                                        child: Text(type),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) => setState(
+                                  () => _zoneType = value ?? 'Custom Zone',
+                                ),
+                                validator: (value) =>
+                                    FormValidation.requiredSelection(
+                                      'zone type',
+                                      value,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _clientName,
+                          decoration: const InputDecoration(
+                            labelText: 'Client association',
+                            hintText: 'Optional client name',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _notes,
+                          minLines: 2,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            labelText: 'Notes',
+                            hintText:
+                                'Optional operating notes for this geofence',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: PioneerGoogleMap(
+                              initialCenter: _points.isNotEmpty
+                                  ? _points.first
+                                  : const gmaps.LatLng(14.2788, 121.1248),
+                              initialZoom: 14,
+                              onTap: (point) => setState(() {
+                                if (_polygonClosed) {
+                                  return;
+                                }
+                                if (_points.isNotEmpty &&
+                                    _distanceMeters(_points.first, point) <
+                                        18 &&
+                                    _points.length >= 3) {
+                                  _polygonClosed = true;
+                                  return;
+                                }
+                                _points.add(point);
+                              }),
+                              markers: _points.asMap().entries.map((entry) {
+                                return gmaps.Marker(
+                                  markerId: gmaps.MarkerId(
+                                    'zone-point-${entry.key}',
+                                  ),
+                                  position: entry.value,
+                                  infoWindow: gmaps.InfoWindow(
+                                    title: 'Point ${entry.key + 1}',
+                                  ),
+                                );
+                              }).toSet(),
+                              polygons: _points.length >= 3
+                                  ? {
+                                      gmaps.Polygon(
+                                        polygonId: const gmaps.PolygonId(
+                                          'draft-zone',
+                                        ),
+                                        points: _points,
+                                        fillColor: AppTheme.primaryBlue
+                                            .withValues(alpha: 0.16),
+                                        strokeColor: AppTheme.primaryBlue,
+                                        strokeWidth: 3,
+                                      ),
+                                    }
+                                  : const <gmaps.Polygon>{},
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _points.length < 3
+                                    ? 'Tap the map to add at least 3 polygon points.'
+                                    : _polygonClosed
+                                    ? '${_points.length} polygon points closed. Center will be computed automatically.'
+                                    : '${_points.length} points added. Tap the first point again or press Done to close.',
+                                style: AppTheme.getSubtitleStyle(context),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _points.length < 3
+                                  ? null
+                                  : () => setState(() => _polygonClosed = true),
+                              icon: const Icon(
+                                Icons.check_circle_outline_rounded,
+                              ),
+                              label: const Text('Done'),
+                            ),
+                            TextButton.icon(
+                              onPressed: _points.isEmpty
+                                  ? null
+                                  : () => setState(() {
+                                      _polygonClosed = false;
+                                      _points.removeLast();
+                                    }),
+                              icon: const Icon(Icons.undo_rounded),
+                              label: const Text('Undo point'),
+                            ),
+                            TextButton.icon(
+                              onPressed: _points.isEmpty
+                                  ? null
+                                  : () => setState(() {
+                                      _polygonClosed = false;
+                                      _points.clear();
+                                    }),
+                              icon: const Icon(Icons.clear_rounded),
+                              label: const Text('Clear'),
+                            ),
+                            FilledButton.icon(
+                              onPressed: _saving ? null : _save,
+                              icon: _saving
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.save_rounded),
+                              label: const Text('Save'),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),

@@ -254,6 +254,38 @@ List<Map<String, dynamic>> applyFleetLivePayload(
         incomingUpdatedAt.isBefore(currentUpdatedAt)) {
       return {
         ...vehicle,
+        'weather': snapshot['weather'] ?? vehicle['weather'],
+        'environment': snapshot['environment'] ?? vehicle['environment'],
+        'traffic': snapshot['traffic'] ?? vehicle['traffic'],
+        'trafficAwareness':
+            snapshot['trafficAwareness'] ?? vehicle['trafficAwareness'],
+        'fuelLevelRatio':
+            snapshot['fuelLevelRatio'] ?? vehicle['fuelLevelRatio'],
+        'fuelLevelSupported':
+            snapshot['fuelLevelSupported'] ?? vehicle['fuelLevelSupported'],
+        'fuelCapacity': snapshot['fuelCapacity'] ?? vehicle['fuelCapacity'],
+        'fuelCapacityLiters':
+            snapshot['fuelCapacityLiters'] ?? vehicle['fuelCapacityLiters'],
+        'fuelType': snapshot['fuelType'] ?? vehicle['fuelType'],
+        'ignitionState': snapshot['ignitionState'] ?? vehicle['ignitionState'],
+        'motionState': snapshot['motionState'] ?? vehicle['motionState'],
+        'motionStateLabel':
+            snapshot['motionStateLabel'] ?? vehicle['motionStateLabel'],
+        'diagnostics': snapshot['diagnostics'] ?? vehicle['diagnostics'],
+        'recentExceptions':
+            snapshot['recentExceptions'] ?? vehicle['recentExceptions'],
+        'recentFaults': snapshot['recentFaults'] ?? vehicle['recentFaults'],
+        'healthAlerts': snapshot['healthAlerts'] ?? vehicle['healthAlerts'],
+        'driver': snapshot['driver'] ?? vehicle['driver'],
+        'vehicleType': snapshot['vehicleType'] ?? vehicle['vehicleType'],
+        'truckType': snapshot['truckType'] ?? vehicle['truckType'],
+        'makeModel': snapshot['makeModel'] ?? vehicle['makeModel'],
+        'plannedPath': snapshot['plannedPath'] ?? vehicle['plannedPath'],
+        'routePath': snapshot['routePath'] ?? vehicle['routePath'],
+        'roadPath': snapshot['roadPath'] ?? vehicle['roadPath'],
+        'optimizedPath': snapshot['optimizedPath'] ?? vehicle['optimizedPath'],
+        'encodedPolyline':
+            snapshot['encodedPolyline'] ?? vehicle['encodedPolyline'],
         'syncState': snapshot['syncState'] ?? vehicle['syncState'] ?? 'live',
         'sourceAgeMs':
             _toInt(snapshot['sourceAgeMs']) ?? vehicle['sourceAgeMs'] ?? 0,
@@ -292,6 +324,34 @@ List<Map<String, dynamic>> applyFleetLivePayload(
       'assignedRoute': snapshot['routeName'] ?? vehicle['assignedRoute'],
       'routeStops': snapshot['routeStops'] ?? vehicle['routeStops'] ?? const [],
       'healthStatus': snapshot['healthStatus'] ?? vehicle['healthStatus'],
+      'healthScore': snapshot['healthScore'] ?? vehicle['healthScore'],
+      'healthAlerts': snapshot['healthAlerts'] ?? vehicle['healthAlerts'],
+      'weather': snapshot['weather'] ?? vehicle['weather'],
+      'environment': snapshot['environment'] ?? vehicle['environment'],
+      'traffic': snapshot['traffic'] ?? vehicle['traffic'],
+      'trafficAwareness':
+          snapshot['trafficAwareness'] ?? vehicle['trafficAwareness'],
+      'fuelLevelRatio': snapshot['fuelLevelRatio'] ?? vehicle['fuelLevelRatio'],
+      'fuelLevelSupported':
+          snapshot['fuelLevelSupported'] ?? vehicle['fuelLevelSupported'],
+      'fuelCapacity': snapshot['fuelCapacity'] ?? vehicle['fuelCapacity'],
+      'fuelCapacityLiters':
+          snapshot['fuelCapacityLiters'] ?? vehicle['fuelCapacityLiters'],
+      'fuelType': snapshot['fuelType'] ?? vehicle['fuelType'],
+      'ignitionState': snapshot['ignitionState'] ?? vehicle['ignitionState'],
+      'motionState': snapshot['motionState'] ?? vehicle['motionState'],
+      'motionStateLabel':
+          snapshot['motionStateLabel'] ?? vehicle['motionStateLabel'],
+      'diagnostics': snapshot['diagnostics'] ?? vehicle['diagnostics'],
+      'recentExceptions':
+          snapshot['recentExceptions'] ?? vehicle['recentExceptions'],
+      'recentFaults': snapshot['recentFaults'] ?? vehicle['recentFaults'],
+      'plannedPath': snapshot['plannedPath'] ?? vehicle['plannedPath'],
+      'routePath': snapshot['routePath'] ?? vehicle['routePath'],
+      'roadPath': snapshot['roadPath'] ?? vehicle['roadPath'],
+      'optimizedPath': snapshot['optimizedPath'] ?? vehicle['optimizedPath'],
+      'encodedPolyline':
+          snapshot['encodedPolyline'] ?? vehicle['encodedPolyline'],
     };
   }).toList();
 

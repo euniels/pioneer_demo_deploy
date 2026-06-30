@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import '../services/backend_api.dart';
 import '../services/crud_permissions.dart';
 import '../services/geotab_sync_status_service.dart';
+import '../services/page_cache_service.dart';
 import '../services/vehicles_store.dart';
 import '../theme/app_theme.dart';
 import '../utils/form_validation.dart';
@@ -23,6 +24,9 @@ class RoutesPage extends StatefulWidget {
 }
 
 class _RoutesPageState extends State<RoutesPage> {
+  static const String _routesCacheKey = 'routes_page:fleet_routes';
+  static const Duration _routesCacheTtl = Duration(seconds: 45);
+
   List<Map<String, dynamic>> _routes = const [];
   String _searchQuery = '';
   bool _showGridView = true;
@@ -68,9 +72,14 @@ class _RoutesPageState extends State<RoutesPage> {
       _error = null;
     });
     try {
-      final routes = await BackendApiService.getFleetRoutes(
-        forceRefresh: forceRefresh,
-      );
+      final routes =
+          await PageCacheService.getOrLoad<List<Map<String, dynamic>>>(
+            key: _routesCacheKey,
+            ttl: _routesCacheTtl,
+            forceRefresh: forceRefresh,
+            loader: () =>
+                BackendApiService.getFleetRoutes(forceRefresh: forceRefresh),
+          );
       if (!mounted) return;
       setState(() {
         _routes = routes
@@ -135,7 +144,9 @@ class _RoutesPageState extends State<RoutesPage> {
                   if (routes.isEmpty)
                     PioneerStateCard(
                       icon: Icons.alt_route_rounded,
-                      title: _routes.isEmpty ? 'No routes yet' : 'No routes found',
+                      title: _routes.isEmpty
+                          ? 'No routes yet'
+                          : 'No routes found',
                       message: _routes.isEmpty
                           ? 'Create a route template with ordered stops, then assign it to a vehicle when ready.'
                           : 'Try clearing the active search and filters to show all routes.',
@@ -192,9 +203,8 @@ class _RoutesPageState extends State<RoutesPage> {
                                   editBlockedReason: _routeEditBlockedReason(
                                     route,
                                   ),
-                                  deleteBlockedReason: _routeDeleteBlockedReason(
-                                    route,
-                                  ),
+                                  deleteBlockedReason:
+                                      _routeDeleteBlockedReason(route),
                                   pushBlockedReason: canPushToGeotab(route)
                                       ? null
                                       : _routePushBlockedReason(route),
@@ -247,10 +257,9 @@ class _RoutesPageState extends State<RoutesPage> {
 
     if (_statusFilter != 'All Status') {
       routes = routes.where((route) {
-        final status =
-            (route['syncStatus'] ?? route['status'] ?? 'synced')
-                .toString()
-                .toLowerCase();
+        final status = (route['syncStatus'] ?? route['status'] ?? 'synced')
+            .toString()
+            .toLowerCase();
         final inUse = route['inUseByActiveTrip'] == true;
         return switch (_statusFilter) {
           'In use' => inUse,
@@ -298,7 +307,9 @@ class _RoutesPageState extends State<RoutesPage> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 720;
-          final addButton = _routeAddButton(label: compact ? 'Add' : 'Add Route');
+          final addButton = _routeAddButton(
+            label: compact ? 'Add' : 'Add Route',
+          );
           final controls = Row(
             mainAxisSize: compact ? MainAxisSize.max : MainAxisSize.min,
             children: [
@@ -324,11 +335,7 @@ class _RoutesPageState extends State<RoutesPage> {
 
           if (compact) {
             return Column(
-              children: [
-                search,
-                const SizedBox(height: 12),
-                controls,
-              ],
+              children: [search, const SizedBox(height: 12), controls],
             );
           }
 
@@ -372,7 +379,11 @@ class _RoutesPageState extends State<RoutesPage> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.add_road_rounded, color: AppTheme.white, size: 18),
+              const Icon(
+                Icons.add_road_rounded,
+                color: AppTheme.white,
+                size: 18,
+              ),
               const SizedBox(width: 8),
               Text(
                 label,
@@ -990,7 +1001,9 @@ class _RouteCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF171B23 : AppTheme.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: accent.withValues(alpha: isDark ? 0.34 : 0.22)),
+        border: Border.all(
+          color: accent.withValues(alpha: isDark ? 0.34 : 0.22),
+        ),
         boxShadow: [
           BoxShadow(
             color: accent.withValues(alpha: isDark ? 0.12 : 0.07),
@@ -1992,6 +2005,118 @@ class _RouteDetailsDialog extends StatelessWidget {
 
   final Map<String, dynamic> route;
 
+  List<gmaps.LatLng> _routeRoadPath(Map<String, dynamic> route) {
+    for (final source in <dynamic>[
+      route['encodedPolyline'],
+      route['routePolyline'],
+      route['polyline'],
+      route['googleEncodedPolyline'],
+      _mapFromAny(route['roadRoute'])['encodedPolyline'],
+      _mapFromAny(route['traffic'])['encodedPolyline'],
+    ]) {
+      final decoded = _decodeEncodedPolyline(source?.toString() ?? '');
+      if (decoded.length > 1) {
+        return decoded;
+      }
+    }
+
+    for (final source in <dynamic>[
+      route['roadPath'],
+      route['optimizedPath'],
+      route['routePath'],
+      route['plannedPath'],
+    ]) {
+      final path = _pathFromAny(source);
+      if (path.length > 1) {
+        return path;
+      }
+    }
+
+    return const [];
+  }
+
+  List<gmaps.LatLng> _pathFromAny(dynamic raw) {
+    if (raw is! List) {
+      return const [];
+    }
+    return raw
+        .map((point) {
+          if (point is! Map) {
+            return null;
+          }
+          final lat =
+              (point['latitude'] as num?)?.toDouble() ??
+              (point['lat'] as num?)?.toDouble() ??
+              double.tryParse(point['latitude']?.toString() ?? '') ??
+              double.tryParse(point['lat']?.toString() ?? '');
+          final lng =
+              (point['longitude'] as num?)?.toDouble() ??
+              (point['lng'] as num?)?.toDouble() ??
+              (point['lon'] as num?)?.toDouble() ??
+              double.tryParse(point['longitude']?.toString() ?? '') ??
+              double.tryParse(point['lng']?.toString() ?? '') ??
+              double.tryParse(point['lon']?.toString() ?? '');
+          if (lat == null || lng == null) {
+            return null;
+          }
+          return gmaps.LatLng(lat, lng);
+        })
+        .whereType<gmaps.LatLng>()
+        .toList();
+  }
+
+  List<gmaps.LatLng> _decodeEncodedPolyline(String encoded) {
+    if (encoded.trim().isEmpty) {
+      return const [];
+    }
+
+    final points = <gmaps.LatLng>[];
+    var index = 0;
+    var latitude = 0;
+    var longitude = 0;
+
+    while (index < encoded.length) {
+      var shift = 0;
+      var result = 0;
+      int byte;
+      do {
+        if (index >= encoded.length) {
+          return points;
+        }
+        byte = encoded.codeUnitAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      latitude += (result & 1) != 0 ? ~(result >> 1) : result >> 1;
+
+      shift = 0;
+      result = 0;
+      do {
+        if (index >= encoded.length) {
+          return points;
+        }
+        byte = encoded.codeUnitAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      longitude += (result & 1) != 0 ? ~(result >> 1) : result >> 1;
+
+      points.add(gmaps.LatLng(latitude / 1e5, longitude / 1e5));
+    }
+
+    return points;
+  }
+
+  Map<String, dynamic> _mapFromAny(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, item) => MapEntry(key.toString(), item));
+    }
+    return const {};
+  }
+
   @override
   Widget build(BuildContext context) {
     final stops =
@@ -2012,6 +2137,9 @@ class _RouteDetailsDialog extends StatelessWidget {
         })
         .whereType<gmaps.LatLng>()
         .toList();
+    final roadPath = _routeRoadPath(route);
+    final routePath = roadPath.length > 1 ? roadPath : points;
+    final routePathIsRoadAware = roadPath.length > 1;
     final center = points.isNotEmpty
         ? points.first
         : const gmaps.LatLng(14.2788, 121.1248);
@@ -2020,33 +2148,86 @@ class _RouteDetailsDialog extends StatelessWidget {
     final isCompact = screenSize.width < 760;
     final dialogHeight = (screenSize.height * 0.84).clamp(520.0, 720.0);
 
-    final mapPanel = PioneerGoogleMap(
-      initialCenter: center,
-      initialZoom: 13,
-      markers: points.indexed
-          .map(
-            (entry) => gmaps.Marker(
-              markerId: gmaps.MarkerId('route-stop-${entry.$1}'),
-              position: entry.$2,
-              infoWindow: gmaps.InfoWindow(
-                title: '${entry.$1 + 1}. ${stops[entry.$1]['name'] ?? 'Stop'}',
-              ),
+    final mapPanel = Stack(
+      children: [
+        PioneerGoogleMap(
+          initialCenter: center,
+          initialZoom: 13,
+          markers: points.indexed
+              .map(
+                (entry) => gmaps.Marker(
+                  markerId: gmaps.MarkerId('route-stop-${entry.$1}'),
+                  position: entry.$2,
+                  infoWindow: gmaps.InfoWindow(
+                    title:
+                        '${entry.$1 + 1}. ${stops[entry.$1]['name'] ?? 'Stop'}',
+                  ),
+                ),
+              )
+              .toSet(),
+          polylines: routePath.length >= 2
+              ? {
+                  gmaps.Polyline(
+                    polylineId: const gmaps.PolylineId('route-path'),
+                    points: routePath,
+                    color: routePathIsRoadAware
+                        ? AppTheme.colorFF7C3AED
+                        : AppTheme.primaryBlue,
+                    width: routePathIsRoadAware ? 6 : 4,
+                    startCap: gmaps.Cap.roundCap,
+                    endCap: gmaps.Cap.roundCap,
+                    jointType: gmaps.JointType.round,
+                  ),
+                }
+              : const <gmaps.Polyline>{},
+        ),
+        Positioned(
+          left: 12,
+          top: 12,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? AppTheme.colorFF111827.withValues(alpha: 0.92)
+                  : AppTheme.white.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppTheme.getBorderColor(context)),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.black.withValues(alpha: isDark ? 0.28 : 0.12),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          )
-          .toSet(),
-      polylines: points.length >= 2
-          ? {
-              gmaps.Polyline(
-                polylineId: const gmaps.PolylineId('route-path'),
-                points: points,
-                color: AppTheme.primaryBlue,
-                width: 5,
-                startCap: gmaps.Cap.roundCap,
-                endCap: gmaps.Cap.roundCap,
-                jointType: gmaps.JointType.round,
-              ),
-            }
-          : const <gmaps.Polyline>{},
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  routePathIsRoadAware
+                      ? Icons.route_rounded
+                      : Icons.linear_scale_rounded,
+                  size: 15,
+                  color: routePathIsRoadAware
+                      ? AppTheme.colorFF7C3AED
+                      : AppTheme.primaryBlue,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  routePathIsRoadAware
+                      ? 'Google road path'
+                      : 'Waypoint path fallback',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
 
     final detailsPanel = Container(
@@ -2063,9 +2244,7 @@ class _RouteDetailsDialog extends StatelessWidget {
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: isDark
-                  ? AppTheme.colorFF1A1D23
-                  : AppTheme.colorFFF7F9FC,
+              color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.colorFFF7F9FC,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppTheme.getBorderColor(context)),
             ),

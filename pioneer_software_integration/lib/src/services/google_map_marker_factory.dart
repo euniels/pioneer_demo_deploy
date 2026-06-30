@@ -16,9 +16,10 @@ class PioneerGoogleMapMarkerFactory {
     PioneerMapMarkerStyle style, {
     bool selected = false,
     bool compact = false,
+    double zoomScale = 1.0,
   }) async {
     final key =
-        "${style.name}:${selected ? 'selected' : 'base'}:${compact ? 'compact' : 'full'}";
+        "${style.name}:${selected ? 'selected' : 'base'}:${compact ? 'compact' : 'full'}:${zoomScale.toStringAsFixed(2)}";
     final cached = _cache[key];
     if (cached != null) {
       return cached;
@@ -33,6 +34,7 @@ class PioneerGoogleMapMarkerFactory {
       style,
       selected: selected,
       compact: compact,
+      zoomScale: zoomScale,
     );
     final descriptor = gmaps.BitmapDescriptor.bytes(
       bytes,
@@ -47,6 +49,7 @@ class PioneerGoogleMapMarkerFactory {
     PioneerMapMarkerStyle style, {
     bool selected = false,
     bool compact = false,
+    double zoomScale = 1.0,
   }) {
     double base;
     if (compact) {
@@ -64,7 +67,7 @@ class PioneerGoogleMapMarkerFactory {
           base = 31.0;
           break;
       }
-      return selected ? base + 7.0 : base;
+      return (selected ? base + 7.0 : base) * zoomScale;
     }
     switch (style) {
       case PioneerMapMarkerStyle.moving:
@@ -80,7 +83,7 @@ class PioneerGoogleMapMarkerFactory {
         base = 62.0;
         break;
     }
-    return selected ? base + 16.0 : base;
+    return (selected ? base + 16.0 : base) * zoomScale;
   }
 
   static Color markerFillColor(PioneerMapMarkerStyle style) {
