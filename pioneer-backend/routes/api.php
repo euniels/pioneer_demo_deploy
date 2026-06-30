@@ -73,6 +73,8 @@ Route::prefix('fleet')->group(function () {
     Route::post('/trips', [GeotabController::class, 'storeTrip']);
     Route::get('/trips/{tripId}', [GeotabController::class, 'trip']);
     Route::patch('/trips/{tripId}', [GeotabController::class, 'updateTrip']);
+    Route::get('/trips/{tripId}/billing-preview', [GeotabController::class, 'billingPreview']);
+    Route::patch('/trips/{tripId}/manifest', [GeotabController::class, 'saveTripManifest']);
     Route::get('/trips/{tripId}/map', [GeotabController::class, 'tripMap']);
     Route::get('/routes', [GeotabController::class, 'routes']);
     Route::post('/routes', [GeotabController::class, 'storeFleetRoute']);
@@ -135,6 +137,7 @@ Route::prefix('fleet')->group(function () {
     Route::patch('/client-assignments/{assignmentId}', [GeotabController::class, 'updateClientAssignment']);
     Route::get('/client-tracking/{tripId}', [GeotabController::class, 'clientTracking']);
     Route::post('/pod/{tripId}', [GeotabController::class, 'storePod']);
+    Route::patch('/pod/{tripId}/review', [GeotabController::class, 'reviewPod']);
     Route::get('/pod/{tripId}/attachments/{index}', [GeotabController::class, 'downloadPodAttachment']);
 });
 
@@ -148,6 +151,7 @@ Route::prefix('billing')->group(function () {
     Route::patch('/invoices/{tripId}', [GeotabController::class, 'updateBillingInvoice']);
     Route::post('/invoices/{tripId}/void', [GeotabController::class, 'voidBillingInvoice']);
     Route::post('/invoices/{tripId}/recalculate', [GeotabController::class, 'recalculateInvoice']);
+    Route::post('/invoices/{tripId}/tolls/manual', [GeotabController::class, 'saveBillingInvoiceToll']);
     Route::put('/invoices/{tripId}/references', [GeotabController::class, 'saveBillingInvoiceReferences']);
     Route::get('/soa', [GeotabController::class, 'billingSoa']);
 });

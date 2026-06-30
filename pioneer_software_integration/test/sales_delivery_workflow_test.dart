@@ -28,8 +28,13 @@ void main() {
     expect(trips, contains('workflowSteps'));
     expect(trips, contains('fulfillmentLabel'));
     expect(trips, contains('WorkflowTimeline'));
+    expect(trips, contains('Billing Readiness'));
+    expect(trips, contains('getTripBillingPreview'));
+    expect(trips, contains('Submit for Review'));
     expect(dispatch, isNot(contains('Inquiry & quotation')));
     expect(dispatch, isNot(contains('Fulfillment strategy')));
     expect(trips, isNot(contains('Sales to Delivery Workflow')));
+    expect(trips, isNot(contains('Complete and Bill')));
+    expect(trips, isNot(contains('addBilling(')));
   });
 }

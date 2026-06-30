@@ -99,6 +99,8 @@ void main() {
     expect(source, isNot(contains("label: 'Driver'")));
     expect(source, contains('Vehicle plate'));
     expect(source, contains('Cargo condition'));
+    expect(source, contains('Billing status'));
+    expect(source, contains("data['invoiceSummary']"));
     expect(source, contains('POD condition summary'));
     expect(source, contains('Proof of delivery'));
     expect(source, contains('Awaiting delivery'));
@@ -107,5 +109,7 @@ void main() {
     expect(source, contains('In Transit'));
     expect(source, contains('Delivered'));
     expect(source, isNot(contains("data['orderValue']")));
+    expect(source, isNot(contains("data['fuelCost']")));
+    expect(source, isNot(contains("data['tollFees']")));
   });
 }

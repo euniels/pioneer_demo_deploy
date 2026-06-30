@@ -37,6 +37,7 @@ use App\Services\JwtAuthService;
 use App\Services\ProductionErrorReporter;
 use App\Services\PushSenderService;
 use App\Services\RealtimeFleetEventBroadcaster;
+use App\Services\TripBillingCalculator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -120,6 +121,7 @@ class GeotabController extends Controller
         private readonly GeotabWriteBackService $writeBack,
         private readonly RealtimeFleetEventBroadcaster $realtime,
         private readonly GoogleMapsEnrichmentService $googleMaps,
+        private readonly TripBillingCalculator $tripBillingCalculator,
     ) {
         if ($this->shouldServeCachedSnapshotOnly()) {
             @set_time_limit(20);
@@ -2712,6 +2714,7 @@ class GeotabController extends Controller
             );
         }
         $this->clearFleetCaches();
+        $this->syncAutomatedBillingForTripId($tripId, 'trip updated');
         if ($request->has('status')) {
             $this->storeCustomNotification(
                 'dispatch',
@@ -4948,6 +4951,138 @@ class GeotabController extends Controller
         ]);
     }
 
+    public function billingPreview(string $tripId): JsonResponse
+    {
+        $snapshot = $this->billingSnapshot();
+        $trip = $this->findTrip($snapshot['trips'] ?? [], $tripId);
+        if ($trip === null) {
+            return $this->respondError('Trip not found for billing preview.', 404);
+        }
+
+        if (! $this->tripBillableForEstimate($trip)) {
+            return $this->respondError('Trip does not have enough billing information yet.', 422);
+        }
+
+        return $this->respondData($this->applyInvoiceReferences([
+            $this->itemizedInvoiceForTrip($trip, false, is_array($snapshot['fuel'] ?? null) ? $snapshot['fuel'] : []),
+        ])[0]);
+    }
+
+    public function saveTripManifest(Request $request, string $tripId): JsonResponse
+    {
+        $validated = $request->validate([
+            'cargoDescription' => ['nullable', 'string', 'max:500'],
+            'packageCount' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+            'declaredValue' => ['nullable', 'numeric', 'min:0'],
+            'referenceNumber' => ['nullable', 'string', 'max:255'],
+            'poNumber' => ['nullable', 'string', 'max:255'],
+            'drNumber' => ['nullable', 'string', 'max:255'],
+            'siNumber' => ['nullable', 'string', 'max:255'],
+            'notes' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $manifest = [
+            'cargoDescription' => $this->sanitizeText($validated['cargoDescription'] ?? '', ''),
+            'packageCount' => array_key_exists('packageCount', $validated) ? (float) $validated['packageCount'] : null,
+            'declaredValue' => array_key_exists('declaredValue', $validated) ? (float) $validated['declaredValue'] : null,
+            'referenceNumber' => $this->nullableCleanText($validated['referenceNumber'] ?? null),
+            'poNumber' => $this->nullableCleanText($validated['poNumber'] ?? null),
+            'drNumber' => $this->nullableCleanText($validated['drNumber'] ?? null),
+            'siNumber' => $this->nullableCleanText($validated['siNumber'] ?? null),
+            'notes' => $this->nullableCleanText($validated['notes'] ?? null),
+            'scope' => 'delivery_reference_only',
+            'updatedAt' => now()->toIso8601String(),
+        ];
+
+        $state = $this->workflowState();
+        if (isset($state['customTrips'][$tripId]) && is_array($state['customTrips'][$tripId])) {
+            $state['customTrips'][$tripId]['manifest'] = $manifest;
+            foreach (['cargoDescription', 'packageCount', 'declaredValue', 'referenceNumber', 'poNumber', 'drNumber', 'siNumber'] as $key) {
+                if ($manifest[$key] !== null && $manifest[$key] !== '') {
+                    $state['customTrips'][$tripId][$key] = $manifest[$key];
+                }
+            }
+        } else {
+            $state['tripOverrides'][$tripId] = [
+                ...(is_array($state['tripOverrides'][$tripId] ?? null) ? $state['tripOverrides'][$tripId] : []),
+                'manifest' => $manifest,
+            ];
+        }
+
+        $this->storeWorkflowState($state);
+        $this->clearFleetCaches();
+        $this->syncAutomatedBillingForTripId($tripId, 'manifest updated');
+
+        return $this->respondData([
+            'tripId' => $tripId,
+            'manifest' => $manifest,
+        ]);
+    }
+
+    public function saveBillingInvoiceToll(Request $request, string $tripId): JsonResponse
+    {
+        if (! $this->billingInvoiceReferencesTableAvailable()) {
+            return $this->respondError('Billing invoice references table is not available.', 503);
+        }
+
+        $trip = $this->findTrip($this->billingSnapshot()['trips'] ?? [], $tripId);
+        if ($trip === null) {
+            return $this->respondError('Manual toll evidence requires a linked trip.', 422);
+        }
+
+        $validated = $request->validate([
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'description' => ['nullable', 'string', 'max:255'],
+            'receiptReference' => ['nullable', 'string', 'max:255'],
+            'source' => ['nullable', 'string', 'max:120'],
+            'actor' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $reference = BillingInvoiceReference::query()->firstOrCreate(
+            ['trip_id' => $tripId],
+            [
+                'invoice_number' => 'INV-'.substr($tripId, -6),
+                'status' => 'draft',
+                'status_history' => $this->appendInvoiceStatusHistory([], null, 'draft', 'invoice reference created'),
+            ],
+        );
+
+        $currentStatus = strtolower((string) ($reference->status ?: 'draft'));
+        if (in_array($currentStatus, ['paid', 'voided'], true)) {
+            return $this->respondError('Paid or voided invoices cannot accept new toll evidence.', 423);
+        }
+
+        $meta = is_array($reference->meta) ? $reference->meta : [];
+        $manualTolls = is_array($meta['manualTolls'] ?? null) ? $meta['manualTolls'] : [];
+        $manualTolls[] = [
+            'amount' => round((float) $validated['amount'], 2),
+            'description' => $this->sanitizeText($validated['description'] ?? 'Manual toll charge', 'Manual toll charge'),
+            'receiptReference' => $this->nullableCleanText($validated['receiptReference'] ?? null),
+            'source' => $this->sanitizeText($validated['source'] ?? 'manual', 'manual'),
+            'actor' => $this->invoiceActorFromRequest($request),
+            'recordedAt' => now()->toIso8601String(),
+        ];
+        $meta['manualTolls'] = $manualTolls;
+        $meta['lastManualTollAt'] = now()->toIso8601String();
+
+        $reference->fill([
+            'meta' => $meta,
+            'status_history' => $this->appendInvoiceStatusHistory(
+                is_array($reference->status_history) ? $reference->status_history : [],
+                $currentStatus,
+                $currentStatus,
+                'manual toll evidence added',
+                $this->invoiceActorFromRequest($request),
+                ['manualToll' => true],
+            ),
+        ])->save();
+
+        $this->clearFleetCaches();
+        $this->syncAutomatedBillingForTrip($trip, 'manual toll added');
+
+        return $this->respondData($this->applyInvoiceReferences([$this->itemizedInvoiceForTrip($trip, true)])[0]);
+    }
+
     public function updateBillingInvoice(Request $request, string $tripId): JsonResponse
     {
         if (! $this->billingInvoiceReferencesTableAvailable()) {
@@ -5447,6 +5582,7 @@ class GeotabController extends Controller
             ],
             'assignment' => $assignment,
             'proofOfDelivery' => $pod,
+            'invoiceSummary' => $this->clientSafeInvoiceSummaryForTrip($trip),
             'workflowPhase' => $trip['workflowPhase'] ?? null,
             'workflowPhaseLabel' => $trip['workflowPhaseLabel'] ?? null,
             'workflowPhaseNumber' => $trip['workflowPhaseNumber'] ?? null,
@@ -5508,10 +5644,11 @@ class GeotabController extends Controller
             $this->clearFleetCaches();
             $this->storeCustomNotification(
                 'trip',
-                'Delivery Confirmation Received',
-                $tripId.' was completed with proof of delivery.',
+                'POD Submitted For Review',
+                $tripId.' has proof of delivery waiting for admin review.',
                 ['tripId' => $tripId, 'url' => '/trips'],
             );
+            $this->syncAutomatedBillingForTripId($tripId, 'pod submitted');
 
             return $this->respondData($this->formatPod($pod));
         }
@@ -5529,6 +5666,69 @@ class GeotabController extends Controller
             'stored' => false,
             'warning' => 'proof_of_deliveries table is not available yet. Run migrations to persist POD submissions.',
         ]);
+    }
+
+    public function reviewPod(Request $request, string $tripId): JsonResponse
+    {
+        if (! $this->podTableAvailable()) {
+            return $this->respondError('Proof of delivery storage is not available.', 503);
+        }
+
+        $validated = $request->validate([
+            'status' => ['required', 'string', 'in:verified,rejected'],
+            'reviewNote' => ['nullable', 'string', 'max:2000'],
+            'actor' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $pod = ProofOfDelivery::query()->where('trip_id', $tripId)->latest('updated_at')->first();
+        if (! $pod instanceof ProofOfDelivery) {
+            return $this->respondError('Proof of delivery must be submitted before admin review.', 404);
+        }
+
+        $nextStatus = strtolower((string) $validated['status']);
+        $reviewNote = $this->nullableCleanText($validated['reviewNote'] ?? null);
+        if ($nextStatus === 'rejected' && trim((string) $reviewNote) === '') {
+            return $this->respondError('A review note is required when rejecting proof of delivery.', 422);
+        }
+
+        if ($nextStatus === 'verified' && ! filled($pod->signature_data_url) && count((array) ($pod->attachments ?? [])) === 0) {
+            return $this->respondError('Proof of delivery cannot be verified without a signature or attachment.', 422);
+        }
+
+        $actor = $this->invoiceActorFromRequest($request);
+        $meta = is_array($pod->meta) ? $pod->meta : [];
+        $history = is_array($meta['reviewHistory'] ?? null) ? $meta['reviewHistory'] : [];
+        $history[] = [
+            'from' => $pod->status,
+            'to' => $nextStatus,
+            'note' => $reviewNote,
+            'actor' => $actor,
+            'at' => now()->toIso8601String(),
+        ];
+
+        $meta['reviewStatus'] = $nextStatus;
+        $meta['reviewNote'] = $reviewNote;
+        $meta['reviewedBy'] = $actor;
+        $meta['reviewedAt'] = now()->toIso8601String();
+        $meta['reviewHistory'] = array_values($history);
+
+        $pod->fill([
+            'status' => $nextStatus,
+            'meta' => $meta,
+        ])->save();
+
+        $this->clearFleetCaches();
+        $this->syncAutomatedBillingForTripId($tripId, $nextStatus === 'verified' ? 'pod verified by admin' : 'pod rejected by admin');
+        $this->storeCustomNotification(
+            $nextStatus === 'verified' ? 'billing' : 'trip',
+            $nextStatus === 'verified' ? 'POD Verified - Billing Review Ready' : 'POD Rejected',
+            $nextStatus === 'verified'
+                ? $tripId.' is ready for accounting billing review.'
+                : $tripId.' requires POD correction before billing can proceed.',
+            ['tripId' => $tripId, 'url' => $nextStatus === 'verified' ? '/billing' : '/trips'],
+        );
+
+        return $this->respondData($this->formatPod($pod));
     }
 
     public function downloadPodAttachment(Request $request, string $tripId, int $index): StreamedResponse|JsonResponse
@@ -7559,8 +7759,7 @@ class GeotabController extends Controller
         $billings = array_values(array_map(function (array $trip): array {
             return $this->itemizedInvoiceForTrip($trip);
         }, array_filter($tripsView, function (array $trip): bool {
-            return $this->parseMoney($trip['amount'] ?? '0') > 0
-                && strtolower((string) ($trip['status'] ?? '')) === 'completed';
+            return $this->tripBillableForEstimate($trip);
         })));
 
         $billingOverview = [
@@ -10730,7 +10929,9 @@ class GeotabController extends Controller
             $client = trim((string) ($invoice['client'] ?? 'Unknown Client'));
             $amount = $this->parseMoney($invoice['amount'] ?? 0);
             $status = strtolower((string) ($invoice['status'] ?? 'issued'));
-            $voided = $status === 'voided';
+            if (! in_array($status, ['issued', 'sent', 'paid', 'overdue'], true)) {
+                continue;
+            }
 
             $clients[$client] ??= [
                 'name' => $client,
@@ -10857,10 +11058,10 @@ class GeotabController extends Controller
 
         foreach ($trips as $trip) {
             $tripId = trim((string) ($trip['tripId'] ?? ''));
-            if ($tripId === '' || $this->parseMoney($trip['amount'] ?? '0') <= 0 || ! $this->tripCompletedForBilling($trip)) {
+            if ($tripId === '' || ! $this->tripBillableForEstimate($trip)) {
                 continue;
             }
-            $billingsByTrip[$tripId] = $this->itemizedInvoiceForTrip($trip);
+            $billingsByTrip[$tripId] = $this->itemizedInvoiceForTrip($trip, false, is_array($snapshot['fuel'] ?? null) ? $snapshot['fuel'] : []);
         }
 
         $billings = array_values($billingsByTrip);
@@ -10873,14 +11074,97 @@ class GeotabController extends Controller
         ];
     }
 
+    private function syncAutomatedBillingForTripId(string $tripId, string $reason): void
+    {
+        if (! $this->billingInvoiceReferencesTableAvailable()) {
+            return;
+        }
+
+        $snapshot = $this->billingSnapshot();
+        $trip = $this->findTrip($snapshot['trips'] ?? [], $tripId);
+        if ($trip === null) {
+            return;
+        }
+
+        $this->syncAutomatedBillingForTrip($trip, $reason, is_array($snapshot['fuel'] ?? null) ? $snapshot['fuel'] : []);
+    }
+
+    private function syncAutomatedBillingForTrip(array $trip, string $reason, ?array $fuel = null): void
+    {
+        if (! $this->billingInvoiceReferencesTableAvailable() || ! $this->tripBillableForEstimate($trip)) {
+            return;
+        }
+
+        $tripId = trim((string) ($trip['tripId'] ?? ''));
+        if ($tripId === '') {
+            return;
+        }
+
+        $invoice = $this->itemizedInvoiceForTrip($trip, true, $fuel ?? []);
+        $reference = BillingInvoiceReference::query()->firstOrNew(['trip_id' => $tripId]);
+        $currentStatus = strtolower((string) ($reference->status ?: 'draft'));
+        if (in_array($currentStatus, ['approved', 'issued', 'paid', 'overdue', 'voided'], true)) {
+            return;
+        }
+
+        $meta = is_array($reference->meta) ? $reference->meta : [];
+        $meta['automatedBilling'] = [
+            'reason' => $this->sanitizeText($reason, 'automated billing sync'),
+            'calculationStatus' => $invoice['calculationStatus'] ?? 'draft_estimate',
+            'podReadiness' => $invoice['podReadiness'] ?? 'Draft estimate',
+            'evidenceSummary' => $invoice['evidenceSummary'] ?? [],
+            'reviewFlags' => $invoice['reviewFlags'] ?? [],
+            'manifest' => $invoice['manifest'] ?? [],
+            'lastCalculatedAt' => $invoice['lastCalculatedAt'] ?? now()->toIso8601String(),
+        ];
+
+        $updates = [
+            'invoice_number' => $reference->invoice_number ?: ($invoice['invoiceNumber'] ?? 'INV-'.substr($tripId, -6)),
+            'status' => $reference->status ?: 'draft',
+            'meta' => $meta,
+        ];
+
+        if (! $reference->exists) {
+            $updates['status_history'] = $this->appendInvoiceStatusHistory([], null, 'draft', 'automated draft estimate created', 'system', ['automatedBilling' => true]);
+        } elseif (! (bool) $reference->manual_invoice && $currentStatus === 'draft') {
+            $updates['status_history'] = $this->appendInvoiceStatusHistory(
+                is_array($reference->status_history) ? $reference->status_history : [],
+                'draft',
+                'draft',
+                'automated billing estimate refreshed',
+                'system',
+                ['automatedBilling' => true, 'reason' => $reason],
+            );
+        }
+
+        if (! (bool) $reference->manual_invoice && $currentStatus === 'draft') {
+            $updates['line_items'] = $this->normalizedInvoiceLineItems($invoice['chargeBreakdown'] ?? $invoice['itemizedBreakdown'] ?? []);
+        }
+
+        $reference->fill($updates)->save();
+        $this->clearFleetCaches();
+    }
+
+    private function tripBillableForEstimate(array $trip): bool
+    {
+        $tripId = trim((string) ($trip['tripId'] ?? ''));
+        $status = strtolower(trim((string) ($trip['status'] ?? '')));
+        $amount = $this->parseMoney($trip['amount'] ?? 0);
+        $orderValue = $this->parseMoney($trip['orderValue'] ?? $trip['declaredValue'] ?? 0);
+
+        return $tripId !== ''
+            && ($amount > 0 || $orderValue > 0)
+            && in_array($status, ['dispatched', 'in_progress', 'in progress', 'on trip', 'ontrip', 'completed', 'delivered', 'closed', 'verified'], true);
+    }
+
     private function applyInvoiceReferences(array $invoices): array
     {
         if (! $this->billingInvoiceReferencesTableAvailable()) {
             return array_map(function (array $invoice): array {
-                return [
+                return $this->withBillingStage([
                     ...$invoice,
                     'references' => $this->emptyInvoiceReference((string) ($invoice['tripId'] ?? ''), (string) ($invoice['invoiceNumber'] ?? '')),
-                ];
+                ]);
             }, $invoices);
         }
 
@@ -10905,7 +11189,7 @@ class GeotabController extends Controller
                 $invoice = $this->applyBillingReferenceFinancials($invoice, $reference);
             }
 
-            return [
+            $merged = [
                 ...$invoice,
                 'invoiceNumber' => $formatted['invoiceNumber'] ?: ($invoice['invoiceNumber'] ?? null),
                 'status' => $formatted['status'] ?: ($invoice['status'] ?? 'draft'),
@@ -10933,7 +11217,106 @@ class GeotabController extends Controller
                 'voidReason' => $formatted['voidReason'],
                 'references' => $formatted,
             ];
+
+            return $this->withBillingStage($merged);
         }, $invoices);
+    }
+
+    private function withBillingStage(array $invoice): array
+    {
+        $status = strtolower(trim((string) ($invoice['status'] ?? 'draft')));
+        $podStatus = strtolower(trim((string) ($invoice['podStatus'] ?? 'missing')));
+        $podReady = (bool) ($invoice['podReady'] ?? false);
+        $calculationStatus = strtolower(trim((string) ($invoice['calculationStatus'] ?? 'draft_estimate')));
+        $reviewFlags = is_array($invoice['reviewFlags'] ?? null) ? $invoice['reviewFlags'] : [];
+        $blockingReasons = [];
+
+        if (! $podReady) {
+            $blockingReasons[] = match ($podStatus) {
+                'submitted' => 'POD is waiting for admin review.',
+                'rejected' => 'POD was rejected and must be corrected.',
+                default => 'Verified POD is required before billing approval.',
+            };
+        }
+        foreach ($reviewFlags as $flag) {
+            if (is_array($flag) && trim((string) ($flag['message'] ?? '')) !== '') {
+                $blockingReasons[] = (string) $flag['message'];
+            }
+        }
+
+        [$stage, $stageLabel] = match (true) {
+            $status === 'voided' => ['voided', 'Voided'],
+            $status === 'paid' => ['paid', 'Paid'],
+            $status === 'overdue' => ['overdue', 'Overdue'],
+            in_array($status, ['issued', 'sent'], true) => ['issued', 'Issued'],
+            $status === 'approved' => ['approved', 'Approved'],
+            $status === 'rejected' => ['rejected', 'Rejected'],
+            $podStatus === 'submitted' && ! $podReady => ['pod_under_review', 'POD under admin review'],
+            $podStatus === 'rejected' && ! $podReady => ['pod_rejected', 'POD correction required'],
+            $calculationStatus === 'waiting_for_pod' || ! $podReady => ['waiting_for_pod', 'Waiting for POD'],
+            $calculationStatus === 'review_required' => ['review_required', 'Needs billing review'],
+            $calculationStatus === 'ready_for_review' => ['ready_for_review', 'Ready for billing review'],
+            default => ['draft_estimate', 'Draft estimate'],
+        };
+
+        $nextAllowedActions = match ($stage) {
+            'pod_under_review' => ['verify_pod', 'reject_pod'],
+            'ready_for_review', 'review_required' => ['approve', 'reject', 'recalculate', 'add_toll_evidence'],
+            'approved' => ['issue', 'reject'],
+            'issued', 'overdue' => ['mark_paid'],
+            'draft_estimate', 'waiting_for_pod', 'pod_rejected' => ['recalculate', 'edit_references'],
+            default => [],
+        };
+
+        return [
+            ...$invoice,
+            'billingStage' => $stage,
+            'billingStageLabel' => $stageLabel,
+            'podReviewStatus' => $podStatus,
+            'blockingReasons' => array_values(array_unique(array_filter($blockingReasons))),
+            'nextAllowedActions' => $nextAllowedActions,
+        ];
+    }
+
+    private function clientSafeInvoiceSummaryForTrip(array $trip): array
+    {
+        if (! $this->tripBillableForEstimate($trip)) {
+            return [
+                'publicStatus' => 'Billing not started',
+                'stageLabel' => 'Not ready',
+                'visibleToClient' => false,
+                'message' => 'Delivery billing starts after dispatch details are complete.',
+            ];
+        }
+
+        $invoice = $this->applyInvoiceReferences([
+            $this->itemizedInvoiceForTrip($trip, false),
+        ])[0] ?? [];
+        $status = strtolower(trim((string) ($invoice['status'] ?? 'draft')));
+        $stage = strtolower(trim((string) ($invoice['billingStage'] ?? 'draft_estimate')));
+        $issuedVisible = in_array($status, ['issued', 'sent', 'paid', 'overdue'], true);
+
+        $publicStatus = match (true) {
+            $status === 'paid' => 'Paid',
+            $status === 'overdue' => 'Payment overdue',
+            in_array($status, ['issued', 'sent'], true) => 'Invoice issued',
+            $stage === 'pod_under_review' => 'Proof of delivery under review',
+            $stage === 'pod_rejected' => 'Proof of delivery needs correction',
+            $stage === 'waiting_for_pod' => 'Waiting for proof of delivery',
+            default => 'Invoice being prepared',
+        };
+
+        return [
+            'publicStatus' => $publicStatus,
+            'stageLabel' => $this->sanitizeText($invoice['billingStageLabel'] ?? $publicStatus, $publicStatus),
+            'visibleToClient' => true,
+            'invoiceNumber' => $issuedVisible ? ($invoice['invoiceNumber'] ?? null) : null,
+            'amount' => $issuedVisible ? ($invoice['totalWithVat'] ?? $invoice['amount'] ?? null) : null,
+            'amountLabel' => $issuedVisible ? (string) ($invoice['amount'] ?? $invoice['totalWithVat'] ?? '') : null,
+            'message' => $issuedVisible
+                ? 'Accounting has released the delivery invoice summary.'
+                : 'Accounting will release invoice details after internal review.',
+        ];
     }
 
     private function applyBillingReferenceFinancials(array $invoice, BillingInvoiceReference $reference): array
@@ -11261,6 +11644,9 @@ class GeotabController extends Controller
                 'label' => $this->sanitizeText($item['label'] ?? 'Manual charge', 'Manual charge'),
                 'amount' => $amount,
                 'amountLabel' => $this->money($amount),
+                'source' => $this->sanitizeText($item['source'] ?? 'manual', 'manual'),
+                'confidence' => $this->sanitizeText($item['confidence'] ?? 'manual', 'manual'),
+                'note' => $this->sanitizeText($item['note'] ?? '', ''),
             ];
         }, $items));
     }
@@ -11406,48 +11792,36 @@ class GeotabController extends Controller
         return in_array($to, $allowed[$from] ?? [], true);
     }
 
-    private function itemizedInvoiceForTrip(array $trip, bool $recalculated = false): array
+    private function itemizedInvoiceForTrip(array $trip, bool $recalculated = false, ?array $fuel = null): array
     {
         $amount = $this->parseMoney($trip['amount'] ?? '0');
         $distanceKm = (float) ($trip['distanceKm'] ?? 0);
         $issueDate = $this->normalizeDateString($trip['date'] ?? $trip['endedAt'] ?? now()->toDateString());
         $dueDate = Carbon::parse($issueDate)->addDays(30)->toDateString();
         $invoiceNumber = 'INV-'.substr((string) ($trip['tripId'] ?? 'TRIP'), -6);
-        $orderValue = (float) ($trip['orderValue'] ?? $trip['declaredValue'] ?? $amount);
-        $withinFreeDeliveryRadius = $distanceKm > 0 && $distanceKm <= 10;
-        $freeDeliveryThreshold = $this->freeDeliveryThresholdForCustomer((string) ($trip['customer'] ?? ''));
-        $freeDeliveryCandidate = $orderValue >= $freeDeliveryThreshold && $withinFreeDeliveryRadius;
-        $routeText = implode(' ', [
-            $trip['origin'] ?? '',
-            $trip['destination'] ?? '',
-            $trip['routeName'] ?? '',
-            $trip['notes'] ?? '',
-        ]);
-        $thirdPartyCandidate = preg_match('/\b(ap cargo|lalamove|third[- ]party|courier|outsourced)\b/i', $routeText) === 1;
         $pod = $this->loadPod((string) ($trip['tripId'] ?? ''));
-        $podReady = is_array($pod)
-            && in_array(strtolower((string) ($pod['status'] ?? '')), ['delivered', 'completed', 'verified'], true)
-            && ((bool) ($pod['hasSignature'] ?? false) || count((array) ($pod['attachments'] ?? [])) > 0);
-        $manualReviewRequired = $thirdPartyCandidate
-            || ($freeDeliveryCandidate && $amount > 0)
-            || ($distanceKm <= 0 && ! (bool) ($trip['isRoutePlan'] ?? false))
-            || (strtolower((string) ($trip['status'] ?? '')) === 'completed' && ! $podReady);
+        $reference = $this->billingInvoiceReferencesTableAvailable()
+            ? BillingInvoiceReference::query()->where('trip_id', (string) ($trip['tripId'] ?? ''))->first()
+            : null;
+        $referenceMeta = is_array($reference?->meta) ? $reference->meta : [];
+        $calculation = $this->tripBillingCalculator->calculate($trip, [
+            'settings' => [
+                'baseDeliveryChargePerKm' => (float) $this->systemSettingsValue('base_delivery_charge_per_km', 65),
+                'fuelSurchargeRatePercent' => (float) $this->systemSettingsValue('fuel_surcharge_rate_percent', 15),
+                'vatRatePercent' => $this->billingVatRatePercent(),
+                'freeDeliveryThreshold' => $this->freeDeliveryThresholdForCustomer((string) ($trip['customer'] ?? '')),
+            ],
+            'fuel' => is_array($fuel) ? $fuel : [],
+            'pod' => $pod,
+            'manualTolls' => is_array($referenceMeta['manualTolls'] ?? null) ? $referenceMeta['manualTolls'] : [],
+        ]);
+
+        $podReady = (bool) ($calculation['podReady'] ?? false);
+        $manualReviewRequired = (bool) ($calculation['manualReviewRequired'] ?? false);
         $tripCompleted = $this->tripCompletedForBilling($trip);
-        $podReadiness = ! $podReady ? 'Hold for POD' : ($manualReviewRequired ? 'Needs review' : 'Ready to bill');
         $computedStatus = (! $tripCompleted || ! $podReady)
             ? 'draft'
             : (Carbon::parse($dueDate)->lt(now()->startOfDay()) ? 'overdue' : 'issued');
-
-        $baseRatePerKm = (float) $this->systemSettingsValue('base_delivery_charge_per_km', 65);
-        $fuelSurchargeRate = (float) $this->systemSettingsValue('fuel_surcharge_rate_percent', 15);
-        $baseCharge = max(round($amount * 0.40, 2), 0);
-        $distanceCharge = $distanceKm > 0 ? round($distanceKm * $baseRatePerKm, 2) : round($amount * 0.25, 2);
-        $fuelCharge = round($amount * ($fuelSurchargeRate / 100), 2);
-        $surcharges = round(max(0, $amount - ($baseCharge + $distanceCharge + $fuelCharge)), 2);
-        $total = round($baseCharge + $distanceCharge + $fuelCharge + $surcharges, 2);
-        $vatRatePercent = $this->billingVatRatePercent();
-        $vatAmount = round($total * ($vatRatePercent / 100), 2);
-        $totalWithVat = round($total + $vatAmount, 2);
 
         return [
             'id' => $invoiceNumber,
@@ -11459,53 +11833,55 @@ class GeotabController extends Controller
             'issueDate' => $issueDate,
             'dueDate' => $dueDate,
             'status' => $computedStatus,
-            'amount' => $this->money($totalWithVat),
-            'total' => $this->money($totalWithVat),
-            'baseRate' => $this->money($baseCharge),
-            'baseCharge' => $this->money($baseCharge),
-            'distanceCost' => $this->money($distanceCharge),
-            'distanceCharge' => $this->money($distanceCharge),
-            'fuelCost' => $this->money($fuelCharge),
-            'fuelCostEstimate' => $this->money($fuelCharge),
-            'surcharges' => $this->money($surcharges),
-            'itemizedBreakdown' => [
-                ['label' => 'Base charge', 'amount' => $baseCharge, 'amountLabel' => $this->money($baseCharge)],
-                ['label' => 'Distance charge', 'amount' => $distanceCharge, 'amountLabel' => $this->money($distanceCharge)],
-                ['label' => 'Fuel cost estimate', 'amount' => $fuelCharge, 'amountLabel' => $this->money($fuelCharge)],
-                ['label' => 'Surcharges', 'amount' => $surcharges, 'amountLabel' => $this->money($surcharges)],
-                ['label' => 'Policy review', 'amount' => 0, 'amountLabel' => $manualReviewRequired ? 'Review required' : 'Cleared'],
-            ],
-            'deliverySubtotal' => $this->money($baseCharge + $distanceCharge + $fuelCharge),
-            'subtotal' => $this->money($total),
-            'subtotalBeforeVat' => $this->money($total),
-            'serviceFee' => $this->money($surcharges),
-            'vatRatePercent' => $vatRatePercent,
-            'vatAmount' => $vatAmount,
-            'vat' => $this->money($vatAmount),
-            'totalWithVat' => $this->money($totalWithVat),
+            'amount' => $this->money((float) ($calculation['totalWithVat'] ?? 0)),
+            'total' => $this->money((float) ($calculation['totalWithVat'] ?? 0)),
+            'baseRate' => $this->money((float) ($calculation['baseCharge'] ?? 0)),
+            'baseCharge' => $this->money((float) ($calculation['baseCharge'] ?? 0)),
+            'distanceCost' => $this->money((float) ($calculation['distanceCharge'] ?? 0)),
+            'distanceCharge' => $this->money((float) ($calculation['distanceCharge'] ?? 0)),
+            'fuelCost' => $this->money((float) ($calculation['fuelCharge'] ?? 0)),
+            'fuelCostEstimate' => $this->money((float) ($calculation['fuelCharge'] ?? 0)),
+            'tollCost' => $this->money((float) ($calculation['tollCharge'] ?? 0)),
+            'tollEstimate' => $this->money((float) ($calculation['tollCharge'] ?? 0)),
+            'surcharges' => $this->money((float) ($calculation['surcharges'] ?? 0)),
+            'itemizedBreakdown' => $this->normalizedInvoiceLineItems($calculation['itemizedBreakdown'] ?? []),
+            'chargeBreakdown' => $this->normalizedInvoiceLineItems($calculation['chargeBreakdown'] ?? []),
+            'deliverySubtotal' => $this->money((float) ($calculation['baseCharge'] ?? 0) + (float) ($calculation['distanceCharge'] ?? 0) + (float) ($calculation['fuelCharge'] ?? 0)),
+            'subtotal' => $this->money((float) ($calculation['subtotal'] ?? 0)),
+            'subtotalBeforeVat' => $this->money((float) ($calculation['subtotal'] ?? 0)),
+            'serviceFee' => $this->money((float) ($calculation['surcharges'] ?? 0)),
+            'vatRatePercent' => (float) ($calculation['vatRatePercent'] ?? $this->billingVatRatePercent()),
+            'vatAmount' => (float) ($calculation['vatAmount'] ?? 0),
+            'vat' => $this->money((float) ($calculation['vatAmount'] ?? 0)),
+            'totalWithVat' => $this->money((float) ($calculation['totalWithVat'] ?? 0)),
             'discount' => $this->money(0, negative: true),
             'erpReference' => null,
             'poNumber' => null,
             'drNumber' => null,
             'referenceNotes' => null,
-            'orderValue' => $orderValue,
-            'orderValueLabel' => $this->money($orderValue),
+            'orderValue' => (float) ($trip['orderValue'] ?? $trip['declaredValue'] ?? $amount),
+            'orderValueLabel' => $this->money((float) ($trip['orderValue'] ?? $trip['declaredValue'] ?? $amount)),
             'distanceKm' => round($distanceKm, 2),
-            'baseDeliveryChargePerKm' => round($baseRatePerKm, 2),
-            'fuelSurchargeRatePercent' => round($fuelSurchargeRate, 2),
-            'freeDeliveryCandidate' => $freeDeliveryCandidate,
-            'freeDeliveryThreshold' => round($freeDeliveryThreshold, 2),
-            'freeDeliveryThresholdLabel' => $this->money($freeDeliveryThreshold),
-            'withinFreeDeliveryRadius' => $withinFreeDeliveryRadius,
-            'thirdPartyCandidate' => $thirdPartyCandidate,
+            'baseDeliveryChargePerKm' => (float) ($calculation['baseDeliveryChargePerKm'] ?? 0),
+            'fuelSurchargeRatePercent' => (float) ($calculation['fuelSurchargeRatePercent'] ?? 0),
+            'freeDeliveryCandidate' => (bool) ($calculation['freeDeliveryCandidate'] ?? false),
+            'freeDeliveryThreshold' => (float) ($calculation['freeDeliveryThreshold'] ?? 0),
+            'freeDeliveryThresholdLabel' => $this->money((float) ($calculation['freeDeliveryThreshold'] ?? 0)),
+            'withinFreeDeliveryRadius' => (bool) ($calculation['withinFreeDeliveryRadius'] ?? false),
+            'thirdPartyCandidate' => (bool) ($calculation['thirdPartyCandidate'] ?? false),
             'manualReviewRequired' => $manualReviewRequired,
             'podReady' => $podReady,
-            'podStatus' => $podReady ? 'verified' : ($pod !== null ? (string) ($pod['status'] ?? 'submitted') : 'missing'),
-            'podReadiness' => $podReadiness,
-            'collectionReadiness' => $podReadiness,
-            'pricingModel' => $this->invoicePricingModel($freeDeliveryCandidate, $thirdPartyCandidate, $manualReviewRequired),
-            'billingDecision' => $this->invoiceBillingDecision($freeDeliveryCandidate, $thirdPartyCandidate, $podReady),
-            'pricingRules' => $this->invoicePricingRules($freeDeliveryCandidate, $withinFreeDeliveryRadius, $thirdPartyCandidate, $podReady),
+            'podStatus' => (string) ($calculation['podStatus'] ?? 'missing'),
+            'podReadiness' => (string) ($calculation['podReadiness'] ?? 'Draft estimate'),
+            'collectionReadiness' => (string) ($calculation['podReadiness'] ?? 'Draft estimate'),
+            'calculationStatus' => (string) ($calculation['calculationStatus'] ?? 'draft_estimate'),
+            'pricingModel' => $this->invoicePricingModel((bool) ($calculation['freeDeliveryCandidate'] ?? false), (bool) ($calculation['thirdPartyCandidate'] ?? false), $manualReviewRequired),
+            'billingDecision' => $this->invoiceBillingDecision((bool) ($calculation['freeDeliveryCandidate'] ?? false), (bool) ($calculation['thirdPartyCandidate'] ?? false), $podReady),
+            'pricingRules' => $this->invoicePricingRules((bool) ($calculation['freeDeliveryCandidate'] ?? false), (bool) ($calculation['withinFreeDeliveryRadius'] ?? false), (bool) ($calculation['thirdPartyCandidate'] ?? false), $podReady),
+            'evidenceSummary' => $calculation['evidenceSummary'] ?? [],
+            'reviewFlags' => $calculation['reviewFlags'] ?? [],
+            'manifest' => $calculation['manifest'] ?? [],
+            'lastCalculatedAt' => $calculation['lastCalculatedAt'] ?? now()->toIso8601String(),
             'clientTrackingIncluded' => true,
             'recalculated' => $recalculated,
             'source' => str_contains((string) ($trip['notes'] ?? ''), 'dispatch workflow')

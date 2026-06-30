@@ -145,6 +145,9 @@ class _StatementOfAccountsPageState extends State<StatementOfAccountsPage> {
           final name = (client['name'] ?? '').toString();
           final invoices =
               _listOfMaps(client['invoiceRows']).where((invoice) {
+                if (!_statementEligibleInvoice(invoice)) {
+                  return false;
+                }
                 if (query.isNotEmpty && !name.toLowerCase().contains(query)) {
                   return false;
                 }
@@ -511,6 +514,7 @@ class _StatementOfAccountsPageState extends State<StatementOfAccountsPage> {
     final invoices = billingInvoices
         .where(
           (invoice) =>
+              _statementEligibleInvoice(invoice) &&
               (invoice['client'] ?? '').toString().trim().toLowerCase() ==
               clientName.toLowerCase(),
         )
@@ -1550,6 +1554,15 @@ String _statementStatus(Map<String, dynamic> invoice) {
   if (value.contains('overdue') || value.contains('late')) return 'overdue';
   if (value.contains('paid') || value.contains('collected')) return 'paid';
   return 'unpaid';
+}
+
+bool _statementEligibleInvoice(Map<String, dynamic> invoice) {
+  final raw = (invoice['status'] ?? '').toString().toLowerCase();
+  return raw == 'issued' ||
+      raw == 'sent' ||
+      raw == 'paid' ||
+      raw == 'overdue' ||
+      raw.contains('partial');
 }
 
 String _statementStatusLabel(Map<String, dynamic> invoice) {

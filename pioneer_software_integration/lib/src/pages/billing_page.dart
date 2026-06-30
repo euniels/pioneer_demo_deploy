@@ -295,6 +295,14 @@ class _BillingPageState extends State<BillingPage> {
                               .toUpperCase(),
                           isDark,
                         ),
+                        _receiptPill(
+                          'Stage',
+                          (invoice['billingStageLabel'] ??
+                                  invoice['collectionReadiness'] ??
+                                  'Draft estimate')
+                              .toString(),
+                          isDark,
+                        ),
                       ],
                     ),
                     const SizedBox(height: 24),
@@ -416,6 +424,14 @@ class _BillingPageState extends State<BillingPage> {
                             isDark,
                           ),
                           _receiptRow(
+                            'POD review status',
+                            (invoice['podReviewStatus'] ??
+                                    invoice['podStatus'] ??
+                                    'missing')
+                                .toString(),
+                            isDark,
+                          ),
+                          _receiptRow(
                             'Pricing model',
                             (invoice['pricingModel'] ?? 'Manual review')
                                 .toString(),
@@ -430,6 +446,22 @@ class _BillingPageState extends State<BillingPage> {
                             withBottomSpacing: false,
                           ),
                           const SizedBox(height: 12),
+                          if (_stringList(invoice['blockingReasons'])
+                              .isNotEmpty) ...[
+                            Text(
+                              'Blocking reasons',
+                              style: AppTheme.getDashboardBodyStyle(context)
+                                  .copyWith(fontWeight: FontWeight.w900),
+                            ),
+                            const SizedBox(height: AppTheme.space8),
+                            ..._stringList(invoice['blockingReasons']).map(
+                              (reason) => _receiptRow(
+                                'Hold',
+                                reason,
+                                isDark,
+                              ),
+                            ),
+                          ],
                           Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -553,11 +585,15 @@ class _BillingPageState extends State<BillingPage> {
 
   Widget _buildInvoiceActions(Map<String, dynamic> invoice, bool isDark) {
     final status = (invoice['status'] ?? '').toString().toLowerCase();
+    final podStatus = (invoice['podReviewStatus'] ?? invoice['podStatus'] ?? '')
+        .toString()
+        .toLowerCase();
     final podReady = invoice['podReady'] == true;
     final editable = CrudPermissions.canEdit(CrudEntity.invoices);
     final canVoid =
         CrudPermissions.canDelete(CrudEntity.invoices) &&
         !{'paid', 'voided'}.contains(status);
+    final canReviewPod = editable && podStatus == 'submitted';
     final canApprove = editable && status == 'draft' && podReady;
     final canReject = editable && {'draft', 'approved'}.contains(status);
     final canIssue = editable && status == 'approved' && podReady;
@@ -592,6 +628,20 @@ class _BillingPageState extends State<BillingPage> {
                 : null,
             icon: const Icon(Icons.calculate_rounded),
             label: const Text('Recalculate'),
+          ),
+          FilledButton.icon(
+            onPressed: canReviewPod
+                ? () => _reviewPod(invoice, approved: true)
+                : null,
+            icon: const Icon(Icons.verified_user_rounded),
+            label: const Text('Verify POD'),
+          ),
+          OutlinedButton.icon(
+            onPressed: canReviewPod
+                ? () => _reviewPod(invoice, approved: false)
+                : null,
+            icon: const Icon(Icons.assignment_late_rounded),
+            label: const Text('Reject POD'),
           ),
           FilledButton.icon(
             onPressed: canApprove
@@ -637,12 +687,18 @@ class _BillingPageState extends State<BillingPage> {
               onSelected: (value) {
                 if (value == 'overdue') {
                   _advanceInvoiceStatus(invoice, 'overdue');
+                } else if (value == 'verify_pod') {
+                  _reviewPod(invoice, approved: true);
+                } else if (value == 'reject_pod') {
+                  _reviewPod(invoice, approved: false);
                 } else if (value == 'edit') {
                   _showManualInvoiceDialog(
                     [invoice],
                     isDark,
                     existingInvoice: invoice,
                   );
+                } else if (value == 'manual_toll') {
+                  _showManualTollDialog(invoice, isDark);
                 }
               },
               itemBuilder: (context) => [
@@ -652,9 +708,24 @@ class _BillingPageState extends State<BillingPage> {
                   child: const Text('Mark Overdue'),
                 ),
                 PopupMenuItem(
+                  value: 'verify_pod',
+                  enabled: canReviewPod,
+                  child: const Text('Verify POD'),
+                ),
+                PopupMenuItem(
+                  value: 'reject_pod',
+                  enabled: canReviewPod,
+                  child: const Text('Reject POD'),
+                ),
+                PopupMenuItem(
                   value: 'edit',
                   enabled: canEditOverride,
                   child: const Text('Edit Invoice'),
+                ),
+                PopupMenuItem(
+                  value: 'manual_toll',
+                  enabled: canEditOverride,
+                  child: const Text('Add Toll Evidence'),
                 ),
               ],
               child: const Padding(
@@ -740,9 +811,44 @@ class _BillingPageState extends State<BillingPage> {
               children: [
                 Expanded(
                   flex: 46,
-                  child: Text(
-                    (row['label'] ?? 'Charge').toString(),
-                    style: AppTheme.getDashboardBodyStyle(context),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        (row['label'] ?? 'Charge').toString(),
+                        style: AppTheme.getDashboardBodyStyle(context),
+                      ),
+                      const SizedBox(height: AppTheme.space6),
+                      Wrap(
+                        spacing: AppTheme.space6,
+                        runSpacing: AppTheme.space6,
+                        children: [
+                          _evidenceChip(
+                            (row['source'] ?? 'manual').toString(),
+                            isDark,
+                          ),
+                          _evidenceChip(
+                            (row['confidence'] ?? 'manual').toString(),
+                            isDark,
+                          ),
+                        ],
+                      ),
+                      if ((row['note'] ?? '').toString().trim().isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: AppTheme.space4),
+                          child: Text(
+                            (row['note'] ?? '').toString(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTheme.getDashboardSecondaryStyle(context)
+                                .copyWith(
+                                  color: isDark
+                                      ? AppTheme.white60
+                                      : AppTheme.colorFF64748B,
+                                ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 const Expanded(
@@ -775,6 +881,44 @@ class _BillingPageState extends State<BillingPage> {
     );
   }
 
+  Widget _evidenceChip(String value, bool isDark) {
+    final normalized = value
+        .replaceAll('_', ' ')
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
+        .join(' ');
+    final lower = value.toLowerCase();
+    final color = lower.contains('exact') ||
+            lower.contains('geotab') ||
+            lower.contains('confirmed')
+        ? AppTheme.colorFF10B981
+        : lower.contains('estimate') ||
+              lower.contains('inferred') ||
+              lower.contains('toll')
+        ? AppTheme.colorFFF59E0B
+        : AppTheme.primaryBlue;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.space8,
+        vertical: AppTheme.space4,
+      ),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        normalized.isEmpty ? 'Manual' : normalized,
+        style: AppTheme.getDashboardSecondaryStyle(
+          context,
+        ).copyWith(color: color, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+
   Future<void> _printInvoice(Map<String, dynamic> invoice) async {
     final ok = await printHtmlDocument(
       'Invoice ${(invoice['invoiceNumber'] ?? '').toString()}',
@@ -801,6 +945,14 @@ class _BillingPageState extends State<BillingPage> {
               '<tr><td>${_escapeHtml((row['label'] ?? 'Charge').toString())}</td>'
               '<td class="num">1</td><td class="num">${_escapeHtml(_peso(row['amountLabel'] ?? row['amount']))}</td>'
               '<td class="num">${_escapeHtml(_peso(row['amountLabel'] ?? row['amount']))}</td></tr>',
+        )
+        .join();
+    final evidence = _financialLineItems(invoice)
+        .map(
+          (row) =>
+              '<li>${_escapeHtml((row['label'] ?? 'Charge').toString())}: '
+              '${_escapeHtml((row['source'] ?? 'manual').toString())}, '
+              '${_escapeHtml((row['confidence'] ?? 'manual').toString())}</li>',
         )
         .join();
     final history = _listOfMaps(invoice['statusHistory'])
@@ -830,6 +982,8 @@ class _BillingPageState extends State<BillingPage> {
       <h2>Total with VAT: ${_escapeHtml(_peso(invoice['totalWithVat'] ?? invoice['amount']))}</h2></div>
       <h3>Delivery Charge Basis</h3>
       <p>${_escapeHtml((invoice['finalChargeBasis'] ?? invoice['billingDecision'] ?? 'Delivery trip charges from GPS/POD evidence.').toString())}</p>
+      <h3>Charge Evidence</h3>
+      <ul>$evidence</ul>
       <h3>ERP Reference Details</h3>
       <p>SO / ERP Reference: ${_escapeHtml((invoice['erpReference'] ?? '').toString())}<br>
       PO: ${_escapeHtml((invoice['poNumber'] ?? '').toString())}<br>
@@ -1113,22 +1267,40 @@ class _BillingPageState extends State<BillingPage> {
     final after = _mapOf(updated['after']);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirm recalculation'),
-        content: Text(
-          'Before: ${_peso(before['totalWithVat'] ?? invoice['totalWithVat'] ?? invoice['amount'])}\n'
-          'After: ${_peso(after['totalWithVat'] ?? updated['totalWithVat'] ?? updated['amount'])}',
+      builder: (context) => Dialog(
+        backgroundColor: AppTheme.transparent,
+        child: _BillingDialogFrame(
+          icon: Icons.calculate_rounded,
+          title: 'Confirm recalculation',
+          subtitle: 'Trip $tripId',
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _dialogAmountCompareRow(
+                context,
+                'Current amount',
+                _peso(before['totalWithVat'] ?? invoice['totalWithVat'] ?? invoice['amount']),
+              ),
+              const SizedBox(height: AppTheme.space10),
+              _dialogAmountCompareRow(
+                context,
+                'Recalculated amount',
+                _peso(after['totalWithVat'] ?? updated['totalWithVat'] ?? updated['amount']),
+                emphasized: true,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Use recalculated amount'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Use recalculated amount'),
-          ),
-        ],
       ),
     );
     if (confirmed != true || !mounted) {
@@ -1142,6 +1314,131 @@ class _BillingPageState extends State<BillingPage> {
       ),
     );
     _reload();
+  }
+
+  Future<void> _reviewPod(
+    Map<String, dynamic> invoice, {
+    required bool approved,
+  }) async {
+    final tripId = (invoice['tripId'] ?? '').toString();
+    if (tripId.isEmpty) {
+      return;
+    }
+
+    final noteController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var saving = false;
+    final title = approved ? 'Verify POD' : 'Reject POD';
+    final message = approved
+        ? 'Confirm that the delivery proof, recipient, and signature/attachment are valid. Billing will move to accounting review after verification.'
+        : 'Reject this POD and explain what must be corrected before billing can proceed.';
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => Dialog(
+            backgroundColor: AppTheme.transparent,
+            child: _BillingDialogFrame(
+              icon: approved
+                  ? Icons.verified_user_rounded
+                  : Icons.assignment_late_rounded,
+              title: title,
+              subtitle: 'Trip $tripId',
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(message, style: AppTheme.getBodyStyle(context)),
+                    const SizedBox(height: AppTheme.space12),
+                    TextFormField(
+                      controller: noteController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        labelText: approved
+                            ? 'Review note'
+                            : 'Required rejection reason',
+                        alignLabelWithHint: true,
+                      ),
+                      validator: approved
+                          ? null
+                          : (value) => FormValidation.requiredField(
+                                'Rejection reason',
+                                value,
+                              ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (!(formKey.currentState?.validate() ?? false)) {
+                            return;
+                          }
+                          setDialogState(() => saving = true);
+                          try {
+                            await BackendApiService.reviewProofOfDelivery(
+                              tripId,
+                              status: approved ? 'verified' : 'rejected',
+                              reviewNote: noteController.text.trim(),
+                            );
+                            if (!context.mounted) return;
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  approved
+                                      ? 'POD verified. Billing is ready for review.'
+                                      : 'POD rejected. Billing remains on hold.',
+                                ),
+                              ),
+                            );
+                            _reload();
+                          } catch (error) {
+                            if (!context.mounted) return;
+                            setDialogState(() => saving = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  FormValidation.backendError(
+                                    error,
+                                    'POD review could not be saved.',
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                  icon: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          approved
+                              ? Icons.check_circle_rounded
+                              : Icons.cancel_rounded,
+                        ),
+                  label: Text(saving ? 'Saving...' : title),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } finally {
+      noteController.dispose();
+    }
   }
 
   Future<void> _advanceInvoiceStatus(
@@ -1194,23 +1491,26 @@ class _BillingPageState extends State<BillingPage> {
       await showDialog<void>(
         context: context,
         builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(title),
-            content: SizedBox(
-              width: 460,
+          builder: (context, setDialogState) => Dialog(
+            backgroundColor: AppTheme.transparent,
+            child: _BillingDialogFrame(
+              icon: switch (status) {
+                'approved' => Icons.fact_check_rounded,
+                'rejected' => Icons.report_gmailerrorred_rounded,
+                'issued' => Icons.receipt_long_rounded,
+                'paid' => Icons.verified_rounded,
+                'overdue' => Icons.schedule_rounded,
+                _ => Icons.edit_note_rounded,
+              },
+              title: title,
+              subtitle:
+                  'Transition ${current.toUpperCase()} to ${status.toUpperCase()} for trip $tripId.',
               child: Form(
                 key: formKey,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Transition ${current.toUpperCase()} to ${status.toUpperCase()} for trip $tripId.',
-                      ),
-                    ),
-                    if (requiresText) ...[
-                      const SizedBox(height: 12),
+                    if (requiresText)
                       TextFormField(
                         controller: noteController,
                         maxLines: status == 'paid' ? 1 : 3,
@@ -1221,9 +1521,8 @@ class _BillingPageState extends State<BillingPage> {
                         validator: (value) =>
                             FormValidation.requiredField(fieldLabel, value),
                       ),
-                    ],
                     if (status == 'paid') ...[
-                      const SizedBox(height: 12),
+                      const SizedBox(height: AppTheme.space12),
                       TextFormField(
                         controller: paymentDateController,
                         decoration: const InputDecoration(
@@ -1232,83 +1531,82 @@ class _BillingPageState extends State<BillingPage> {
                         ),
                       ),
                     ],
-                    if (status == 'overdue') ...[
-                      const SizedBox(height: 12),
-                      const Text(
+                    if (status == 'overdue')
+                      Text(
                         'This keeps the invoice collectible and records an overdue audit timestamp.',
+                        style: AppTheme.getBodyStyle(context),
                       ),
-                    ],
                   ],
                 ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: saving ? null : () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton.icon(
-                onPressed: saving
-                    ? null
-                    : () async {
-                        if (!(formKey.currentState?.validate() ?? false)) {
-                          return;
-                        }
-                        final payload = <String, dynamic>{'status': status};
-                        if (requiresText) {
-                          payload[fieldKey] = noteController.text.trim();
-                        }
-                        if (status == 'paid') {
-                          payload['paymentDate'] = paymentDateController.text
-                              .trim();
-                        }
-                        setDialogState(() => saving = true);
-                        try {
-                          await BackendApiService.updateBillingInvoice(
-                            tripId,
-                            payload,
-                          );
-                          if (!context.mounted) {
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (!(formKey.currentState?.validate() ?? false)) {
                             return;
                           }
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Invoice marked ${status.toUpperCase()}.',
-                              ),
-                            ),
-                          );
-                          Navigator.pop(context);
-                          _reload();
-                        } catch (error) {
-                          if (context.mounted) {
+                          final payload = <String, dynamic>{'status': status};
+                          if (requiresText) {
+                            payload[fieldKey] = noteController.text.trim();
+                          }
+                          if (status == 'paid') {
+                            payload['paymentDate'] =
+                                paymentDateController.text.trim();
+                          }
+                          setDialogState(() => saving = true);
+                          try {
+                            await BackendApiService.updateBillingInvoice(
+                              tripId,
+                              payload,
+                            );
+                            if (!context.mounted) {
+                              return;
+                            }
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  FormValidation.backendError(
-                                    error,
-                                    'That invoice status transition is not allowed.',
-                                  ),
+                                  'Invoice marked ${status.toUpperCase()}.',
                                 ),
                               ),
                             );
+                            Navigator.pop(context);
+                            _reload();
+                          } catch (error) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    FormValidation.backendError(
+                                      error,
+                                      'That invoice status transition is not allowed.',
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (context.mounted) {
+                              setDialogState(() => saving = false);
+                            }
                           }
-                        } finally {
-                          if (context.mounted) {
-                            setDialogState(() => saving = false);
-                          }
-                        }
-                      },
-                icon: saving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.check_circle_rounded),
-                label: Text(saving ? 'Saving...' : 'Confirm'),
-              ),
-            ],
+                        },
+                  icon: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.check_circle_rounded),
+                  label: Text(saving ? 'Saving...' : 'Confirm'),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -1324,48 +1622,169 @@ class _BillingPageState extends State<BillingPage> {
     try {
       await showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Void invoice'),
-          content: TextField(
-            controller: reasonController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Required void reason',
-              alignLabelWithHint: true,
+        builder: (context) => Dialog(
+          backgroundColor: AppTheme.transparent,
+          child: _BillingDialogFrame(
+            icon: Icons.block_rounded,
+            title: 'Void invoice',
+            subtitle: 'Trip $tripId',
+            child: TextField(
+              controller: reasonController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Required void reason',
+                alignLabelWithHint: true,
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () async {
-                final reason = reasonController.text.trim();
-                if (tripId.isEmpty || reason.isEmpty) {
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: () async {
+                  final reason = reasonController.text.trim();
+                  if (tripId.isEmpty || reason.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('A void reason is required.')),
+                    );
+                    return;
+                  }
+                  await BackendApiService.voidBillingInvoice(tripId, reason);
+                  if (!context.mounted) {
+                    return;
+                  }
+                  Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('A void reason is required.')),
+                    const SnackBar(content: Text('Invoice voided.')),
                   );
-                  return;
-                }
-                await BackendApiService.voidBillingInvoice(tripId, reason);
-                if (!context.mounted) {
-                  return;
-                }
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Invoice voided.')),
-                );
-                _reload();
-              },
-              icon: const Icon(Icons.block_rounded),
-              label: const Text('Void'),
-            ),
-          ],
+                  _reload();
+                },
+                icon: const Icon(Icons.block_rounded),
+                label: const Text('Void'),
+              ),
+            ],
+          ),
         ),
       );
     } finally {
       reasonController.dispose();
+    }
+  }
+
+  Future<void> _showManualTollDialog(
+    Map<String, dynamic> invoice,
+    bool isDark,
+  ) async {
+    final tripId = (invoice['tripId'] ?? '').toString();
+    final amountController = TextEditingController();
+    final descriptionController = TextEditingController(text: 'Toll fee');
+    final receiptController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var saving = false;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => Dialog(
+            backgroundColor: AppTheme.transparent,
+            child: _BillingDialogFrame(
+              icon: Icons.add_road_rounded,
+              title: 'Add toll evidence',
+              subtitle: 'Trip $tripId',
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _amountField(amountController, 'Toll amount'),
+                    const SizedBox(height: AppTheme.space12),
+                    TextFormField(
+                      controller: descriptionController,
+                      decoration: const InputDecoration(
+                        labelText: 'Description',
+                        helperText:
+                            'Example: NLEX/SLEX toll receipt or route toll pass-through.',
+                      ),
+                    ),
+                    const SizedBox(height: AppTheme.space12),
+                    TextFormField(
+                      controller: receiptController,
+                      decoration: const InputDecoration(
+                        labelText: 'Receipt reference',
+                        helperText:
+                            'Optional receipt number or document reference.',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          if (!(formKey.currentState?.validate() ?? false)) {
+                            return;
+                          }
+                          final amount = _amountValue(amountController.text);
+                          if (amount <= 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Toll amount must be greater than zero.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          setDialogState(() => saving = true);
+                          try {
+                            await BackendApiService.addBillingManualToll(tripId, {
+                              'amount': amount,
+                              'description': descriptionController.text.trim(),
+                              'receiptReference': receiptController.text.trim(),
+                              'source': 'manual',
+                            });
+                            if (!mounted) return;
+                            Navigator.pop(context);
+                            _reload();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Manual toll evidence added.'),
+                              ),
+                            );
+                          } catch (error) {
+                            setDialogState(() => saving = false);
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(error.toString())),
+                            );
+                          }
+                        },
+                  icon: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add_road_rounded),
+                  label: const Text('Save Toll'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } finally {
+      amountController.dispose();
+      descriptionController.dispose();
+      receiptController.dispose();
     }
   }
 
@@ -1375,6 +1794,47 @@ class _BillingPageState extends State<BillingPage> {
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       validator: (value) => FormValidation.nonNegativeNumber(label, value),
       decoration: InputDecoration(labelText: label, prefixText: '₱ '),
+    );
+  }
+
+  Widget _dialogAmountCompareRow(
+    BuildContext context,
+    String label,
+    String value, {
+    bool emphasized = false,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppTheme.space12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfacePanel(context),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(color: AppTheme.borderDefault(context)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: AppTheme.getCaptionStyle(context).copyWith(
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textMuted(context),
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: AppTheme.getHeadingStyle(
+              context,
+              fontSize: emphasized ? 20 : 17,
+            ).copyWith(
+              color: emphasized
+                  ? AppTheme.colorFF10B981
+                  : AppTheme.textPrimary(context),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1943,7 +2403,7 @@ class _BillingPageState extends State<BillingPage> {
             child: _InvoiceTableHeader('TOTAL', alignRight: true),
           ),
           Expanded(flex: 11, child: _InvoiceTableHeader('STATUS')),
-          Expanded(flex: 11, child: _InvoiceTableHeader('POD GATE')),
+          Expanded(flex: 11, child: _InvoiceTableHeader('STAGE')),
           Expanded(flex: 10, child: _InvoiceTableHeader('ACTIONS')),
         ],
       ),
@@ -1956,8 +2416,12 @@ class _BillingPageState extends State<BillingPage> {
     int index,
   ) {
     final status = (invoice['status'] ?? '').toString().toLowerCase();
+    final podStatus = (invoice['podReviewStatus'] ?? invoice['podStatus'] ?? '')
+        .toString()
+        .toLowerCase();
     final podReady = invoice['podReady'] == true;
     final editable = CrudPermissions.canEdit(CrudEntity.invoices);
+    final canReviewPod = editable && podStatus == 'submitted';
     final canApprove = editable && status == 'draft' && podReady;
     final canReject = editable && {'draft', 'approved'}.contains(status);
     final canIssue = editable && status == 'approved' && podReady;
@@ -2043,10 +2507,9 @@ class _BillingPageState extends State<BillingPage> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: _StatusDotPill(
-                    label: podReady ? 'Ready' : 'POD hold',
-                    color: podReady
-                        ? AppTheme.colorFF10B981
-                        : AppTheme.colorFFF59E0B,
+                    label: (invoice['billingStageLabel'] ?? (podReady ? 'Ready' : 'POD hold'))
+                        .toString(),
+                    color: _billingStageColor(invoice),
                   ),
                 ),
               ),
@@ -2068,6 +2531,10 @@ class _BillingPageState extends State<BillingPage> {
                     _advanceInvoiceStatus(invoice, 'paid');
                   } else if (value == 'overdue') {
                     _advanceInvoiceStatus(invoice, 'overdue');
+                  } else if (value == 'verify_pod') {
+                    _reviewPod(invoice, approved: true);
+                  } else if (value == 'reject_pod') {
+                    _reviewPod(invoice, approved: false);
                   } else if (value == 'void') {
                     _showVoidInvoiceDialog(invoice);
                   } else if (value == 'edit') {
@@ -2085,6 +2552,18 @@ class _BillingPageState extends State<BillingPage> {
                     value: 'view',
                     child: Text('View Details'),
                   ),
+                  if (editable)
+                    PopupMenuItem(
+                      value: 'verify_pod',
+                      enabled: canReviewPod,
+                      child: const Text('Verify POD'),
+                    ),
+                  if (editable)
+                    PopupMenuItem(
+                      value: 'reject_pod',
+                      enabled: canReviewPod,
+                      child: const Text('Reject POD'),
+                    ),
                   if (editable)
                     PopupMenuItem(
                       value: 'approved',
@@ -2207,6 +2686,20 @@ class _BillingPageState extends State<BillingPage> {
         ],
       ),
     );
+  }
+
+  Color _billingStageColor(Map<String, dynamic> invoice) {
+    final stage = (invoice['billingStage'] ?? '').toString().toLowerCase();
+    final status = (invoice['status'] ?? '').toString().toLowerCase();
+    return switch (stage.isNotEmpty ? stage : status) {
+      'paid' => AppTheme.colorFF10B981,
+      'issued' || 'approved' || 'ready_for_review' => AppTheme.colorFF4B7BE5,
+      'pod_under_review' || 'waiting_for_pod' || 'review_required' || 'draft_estimate' =>
+        AppTheme.colorFFF59E0B,
+      'pod_rejected' || 'rejected' || 'overdue' => AppTheme.colorFFEF4444,
+      'voided' => AppTheme.colorFF64748B,
+      _ => AppTheme.colorFF4B7BE5,
+    };
   }
 
   Widget _buildBillingScopeNotice(
@@ -2344,6 +2837,128 @@ class _BillingPageState extends State<BillingPage> {
             color: isDark
                 ? AppTheme.white.withValues(alpha: 0.08)
                 : AppTheme.black.withValues(alpha: 0.08),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BillingDialogFrame extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget child;
+  final List<Widget> actions;
+
+  const _BillingDialogFrame({
+    required this.icon,
+    required this.title,
+    required this.child,
+    required this.actions,
+    this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final radius = BorderRadius.circular(24);
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppTheme.surfacePanel(context),
+          borderRadius: radius,
+          border: Border.all(color: AppTheme.borderDefault(context)),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.black.withValues(alpha: isDark ? 0.45 : 0.12),
+              blurRadius: 26,
+              offset: const Offset(0, 18),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(22, 18, 14, 18),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppTheme.primaryBlue, AppTheme.colorFF4B7BE5],
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: AppTheme.white.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(icon, color: AppTheme.white, size: 22),
+                    ),
+                    const SizedBox(width: AppTheme.space12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            title,
+                            style: AppTheme.getHeadingStyle(
+                              context,
+                              fontSize: 20,
+                            ).copyWith(color: AppTheme.white),
+                          ),
+                          if (subtitle != null &&
+                              subtitle!.trim().isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              subtitle!,
+                              style: AppTheme.getCaptionStyle(context).copyWith(
+                                color: AppTheme.white.withValues(alpha: 0.78),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.maybePop(context),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppTheme.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(22),
+                  child: child,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.fromLTRB(22, 0, 22, 20),
+                child: Wrap(
+                  spacing: AppTheme.space10,
+                  runSpacing: AppTheme.space10,
+                  alignment: WrapAlignment.end,
+                  children: actions,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -2978,6 +3593,14 @@ List<Map<String, dynamic>> _listOfMaps(dynamic raw) {
   return raw
       .whereType<Map>()
       .map((item) => item.map((key, value) => MapEntry(key.toString(), value)))
+      .toList();
+}
+
+List<String> _stringList(dynamic raw) {
+  if (raw is! List) return [];
+  return raw
+      .map((item) => item.toString().trim())
+      .where((item) => item.isNotEmpty)
       .toList();
 }
 

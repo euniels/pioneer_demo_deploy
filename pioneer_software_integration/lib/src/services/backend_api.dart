@@ -1819,6 +1819,47 @@ class BackendApiService {
     return response;
   }
 
+  static Future<Map<String, dynamic>> getTripBillingPreview(
+    String tripId, {
+    bool forceRefresh = false,
+  }) async {
+    return _getDataMap(
+      '/fleet/trips/$tripId/billing-preview',
+      cacheTtl: const Duration(seconds: 30),
+      forceRefresh: forceRefresh,
+    );
+  }
+
+  static Future<Map<String, dynamic>> saveTripManifest(
+    String tripId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'PATCH',
+      '/fleet/trips/$tripId/manifest',
+      payload,
+    );
+    clearCache('/fleet/trips');
+    clearCache('/billing/invoices');
+    clearCache('/billing/soa');
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> addBillingManualToll(
+    String tripId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/billing/invoices/$tripId/tolls/manual',
+      payload,
+    );
+    clearCache('/billing/invoices');
+    clearCache('/billing/soa');
+    clearCache('/fleet/dashboard/summary');
+    return response;
+  }
+
   static Future<Map<String, dynamic>> getStatementOfAccounts({
     bool forceRefresh = false,
   }) async {
@@ -1987,6 +2028,30 @@ class BackendApiService {
         ...payload,
       };
     }
+  }
+
+  static Future<Map<String, dynamic>> reviewProofOfDelivery(
+    String tripId, {
+    required String status,
+    String? reviewNote,
+  }) async {
+    final response = await _sendJsonRequest(
+      'PATCH',
+      '/fleet/pod/$tripId/review',
+      {
+        'status': status,
+        if (reviewNote != null && reviewNote.trim().isNotEmpty)
+          'reviewNote': reviewNote.trim(),
+      },
+    );
+    clearCache('/fleet/trips');
+    clearCache('/fleet/summary');
+    clearCache('/fleet/summary/live');
+    clearCache('/fleet/live');
+    clearCache('/billing/invoices');
+    clearCache('/billing/soa');
+    clearCache('/fleet/dashboard/summary');
+    return response;
   }
 
   static Future<T> loadWithWarmRetry<T>({

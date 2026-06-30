@@ -1002,7 +1002,82 @@ class _ClientTrackingPageState extends State<ClientTrackingPage>
           const SizedBox(height: AppTheme.space16),
           _buildCargoCondition(context, data, pod),
           const SizedBox(height: AppTheme.space16),
+          _buildClientBillingStatus(context, data),
+          const SizedBox(height: AppTheme.space16),
           _buildProofOfDelivery(context, data, pod),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClientBillingStatus(
+    BuildContext context,
+    Map<String, dynamic> data,
+  ) {
+    final invoice = _mapOf(data['invoiceSummary']);
+    final status = (invoice['publicStatus'] ?? 'Invoice being prepared')
+        .toString();
+    final message = (invoice['message'] ??
+            'Accounting will release invoice details after internal review.')
+        .toString();
+    final invoiceNumber = (invoice['invoiceNumber'] ?? '').toString().trim();
+    final amount = (invoice['amountLabel'] ?? invoice['amount'] ?? '')
+        .toString()
+        .trim();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppTheme.space16),
+      decoration: BoxDecoration(
+        color: AppTheme.getCardBg(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.getBorderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.receipt_long_rounded,
+                color: AppTheme.primaryBlue,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Billing status',
+                  style: AppTheme.getHeadingStyle(context, fontSize: 18),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            status,
+            style: AppTheme.getDashboardBodyStyle(context).copyWith(
+              fontWeight: FontWeight.w900,
+              color: AppTheme.primaryBlue,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(message, style: AppTheme.getDashboardSecondaryStyle(context)),
+          if (invoiceNumber.isNotEmpty || amount.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (invoiceNumber.isNotEmpty)
+                  _ClientSafeBillingChip(
+                    label: 'Invoice',
+                    value: invoiceNumber,
+                  ),
+                if (amount.isNotEmpty)
+                  _ClientSafeBillingChip(label: 'Amount', value: amount),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -1418,6 +1493,35 @@ class _ClientDetailRow extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ClientSafeBillingChip extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _ClientSafeBillingChip({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTheme.space10,
+        vertical: AppTheme.space6,
+      ),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        '$label: $value',
+        style: AppTheme.getCaptionStyle(context).copyWith(
+          color: AppTheme.primaryBlue,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }

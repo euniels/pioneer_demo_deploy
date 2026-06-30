@@ -22,10 +22,12 @@ void main() {
     expect(source, contains('Outstanding Balance'));
     expect(source, contains('Overdue Amount'));
     expect(source, contains("_InvoiceTableHeader('INVOICE NO.')"));
-    expect(source, contains("_InvoiceTableHeader('VAT'"));
+    expect(source, contains("_InvoiceTableHeader('STAGE'"));
     expect(source, contains('Line Items'));
     expect(source, contains('ERP Reference Details'));
     expect(source, contains('Mark Paid'));
+    expect(source, contains('Verify POD'));
+    expect(source, contains('Reject POD'));
     expect(source, contains("label: const Text('Print')"));
     expect(source, contains("return '₱"));
   });

@@ -15,7 +15,6 @@ import '../services/fleet_sync_service.dart';
 import '../services/page_cache_service.dart';
 import '../services/trips_store.dart';
 import '../services/vehicles_store.dart';
-import '../services/billing_store.dart';
 import '../services/notification_service.dart';
 import '../services/soa_exporter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -2585,12 +2584,14 @@ class TripDetailsPage extends StatefulWidget {
 class _TripDetailsPageState extends State<TripDetailsPage> {
   late Map<String, dynamic> trip;
   late Future<Map<String, dynamic>> _tripMapFuture;
+  late Future<Map<String, dynamic>> _billingPreviewFuture;
 
   @override
   void initState() {
     super.initState();
     trip = Map<String, dynamic>.from(widget.trip);
     _tripMapFuture = _loadTripMap(forceRefresh: true);
+    _billingPreviewFuture = _loadBillingPreview(forceRefresh: true);
     tripsNotifier.addListener(_onTripsChanged);
   }
 
@@ -2615,6 +2616,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       setState(() {
         trip = updatedTrip!;
         _tripMapFuture = _loadTripMap(forceRefresh: true);
+        _billingPreviewFuture = _loadBillingPreview(forceRefresh: true);
       });
     }
   }
@@ -2626,6 +2628,20 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     }
 
     return BackendApiService.getTripMap(tripId, forceRefresh: forceRefresh);
+  }
+
+  Future<Map<String, dynamic>> _loadBillingPreview({
+    bool forceRefresh = false,
+  }) {
+    final tripId = trip['tripId']?.toString().trim() ?? '';
+    if (tripId.isEmpty) {
+      return Future.value(const <String, dynamic>{});
+    }
+
+    return BackendApiService.getTripBillingPreview(
+      tripId,
+      forceRefresh: forceRefresh,
+    );
   }
 
   Map<String, dynamic>? _cachedTripMap() {
@@ -3793,6 +3809,8 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                       const SizedBox(height: 24),
                       _buildWorkflowTimeline(isDark, isMobile),
                       const SizedBox(height: 24),
+                      _buildBillingReadinessSection(isDark, isMobile),
+                      const SizedBox(height: 24),
                       FutureBuilder<Map<String, dynamic>>(
                         future: _tripMapFuture,
                         initialData: _cachedTripMap(),
@@ -4075,6 +4093,59 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         ),
       ],
     );
+  }
+
+  Widget _buildBillingReadinessSection(bool isDark, bool isMobile) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _billingPreviewFuture,
+      builder: (context, snapshot) {
+        final hasPreview = snapshot.hasData && (snapshot.data ?? {}).isNotEmpty;
+        final preview = snapshot.data ?? const <String, dynamic>{};
+        final stage = (preview['billingStageLabel'] ??
+                preview['collectionReadiness'] ??
+                _fallbackBillingStageLabel())
+            .toString();
+        final podStatus =
+            (preview['podReviewStatus'] ?? preview['podStatus'] ?? 'pending')
+                .toString();
+        final amount =
+            (preview['totalWithVat'] ?? preview['amount'] ?? trip['amount'] ?? 'N/A')
+                .toString();
+        final nextAction = hasPreview
+            ? (preview['billingDecision'] ??
+                    'Accounting reviews the draft after POD verification.')
+                .toString()
+            : 'Draft billing starts when the trip has enough dispatch, amount, and route evidence.';
+
+        return _buildSection(isDark, 'Billing Readiness', [
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData)
+            LinearProgressIndicator(
+              minHeight: 3,
+              backgroundColor: AppTheme.getBorderColor(context),
+            )
+          else ...[
+            _buildInfoRow('Stage', stage, isDark, isMobile),
+            _buildInfoRow('POD review', podStatus, isDark, isMobile),
+            _buildInfoRow('Draft amount', amount, isDark, isMobile),
+            _buildInfoRow('Next accounting step', nextAction, isDark, isMobile),
+          ],
+        ], isMobile);
+      },
+    );
+  }
+
+  String _fallbackBillingStageLabel() {
+    final status = (trip['status'] ?? '').toString().toLowerCase();
+    if (status.contains('completed')) {
+      return 'Waiting for verified POD';
+    }
+    if (status.contains('progress') ||
+        status.contains('trip') ||
+        status.contains('dispatch')) {
+      return 'Draft estimate in progress';
+    }
+    return 'Not started';
   }
 
   Widget _buildWorkflowTimeline(bool isDark, bool isMobile) {
@@ -4657,83 +4728,21 @@ class _UploadProofDialogState extends State<_UploadProofDialog> {
                             height: 48,
                             child: ElevatedButton(
                               onPressed: () async {
-                                // Complete and Bill action - Create new billing invoice
                                 final trip = widget.trip;
-                                final amountStr = trip['amount']
-                                    .replaceAll('PHP ', '')
-                                    .replaceAll(',', '');
-                                final totalAmount =
-                                    double.tryParse(amountStr) ?? 0;
-
-                                // Calculate charges that total to the amount
-                                final baseRate = totalAmount * 0.40;
-                                final distanceCost = totalAmount * 0.25;
-                                final fuelCost = totalAmount * 0.15;
-                                final driverPay = totalAmount * 0.08;
-                                final helperPay = totalAmount * 0.05;
-                                final tollFees = totalAmount * 0.02;
-
-                                // Subtotal is main service charges
-                                final subtotal =
-                                    baseRate + distanceCost + fuelCost;
-                                final serviceFee =
-                                    totalAmount -
-                                    subtotal -
-                                    (totalAmount * 0.12);
-                                final vat = totalAmount * 0.12;
-
-                                // Generate invoice ID from trip ID
-                                final tripNumber = trip['tripId'].replaceAll(
-                                  'TRP-',
-                                  '',
-                                );
-                                final invoiceId = 'INV-$tripNumber';
-
-                                // Create new billing record
-                                final newBilling = {
-                                  'id': invoiceId,
-                                  'invoiceNumber': invoiceId,
-                                  'client': trip['customer'],
-                                  'tripId': trip['tripId'],
-                                  'issueDate': DateTime.now().toString().split(
-                                    ' ',
-                                  )[0],
-                                  'dueDate': null,
-                                  'status': 'sent',
-                                  'amount': trip['amount'],
-                                  'baseRate':
-                                      'PHP ${baseRate.toStringAsFixed(2)}',
-                                  'distanceCost':
-                                      'PHP ${distanceCost.toStringAsFixed(2)}',
-                                  'fuelCost':
-                                      'PHP ${fuelCost.toStringAsFixed(2)}',
-                                  'driverPay':
-                                      'PHP ${driverPay.toStringAsFixed(2)}',
-                                  'helperPay':
-                                      'PHP ${helperPay.toStringAsFixed(2)}',
-                                  'tollFees':
-                                      'PHP ${tollFees.toStringAsFixed(2)}',
-                                  'parking': 'PHP 50.00',
-                                  'maintenanceAlloc':
-                                      'PHP ${(totalAmount * 0.04).toStringAsFixed(2)}',
-                                  'insuranceAlloc':
-                                      'PHP ${(totalAmount * 0.02).toStringAsFixed(2)}',
-                                  'subtotal':
-                                      'PHP ${subtotal.toStringAsFixed(2)}',
-                                  'serviceFee':
-                                      'PHP ${serviceFee.toStringAsFixed(2)}',
-                                  'vat': 'PHP ${vat.toStringAsFixed(2)}',
-                                  'discount': '-PHP 0',
-                                };
-
-                                // Update trip status to completed and add billing
-
                                 try {
                                   await completeTripAndFreeResources(
                                     trip['tripId'],
                                   );
-                                  addBilling(newBilling);
-                                  if (context.mounted) Navigator.pop(context);
+                                  if (!context.mounted) return;
+                                  Navigator.pop(context);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      behavior: SnackBarBehavior.floating,
+                                      content: Text(
+                                        'Trip completed. POD is queued for admin review before billing approval.',
+                                      ),
+                                    ),
+                                  );
                                 } catch (error) {
                                   if (!context.mounted) return;
                                   ScaffoldMessenger.of(context).showSnackBar(
@@ -4756,7 +4765,7 @@ class _UploadProofDialogState extends State<_UploadProofDialog> {
                                 ),
                               ),
                               child: const Text(
-                                'Complete and Bill',
+                                'Submit for Review',
                                 style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
@@ -4780,7 +4789,7 @@ class _UploadProofDialogState extends State<_UploadProofDialog> {
 
 // ADMIN APPROVAL SIGN-OFF MODAL
 // Shows driver's submission info + client signature status + admin signature pad.
-// On Approve: calls completeTripAndFreeResources + addBilling + notifies driver.
+// On Approve: calls completeTripAndFreeResources and leaves invoicing to backend billing review.
 // On Return:  reverts trip to 'dispatched' + notifies driver.
 class _ApprovalSignOffDialog extends StatefulWidget {
   final Map<String, dynamic> trip;
@@ -4815,24 +4824,8 @@ class _ApprovalSignOffDialogState extends State<_ApprovalSignOffDialog> {
     await Future.delayed(const Duration(milliseconds: 600));
 
     final trip = widget.trip;
-    final amountStr = trip['amount']
-        .toString()
-        .replaceAll('PHP ', '')
-        .replaceAll(',', '');
-    final totalAmount = double.tryParse(amountStr) ?? 0;
-    final baseRate = totalAmount * 0.40;
-    final distanceCost = totalAmount * 0.25;
-    final fuelCost = totalAmount * 0.15;
-    final driverPay = totalAmount * 0.08;
-    final helperPay = totalAmount * 0.05;
-    final tollFees = totalAmount * 0.02;
-    final subtotal = baseRate + distanceCost + fuelCost;
-    final serviceFee = totalAmount - subtotal - (totalAmount * 0.12);
-    final vat = totalAmount * 0.12;
-    final tripNumber = trip['tripId'].toString().replaceAll('TRP-', '');
-    final invoiceId = 'INV-$tripNumber';
 
-    // Complete trip + free resources + create billing invoice
+    // Complete trip; backend billing automation creates/refreshes the draft invoice.
     try {
       await completeTripAndFreeResources(trip['tripId'] as String);
     } catch (error) {
@@ -4851,29 +4844,6 @@ class _ApprovalSignOffDialogState extends State<_ApprovalSignOffDialog> {
       );
       return;
     }
-    addBilling({
-      'id': invoiceId,
-      'invoiceNumber': invoiceId,
-      'client': trip['customer'],
-      'tripId': trip['tripId'],
-      'issueDate': DateTime.now().toString().split(' ')[0],
-      'dueDate': null,
-      'status': 'sent',
-      'amount': trip['amount'],
-      'baseRate': 'PHP ${baseRate.toStringAsFixed(2)}',
-      'distanceCost': 'PHP ${distanceCost.toStringAsFixed(2)}',
-      'fuelCost': 'PHP ${fuelCost.toStringAsFixed(2)}',
-      'driverPay': 'PHP ${driverPay.toStringAsFixed(2)}',
-      'helperPay': 'PHP ${helperPay.toStringAsFixed(2)}',
-      'tollFees': 'PHP ${tollFees.toStringAsFixed(2)}',
-      'parking': 'PHP 50.00',
-      'maintenanceAlloc': 'PHP ${(totalAmount * 0.04).toStringAsFixed(2)}',
-      'insuranceAlloc': 'PHP ${(totalAmount * 0.02).toStringAsFixed(2)}',
-      'subtotal': 'PHP ${subtotal.toStringAsFixed(2)}',
-      'serviceFee': 'PHP ${serviceFee.toStringAsFixed(2)}',
-      'vat': 'PHP ${vat.toStringAsFixed(2)}',
-      'discount': '-PHP 0',
-    });
 
     // Notify driver
     final svc = NotificationService.instance;
@@ -4883,7 +4853,7 @@ class _ApprovalSignOffDialogState extends State<_ApprovalSignOffDialog> {
         title: 'Trip Approved \u2014 ${trip['tripId']}',
         message:
             'Your delivery to ${trip['customer']} has been approved and completed. '
-            'Amount: ${trip['amount']}.',
+            'Accounting will review billing after POD verification.',
         time: 'Just now',
         timestamp: DateTime.now(),
         category: NotificationCategory.trip,

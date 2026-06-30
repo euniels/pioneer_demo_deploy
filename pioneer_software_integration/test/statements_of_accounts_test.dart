@@ -61,5 +61,8 @@ void main() {
     expect(source, contains('All invoice dates'));
     expect(source, contains("label: const Text('Clear')"));
     expect(source, contains('SO / ERP ref'));
+    expect(source, contains('_statementEligibleInvoice'));
+    expect(source, contains("raw == 'issued'"));
+    expect(source, contains("raw == 'paid'"));
   });
 }
