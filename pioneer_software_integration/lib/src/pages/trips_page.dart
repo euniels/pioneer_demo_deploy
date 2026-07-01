@@ -1505,9 +1505,7 @@ class _TripsPageState extends State<TripsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          content: Text(
-            'Trip advanced to workflow phase $next.',
-          ),
+          content: Text('Trip advanced to workflow phase $next.'),
         ),
       );
     } catch (error) {
@@ -2640,6 +2638,40 @@ class _TripStopReport {
   final IconData icon;
 }
 
+class _TripReplayMetrics {
+  const _TripReplayMetrics({
+    required this.total,
+    required this.driving,
+    required this.stopped,
+    required this.idle,
+  });
+
+  final Duration total;
+  final Duration driving;
+  final Duration stopped;
+  final Duration idle;
+}
+
+class _TripReplayEvent {
+  const _TripReplayEvent({
+    required this.title,
+    required this.detail,
+    required this.timestamp,
+    required this.position,
+    required this.color,
+    required this.icon,
+    required this.sourceLabel,
+  });
+
+  final String title;
+  final String detail;
+  final DateTime? timestamp;
+  final gmaps.LatLng? position;
+  final Color color;
+  final IconData icon;
+  final String sourceLabel;
+}
+
 class _TripSummaryCard extends StatelessWidget {
   const _TripSummaryCard({required this.data, required this.isDark});
 
@@ -2737,6 +2769,10 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
   late Map<String, dynamic> trip;
   late Future<Map<String, dynamic>> _tripMapFuture;
   late Future<Map<String, dynamic>> _billingPreviewFuture;
+  Timer? _tripReplayTimer;
+  double _tripReplayProgress = 0.0;
+  bool _tripReplayPlaying = false;
+  double _tripReplaySpeed = 20.0;
 
   @override
   void initState() {
@@ -2749,6 +2785,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
 
   @override
   void dispose() {
+    _tripReplayTimer?.cancel();
     tripsNotifier.removeListener(_onTripsChanged);
     super.dispose();
   }
@@ -2841,7 +2878,10 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     final tripDistanceKm = _distanceKmFor(
       historyPoints.map((point) => point.position).toList(),
     );
+    final replayMetrics = _tripReplayMetrics(historyPoints);
     final stopReports = _tripStopReports(historyPoints, routeStops);
+    final replayEvents = _tripReplayEvents(data, actualTrailRaw, historyPoints);
+    final playbackPoint = _playbackPointFor(historyPoints);
     final completed =
         data['status']?.toString().trim().toLowerCase() == 'completed';
     final canRenderMap = actualTrail.length > 1 || plannedPath.length > 1;
@@ -2879,8 +2919,9 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       ], isMobile);
     }
 
+    final mapHeight = isMobile ? 300.0 : 420.0;
     final map = Container(
-      height: isMobile ? 280 : 380,
+      height: mapHeight,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
@@ -2914,6 +2955,20 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         markers: {
           if (historyPoints.isNotEmpty)
             ..._tripHistoryMarkers(historyPoints, completed),
+          if (replayEvents.isNotEmpty) ..._tripEventMarkers(replayEvents),
+          if (playbackPoint != null)
+            gmaps.Marker(
+              markerId: const gmaps.MarkerId('trip-playback-position'),
+              position: playbackPoint.position,
+              icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                gmaps.BitmapDescriptor.hueAzure,
+              ),
+              infoWindow: gmaps.InfoWindow(
+                title: 'Replay position',
+                snippet:
+                    '${_formatHistoryTime(playbackPoint.timestamp)} - ${playbackPoint.pointName}',
+              ),
+            ),
           if (historyPoints.isEmpty && plannedPath.isNotEmpty)
             gmaps.Marker(
               markerId: const gmaps.MarkerId('planned-start'),
@@ -2943,6 +2998,8 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       isMobile: isMobile,
       historyPoints: historyPoints,
       stopReports: stopReports,
+      replayEvents: replayEvents,
+      metrics: replayMetrics,
       distanceKm: tripDistanceKm,
     );
 
@@ -2960,7 +3017,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           children: [
             Expanded(flex: 7, child: map),
             const SizedBox(width: 14),
-            SizedBox(width: 350, child: replayPanel),
+            SizedBox(width: 360, height: mapHeight, child: replayPanel),
           ],
         ),
       const SizedBox(height: 12),
@@ -3013,6 +3070,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         plannedCount: plannedPath.length,
         stopCount: routeStops.length,
         reportCount: stopReports.length,
+        eventCount: replayEvents.length,
       ),
       if (routeStops.isNotEmpty) ...[
         const SizedBox(height: 14),
@@ -3111,6 +3169,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     required int plannedCount,
     required int stopCount,
     required int reportCount,
+    required int eventCount,
   }) {
     return Container(
       width: double.infinity,
@@ -3157,6 +3216,13 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
             label: 'Frontend analysis',
             value: '$reportCount reports',
             color: AppTheme.colorFF7C3AED,
+          ),
+          _tripSourceBadge(
+            isDark: isDark,
+            icon: Icons.warning_amber_rounded,
+            label: 'GeoTab events',
+            value: '$eventCount faults',
+            color: AppTheme.colorFFE74C3C,
           ),
         ],
       ),
@@ -3243,6 +3309,8 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     required bool isMobile,
     required List<_TripHistoryPoint> historyPoints,
     required List<_TripStopReport> stopReports,
+    required List<_TripReplayEvent> replayEvents,
+    required _TripReplayMetrics metrics,
     required double distanceKm,
   }) {
     final samples = _timelineSamples(historyPoints);
@@ -3258,167 +3326,239 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
               : AppTheme.black.withValues(alpha: 0.08),
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(10),
+      child: SingleChildScrollView(
+        primary: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.timeline_rounded,
+                    color: AppTheme.colorFF4B7BE5,
+                    size: 16,
+                  ),
                 ),
-                child: const Icon(
-                  Icons.timeline_rounded,
-                  color: AppTheme.colorFF4B7BE5,
-                  size: 16,
-                ),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'GeoTab Trip Replay',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'GeoTab Trip Replay',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          color: isDark
+                              ? AppTheme.white
+                              : AppTheme.colorFF1F2937,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'GPS checkpoints, timing, speed, and stop analysis',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                      const SizedBox(height: 2),
+                      Text(
+                        'GPS checkpoints, timing, speed, and stop analysis',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.09),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.18),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.09),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.18),
+              child: Text(
+                historyPoints.isEmpty
+                    ? 'Awaiting GeoTab GPS points for this trip replay.'
+                    : 'Timeline names are generated from GeoTab timestamps, addresses, speed logs, and nearby route stops.',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.32,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? AppTheme.gray200 : AppTheme.colorFF1F2937,
+                ),
               ),
             ),
-            child: Text(
-              historyPoints.isEmpty
-                  ? 'Awaiting GeoTab GPS points for this trip replay.'
-                  : 'Timeline names are generated from GeoTab timestamps, addresses, speed logs, and nearby route stops.',
-              style: TextStyle(
-                fontSize: 11.5,
-                height: 1.32,
-                fontWeight: FontWeight.w700,
-                color: isDark ? AppTheme.gray200 : AppTheme.colorFF1F2937,
-              ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.route_rounded,
+                  distanceKm > 0 ? '${distanceKm.toStringAsFixed(1)} km' : '--',
+                  AppTheme.colorFF0EA5E9,
+                  label: 'Driven',
+                ),
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.location_searching_rounded,
+                  '${historyPoints.length}',
+                  AppTheme.colorFF27AE60,
+                  label: 'GPS logs',
+                ),
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.warning_amber_rounded,
+                  '${replayEvents.length}',
+                  AppTheme.colorFFE74C3C,
+                  label: 'Faults',
+                ),
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.verified_rounded,
+                  historyPoints.isEmpty ? 'Pending' : 'GeoTab',
+                  AppTheme.colorFF7C3AED,
+                  label: 'Source',
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _tripReplayMiniStat(
-                isDark,
-                Icons.route_rounded,
-                distanceKm > 0 ? '${distanceKm.toStringAsFixed(1)} km' : '--',
-                AppTheme.colorFF0EA5E9,
-                label: 'Driven',
-              ),
-              _tripReplayMiniStat(
-                isDark,
-                Icons.location_searching_rounded,
-                '${historyPoints.length}',
-                AppTheme.colorFF27AE60,
-                label: 'GPS logs',
-              ),
-              _tripReplayMiniStat(
-                isDark,
-                Icons.warning_amber_rounded,
-                '${stopReports.length}',
-                AppTheme.colorFFF59E0B,
-                label: 'Reports',
-              ),
-              _tripReplayMiniStat(
-                isDark,
-                Icons.verified_rounded,
-                historyPoints.isEmpty ? 'Pending' : 'GeoTab',
-                AppTheme.colorFF7C3AED,
-                label: 'Source',
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'GPS Checkpoints',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.timer_rounded,
+                  _formatDuration(metrics.total),
+                  AppTheme.colorFF4B7BE5,
+                  label: 'Total',
+                ),
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.local_shipping_rounded,
+                  _formatDuration(metrics.driving),
+                  AppTheme.colorFF27AE60,
+                  label: 'Driving',
+                ),
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.pause_circle_filled_rounded,
+                  _formatDuration(metrics.stopped),
+                  AppTheme.colorFFF59E0B,
+                  label: 'Stopped',
+                ),
+                _tripReplayMiniStat(
+                  isDark,
+                  Icons.power_settings_new_rounded,
+                  _formatDuration(metrics.idle),
+                  AppTheme.colorFF7C3AED,
+                  label: 'Idle',
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 8),
-          if (samples.isEmpty)
+            const SizedBox(height: 12),
+            _buildTripPlaybackControls(
+              isDark: isDark,
+              historyPoints: historyPoints,
+              metrics: metrics,
+            ),
+            const SizedBox(height: 14),
             Text(
-              'No timestamped GPS replay is available for this trip yet.',
+              'GPS Checkpoints',
               style: TextStyle(
                 fontSize: 12,
-                height: 1.35,
-                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                fontWeight: FontWeight.w900,
+                color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
               ),
-            )
-          else
-            ...samples.map((point) => _tripReplayTimelineRow(point, isDark)),
-          const SizedBox(height: 12),
-          Divider(
-            height: 1,
-            color: isDark
-                ? AppTheme.white.withValues(alpha: 0.08)
-                : AppTheme.black.withValues(alpha: 0.08),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Stop And Idle Analysis',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-              color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
             ),
-          ),
-          const SizedBox(height: 8),
-          if (stopReports.isEmpty)
-            _tripReplayReportRow(
-              _TripStopReport(
-                title: 'No long stop detected',
-                detail:
-                    'Frontend analysis did not find an extended stop in the GeoTab GPS trail.',
-                timestampLabel: 'Clear',
-                color: AppTheme.colorFF27AE60,
-                icon: Icons.check_circle_rounded,
+            const SizedBox(height: 8),
+            if (samples.isEmpty)
+              Text(
+                'No timestamped GPS replay is available for this trip yet.',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                ),
+              )
+            else
+              ...samples.map((point) => _tripReplayTimelineRow(point, isDark)),
+            const SizedBox(height: 12),
+            Divider(
+              height: 1,
+              color: isDark
+                  ? AppTheme.white.withValues(alpha: 0.08)
+                  : AppTheme.black.withValues(alpha: 0.08),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Stop And Idle Analysis',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
               ),
-              isDark,
-            )
-          else
-            ...stopReports
-                .take(4)
-                .map((report) => _tripReplayReportRow(report, isDark)),
-        ],
+            ),
+            const SizedBox(height: 8),
+            if (replayEvents.isEmpty)
+              _tripReplayReportRow(
+                _TripStopReport(
+                  title: 'No GeoTab faults returned',
+                  detail:
+                      'No overspeeding, harsh braking, brake, or fault event was included in this trip map payload.',
+                  timestampLabel: 'Clear',
+                  color: AppTheme.colorFF27AE60,
+                  icon: Icons.verified_rounded,
+                ),
+                isDark,
+              )
+            else
+              ...replayEvents
+                  .take(5)
+                  .map((event) => _tripReplayEventRow(event, isDark)),
+            const SizedBox(height: 12),
+            Text(
+              'GeoTab Faults And Exceptions',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (stopReports.isEmpty)
+              _tripReplayReportRow(
+                _TripStopReport(
+                  title: 'No long stop detected',
+                  detail:
+                      'Frontend analysis did not find an extended stop in the GeoTab GPS trail.',
+                  timestampLabel: 'Clear',
+                  color: AppTheme.colorFF27AE60,
+                  icon: Icons.check_circle_rounded,
+                ),
+                isDark,
+              )
+            else
+              ...stopReports
+                  .take(4)
+                  .map((report) => _tripReplayReportRow(report, isDark)),
+          ],
+        ),
       ),
     );
   }
@@ -3462,6 +3602,146 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildTripPlaybackControls({
+    required bool isDark,
+    required List<_TripHistoryPoint> historyPoints,
+    required _TripReplayMetrics metrics,
+  }) {
+    final currentPoint = _playbackPointFor(historyPoints);
+    final elapsed = Duration(
+      milliseconds: (metrics.total.inMilliseconds * _tripReplayProgress)
+          .round(),
+    );
+    final canPlay = historyPoints.length > 1 && metrics.total > Duration.zero;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isDark
+            ? AppTheme.white.withValues(alpha: 0.045)
+            : AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.20),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                tooltip: _tripReplayPlaying ? 'Pause replay' : 'Play replay',
+                onPressed: canPlay ? _toggleTripReplayPlayback : null,
+                icon: Icon(
+                  _tripReplayPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+                style: IconButton.styleFrom(
+                  backgroundColor: AppTheme.colorFF4B7BE5,
+                  foregroundColor: AppTheme.white,
+                  disabledBackgroundColor: AppTheme.gray600.withValues(
+                    alpha: 0.25,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      currentPoint == null
+                          ? 'Playback awaiting GPS logs'
+                          : currentPoint.pointName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${_formatDuration(elapsed)} / ${_formatDuration(metrics.total)} at ${_tripReplaySpeed.round()}x',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuButton<double>(
+                tooltip: 'Playback speed',
+                initialValue: _tripReplaySpeed,
+                onSelected: (value) => setState(() => _tripReplaySpeed = value),
+                itemBuilder: (context) => const [
+                  PopupMenuItem(value: 1, child: Text('1x')),
+                  PopupMenuItem(value: 5, child: Text('5x')),
+                  PopupMenuItem(value: 10, child: Text('10x')),
+                  PopupMenuItem(value: 20, child: Text('20x')),
+                  PopupMenuItem(value: 40, child: Text('40x')),
+                ],
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '${_tripReplaySpeed.round()}x',
+                    style: const TextStyle(
+                      color: AppTheme.colorFF4B7BE5,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            value: _tripReplayProgress.clamp(0.0, 1.0),
+            onChanged: canPlay ? _setTripReplayProgress : null,
+            activeColor: AppTheme.colorFF4B7BE5,
+            inactiveColor: AppTheme.colorFF4B7BE5.withValues(alpha: 0.18),
+          ),
+          if (currentPoint != null)
+            Text(
+              '${_formatHistoryDateTime(currentPoint.timestamp)} - ${currentPoint.label}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10.8,
+                height: 1.28,
+                color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripReplayEventRow(_TripReplayEvent event, bool isDark) {
+    return _tripReplayReportRow(
+      _TripStopReport(
+        title: event.title,
+        detail: event.detail,
+        timestampLabel: _formatHistoryTime(event.timestamp),
+        color: event.color,
+        icon: event.icon,
+      ),
+      isDark,
     );
   }
 
@@ -3779,6 +4059,31 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     return markers;
   }
 
+  Set<gmaps.Marker> _tripEventMarkers(List<_TripReplayEvent> events) {
+    return events.indexed
+        .map((entry) {
+          final (index, event) = entry;
+          final position = event.position;
+          if (position == null) {
+            return null;
+          }
+          return gmaps.Marker(
+            markerId: gmaps.MarkerId('trip-event-$index'),
+            position: position,
+            icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+              gmaps.BitmapDescriptor.hueRed,
+            ),
+            infoWindow: gmaps.InfoWindow(
+              title: event.title,
+              snippet:
+                  '${_formatHistoryTime(event.timestamp)} - ${event.detail}',
+            ),
+          );
+        })
+        .whereType<gmaps.Marker>()
+        .toSet();
+  }
+
   Set<gmaps.Circle> _tripStopCircles(List<Map> routeStops) {
     return routeStops.indexed
         .map((entry) {
@@ -3898,6 +4203,10 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       final timestamp =
           _parseHistoryDate(raw['timestamp']) ??
           _parseHistoryDate(raw['dateTime']) ??
+          _parseHistoryDate(raw['dateTimeUtc']) ??
+          _parseHistoryDate(raw['eventDateTime']) ??
+          _parseHistoryDate(raw['eventDateTimeUtc']) ??
+          _parseHistoryDate(raw['recordedAt']) ??
           _parseHistoryDate(raw['date']) ??
           _parseHistoryDate(raw['loggedAt']) ??
           fallbackStart.add(Duration(minutes: index * 3));
@@ -3950,6 +4259,299 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       return timeA.compareTo(timeB);
     });
     return points;
+  }
+
+  _TripReplayMetrics _tripReplayMetrics(List<_TripHistoryPoint> points) {
+    if (points.length < 2) {
+      return const _TripReplayMetrics(
+        total: Duration.zero,
+        driving: Duration.zero,
+        stopped: Duration.zero,
+        idle: Duration.zero,
+      );
+    }
+
+    var driving = Duration.zero;
+    var stopped = Duration.zero;
+    var idle = Duration.zero;
+    for (var index = 1; index < points.length; index++) {
+      final previous = points[index - 1];
+      final current = points[index];
+      final duration = _durationBetween(previous.timestamp, current.timestamp);
+      if (duration == null) {
+        continue;
+      }
+      final meters = _distanceMeters(previous.position, current.position);
+      final speed = current.speedKph ?? previous.speedKph ?? 0;
+      if (speed >= 5 || meters > 120) {
+        driving += duration;
+      } else if (speed > 0.5) {
+        idle += duration;
+      } else {
+        stopped += duration;
+      }
+    }
+
+    final total = _durationBetween(
+      points.first.timestamp,
+      points.last.timestamp,
+    );
+    return _TripReplayMetrics(
+      total: total ?? driving + stopped + idle,
+      driving: driving,
+      stopped: stopped,
+      idle: idle,
+    );
+  }
+
+  _TripHistoryPoint? _playbackPointFor(List<_TripHistoryPoint> points) {
+    if (points.isEmpty) {
+      return null;
+    }
+    if (points.length == 1) {
+      return points.first;
+    }
+    final firstTime = points.first.timestamp;
+    final lastTime = points.last.timestamp;
+    if (firstTime == null || lastTime == null) {
+      final index = (_tripReplayProgress.clamp(0.0, 1.0) * (points.length - 1))
+          .round();
+      return points[index.clamp(0, points.length - 1)];
+    }
+
+    final totalMs = lastTime.difference(firstTime).inMilliseconds;
+    if (totalMs <= 0) {
+      return points.first;
+    }
+    final target = firstTime.add(
+      Duration(milliseconds: (totalMs * _tripReplayProgress).round()),
+    );
+    for (var index = 1; index < points.length; index++) {
+      final previous = points[index - 1];
+      final current = points[index];
+      final previousTime = previous.timestamp;
+      final currentTime = current.timestamp;
+      if (previousTime == null || currentTime == null) {
+        continue;
+      }
+      if (target.isBefore(currentTime) ||
+          target.isAtSameMomentAs(currentTime)) {
+        return current;
+      }
+    }
+    return points.last;
+  }
+
+  void _toggleTripReplayPlayback() {
+    if (_tripReplayPlaying) {
+      _stopTripReplayPlayback();
+      return;
+    }
+    setState(() => _tripReplayPlaying = true);
+    _tripReplayTimer?.cancel();
+    _tripReplayTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (!mounted) {
+        _tripReplayTimer?.cancel();
+        return;
+      }
+      final next = _tripReplayProgress + (_tripReplaySpeed / 240.0);
+      if (next >= 1.0) {
+        setState(() {
+          _tripReplayProgress = 1.0;
+          _tripReplayPlaying = false;
+        });
+        _tripReplayTimer?.cancel();
+      } else {
+        setState(() => _tripReplayProgress = next);
+      }
+    });
+  }
+
+  void _stopTripReplayPlayback() {
+    _tripReplayTimer?.cancel();
+    if (mounted) {
+      setState(() => _tripReplayPlaying = false);
+    }
+  }
+
+  void _setTripReplayProgress(double value) {
+    _tripReplayTimer?.cancel();
+    setState(() {
+      _tripReplayProgress = value.clamp(0.0, 1.0);
+      _tripReplayPlaying = false;
+    });
+  }
+
+  List<_TripReplayEvent> _tripReplayEvents(
+    Map<String, dynamic> data,
+    List<Map> rawTrail,
+    List<_TripHistoryPoint> points,
+  ) {
+    final events = <_TripReplayEvent>[];
+    for (final source in <dynamic>[
+      data['events'],
+      data['exceptions'],
+      data['faults'],
+      data['exceptionEvents'],
+      data['diagnostics'],
+    ]) {
+      if (source is! List) {
+        continue;
+      }
+      for (final raw in source.whereType<Map>()) {
+        final event = _tripReplayEventFromRaw(raw, points);
+        if (event != null) {
+          events.add(event);
+        }
+      }
+    }
+
+    for (var index = 0; index < rawTrail.length; index++) {
+      final raw = rawTrail[index];
+      for (final key in ['events', 'exceptions', 'faults']) {
+        final nested = raw[key];
+        if (nested is List) {
+          for (final item in nested.whereType<Map>()) {
+            final event = _tripReplayEventFromRaw(
+              item,
+              points,
+              fallbackPoint: index < points.length ? points[index] : null,
+            );
+            if (event != null) {
+              events.add(event);
+            }
+          }
+        }
+      }
+      final speed = _numFrom(raw['speedKph']) ?? _numFrom(raw['speed']);
+      final speedLimit =
+          _numFrom(raw['speedLimitKph']) ?? _numFrom(raw['speedLimit']);
+      if (speed != null &&
+          speedLimit != null &&
+          speedLimit > 0 &&
+          speed > speedLimit + 5 &&
+          index < points.length) {
+        final point = points[index];
+        events.add(
+          _TripReplayEvent(
+            title: 'Overspeeding',
+            detail:
+                '${speed.round()} km/h over ${speedLimit.round()} km/h limit near ${point.label}',
+            timestamp: point.timestamp,
+            position: point.position,
+            color: AppTheme.colorFFE74C3C,
+            icon: Icons.speed_rounded,
+            sourceLabel: point.sourceLabel,
+          ),
+        );
+      }
+    }
+
+    events.sort((a, b) {
+      final timeA = a.timestamp;
+      final timeB = b.timestamp;
+      if (timeA == null && timeB == null) return 0;
+      if (timeA == null) return 1;
+      if (timeB == null) return -1;
+      return timeA.compareTo(timeB);
+    });
+
+    final seen = <String>{};
+    return events.where((event) {
+      final key =
+          '${event.title}|${event.timestamp?.toIso8601String()}|${event.position?.latitude.toStringAsFixed(5)}|${event.position?.longitude.toStringAsFixed(5)}';
+      return seen.add(key);
+    }).toList();
+  }
+
+  _TripReplayEvent? _tripReplayEventFromRaw(
+    Map raw,
+    List<_TripHistoryPoint> points, {
+    _TripHistoryPoint? fallbackPoint,
+  }) {
+    final title = _firstNonEmptyString([
+      raw['name'],
+      raw['ruleName'],
+      raw['type'],
+      raw['eventType'],
+      raw['diagnostic'],
+      raw['fault'],
+    ]);
+    if (title == null) {
+      return null;
+    }
+    final timestamp =
+        _parseHistoryDate(raw['timestamp']) ??
+        _parseHistoryDate(raw['dateTime']) ??
+        _parseHistoryDate(raw['eventDateTime']) ??
+        fallbackPoint?.timestamp;
+    final position =
+        _latLngFromMap(raw) ??
+        _latLngFromMap((raw['coordinate'] as Map?) ?? const {}) ??
+        fallbackPoint?.position ??
+        _nearestHistoryPointAt(points, timestamp)?.position;
+    final detail =
+        _firstNonEmptyString([
+          raw['detail'],
+          raw['description'],
+          raw['message'],
+          raw['value'],
+        ]) ??
+        _eventDetailFor(title, fallbackPoint);
+    final normalized = title.toLowerCase();
+    final isOverspeed =
+        normalized.contains('speed') || normalized.contains('overspeed');
+    final isBrake =
+        normalized.contains('brake') || normalized.contains('harsh');
+    return _TripReplayEvent(
+      title: _titleCaseEvent(title),
+      detail: detail,
+      timestamp: timestamp,
+      position: position,
+      color: isOverspeed || isBrake
+          ? AppTheme.colorFFE74C3C
+          : AppTheme.colorFFF59E0B,
+      icon: isOverspeed
+          ? Icons.speed_rounded
+          : isBrake
+          ? Icons.warning_amber_rounded
+          : Icons.report_problem_rounded,
+      sourceLabel: _historySourceLabel(raw),
+    );
+  }
+
+  _TripHistoryPoint? _nearestHistoryPointAt(
+    List<_TripHistoryPoint> points,
+    DateTime? timestamp,
+  ) {
+    if (points.isEmpty || timestamp == null) {
+      return null;
+    }
+    _TripHistoryPoint? nearest;
+    var best = Duration(days: 9999);
+    for (final point in points) {
+      final duration = _durationBetween(timestamp, point.timestamp);
+      if (duration != null && duration < best) {
+        best = duration;
+        nearest = point;
+      }
+    }
+    return nearest;
+  }
+
+  String _eventDetailFor(String title, _TripHistoryPoint? point) {
+    final location = point?.label;
+    return location == null
+        ? 'GeoTab event included in this trip history.'
+        : 'GeoTab event detected near $location.';
+  }
+
+  String _titleCaseEvent(String raw) {
+    return raw
+        .split(RegExp(r'[\s_\-]+'))
+        .where((part) => part.trim().isNotEmpty)
+        .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
+        .join(' ');
   }
 
   List<_TripHistoryPoint> _timelineSamples(List<_TripHistoryPoint> points) {
@@ -4069,7 +4671,10 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     if (raw.isEmpty || raw == 'N/A') {
       return null;
     }
-    return DateTime.tryParse(raw);
+    final normalized = raw.contains(' ') && !raw.contains('T')
+        ? raw.replaceFirst(' ', 'T')
+        : raw;
+    return DateTime.tryParse(normalized);
   }
 
   String _formatHistoryTime(DateTime? value) {
@@ -4080,6 +4685,18 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     final hour = local.hour.toString().padLeft(2, '0');
     final minute = local.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
+  }
+
+  String _formatHistoryDateTime(DateTime? value) {
+    if (value == null) {
+      return 'Time unavailable';
+    }
+    final local = value.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$month/$day $hour:$minute PHT';
   }
 
   String _formatDuration(Duration duration) {
@@ -7077,7 +7694,7 @@ class _TripLifecycleDialogState extends State<_TripLifecycleDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Driver and vehicle are assigned in Dispatch Queue.',
+                  'Assigned vehicle and Assigned driver are managed in Dispatch Queue.',
                   style: TextStyle(
                     color: isDark ? AppTheme.white : AppTheme.colorFF1B2A4A,
                     fontWeight: FontWeight.w900,
