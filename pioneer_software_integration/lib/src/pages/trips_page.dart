@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
@@ -48,6 +49,9 @@ class _TripsPageState extends State<TripsPage> {
   String _sortMode = 'Date Newest';
   final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedTripIds = <String>{};
+  bool _handledRouteArgs = false;
+  String? _pendingOpenVehicle;
+  String? _pendingOpenTripId;
 
   @override
   void initState() {
@@ -55,6 +59,42 @@ class _TripsPageState extends State<TripsPage> {
     tripsNotifier.addListener(_onTripsChanged);
     _restoreFilters();
     _primeTrips();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_handledRouteArgs) {
+      return;
+    }
+    _handledRouteArgs = true;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is! Map) {
+      return;
+    }
+
+    final vehicle = args['vehicle']?.toString().trim() ?? '';
+    final tripId = args['tripId']?.toString().trim() ?? '';
+    final shouldOpen =
+        args['openTripForVehicle'] == true || args['openTrip'] == true;
+    if (vehicle.isEmpty && tripId.isEmpty) {
+      return;
+    }
+
+    _pendingOpenVehicle = vehicle.isEmpty ? null : vehicle;
+    _pendingOpenTripId = tripId.isEmpty ? null : tripId;
+    if (vehicle.isNotEmpty) {
+      _vehicleFilter = vehicle;
+      _searchQuery = vehicle;
+      _searchController.text = vehicle;
+    }
+
+    if (shouldOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openPendingTripFromRouteArgs();
+      });
+    }
   }
 
   void _onTripsChanged() {
@@ -82,6 +122,7 @@ class _TripsPageState extends State<TripsPage> {
       refreshFleetBootstrapSilently(forceRefresh: forceRefresh);
       return tripsNotifier.value.length;
     });
+    _openPendingTripFromRouteArgs();
   }
 
   void _prewarmTripDetails() {
@@ -132,10 +173,86 @@ class _TripsPageState extends State<TripsPage> {
       _dateFilter = prefs.getString('trips_date_filter') ?? 'All Dates';
       _clientFilter = prefs.getString('trips_client_filter') ?? 'All Clients';
       _driverFilter = prefs.getString('trips_driver_filter') ?? 'All Drivers';
-      _vehicleFilter =
-          prefs.getString('trips_vehicle_filter') ?? 'All Vehicles';
+      _vehicleFilter = _pendingOpenVehicle == null
+          ? prefs.getString('trips_vehicle_filter') ?? 'All Vehicles'
+          : _vehicleFilter;
       _sortMode = prefs.getString('trips_sort_mode') ?? 'Date Newest';
     });
+  }
+
+  void _openPendingTripFromRouteArgs() {
+    if (!mounted) {
+      return;
+    }
+
+    final pendingTripId = _pendingOpenTripId;
+    final pendingVehicle = _pendingOpenVehicle;
+    if ((pendingTripId == null || pendingTripId.isEmpty) &&
+        (pendingVehicle == null || pendingVehicle.isEmpty)) {
+      return;
+    }
+
+    Map<String, dynamic>? selectedTrip;
+    if (pendingTripId != null && pendingTripId.isNotEmpty) {
+      for (final trip in tripsNotifier.value) {
+        if (trip['tripId']?.toString() == pendingTripId) {
+          selectedTrip = trip;
+          break;
+        }
+      }
+    }
+
+    if (selectedTrip == null &&
+        pendingVehicle != null &&
+        pendingVehicle.isNotEmpty) {
+      final target = _normalizeVehicleLabel(pendingVehicle);
+      final candidates = tripsNotifier.value.where((trip) {
+        return _normalizeVehicleLabel(trip['vehicle']?.toString() ?? '') ==
+            target;
+      }).toList()..sort(_compareAutoOpenTrips);
+      if (candidates.isNotEmpty) {
+        selectedTrip = candidates.first;
+      }
+    }
+
+    if (selectedTrip == null) {
+      return;
+    }
+
+    _pendingOpenTripId = null;
+    _pendingOpenVehicle = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _showTripDetails(selectedTrip!);
+      }
+    });
+  }
+
+  int _compareAutoOpenTrips(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final statusRank = _autoOpenStatusRank(a).compareTo(_autoOpenStatusRank(b));
+    if (statusRank != 0) {
+      return statusRank;
+    }
+    return _compareTripDates(a, b, newestFirst: true);
+  }
+
+  int _autoOpenStatusRank(Map<String, dynamic> trip) {
+    final status = trip['status']?.toString().trim().toLowerCase() ?? '';
+    final normalized = status.replaceAll(' ', '');
+    if (normalized == 'inprogress' || normalized == 'dispatched') {
+      return 0;
+    }
+    if (normalized == 'pending') {
+      return 1;
+    }
+    if (normalized == 'completed') {
+      return 2;
+    }
+    return 3;
+  }
+
+  String _normalizeVehicleLabel(String raw) {
+    return raw.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
   }
 
   Future<void> _persistFilters() async {
@@ -2484,6 +2601,40 @@ class _TripSummaryData {
   final Color color;
 }
 
+class _TripHistoryPoint {
+  const _TripHistoryPoint({
+    required this.position,
+    required this.timestamp,
+    required this.pointName,
+    required this.label,
+    required this.sourceLabel,
+    this.speedKph,
+  });
+
+  final gmaps.LatLng position;
+  final DateTime? timestamp;
+  final String pointName;
+  final String label;
+  final String sourceLabel;
+  final double? speedKph;
+}
+
+class _TripStopReport {
+  const _TripStopReport({
+    required this.title,
+    required this.detail,
+    required this.timestampLabel,
+    required this.color,
+    required this.icon,
+  });
+
+  final String title;
+  final String detail;
+  final String timestampLabel;
+  final Color color;
+  final IconData icon;
+}
+
 class _TripSummaryCard extends StatelessWidget {
   const _TripSummaryCard({required this.data, required this.isDark});
 
@@ -2571,11 +2722,7 @@ class TripDetailsPage extends StatefulWidget {
   final Map trip;
   final bool embedded;
 
-  const TripDetailsPage({
-    super.key,
-    required this.trip,
-    this.embedded = false,
-  });
+  const TripDetailsPage({super.key, required this.trip, this.embedded = false});
 
   @override
   State<TripDetailsPage> createState() => _TripDetailsPageState();
@@ -2657,8 +2804,10 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     bool isMobile,
     Map<String, dynamic> data,
   ) {
-    final actualTrail = ((data['actualTrail'] as List?) ?? const [])
+    final actualTrailRaw = ((data['actualTrail'] as List?) ?? const [])
         .whereType<Map>()
+        .toList();
+    final actualTrail = actualTrailRaw
         .map(_latLngFromMap)
         .whereType<gmaps.LatLng>()
         .toList();
@@ -2683,6 +2832,11 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     final routeStops = ((data['routeStops'] as List?) ?? const [])
         .whereType<Map>()
         .toList();
+    final historyPoints = _historyPointsFromTrail(actualTrailRaw, routeStops);
+    final tripDistanceKm = _distanceKmFor(
+      historyPoints.map((point) => point.position).toList(),
+    );
+    final stopReports = _tripStopReports(historyPoints, routeStops);
     final completed =
         data['status']?.toString().trim().toLowerCase() == 'completed';
     final canRenderMap = actualTrail.length > 1 || plannedPath.length > 1;
@@ -2720,84 +2874,90 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       ], isMobile);
     }
 
-    return _buildSection(isDark, 'Trip Map', [
-      Container(
-        height: isMobile ? 260 : 340,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark
-                ? AppTheme.white.withValues(alpha: 0.08)
-                : AppTheme.black.withValues(alpha: 0.08),
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: PioneerGoogleMap(
-          initialCenter: center,
-          initialZoom: 13,
-          zoomControlsEnabled: false,
-          polygons: geofences.toSet(),
-          polylines: {
-            if (plannedPath.length > 1)
-              gmaps.Polyline(
-                polylineId: const gmaps.PolylineId('planned-path'),
-                points: plannedPath,
-                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.85),
-                width: 3,
-              ),
-            if (actualTrail.length > 1)
-              gmaps.Polyline(
-                polylineId: const gmaps.PolylineId('actual-trail'),
-                points: actualTrail,
-                color: AppTheme.colorFF1A3A6B,
-                width: 4,
-              ),
-          },
-          markers: {
-            if (actualTrail.isNotEmpty)
-              gmaps.Marker(
-                markerId: const gmaps.MarkerId('actual-start'),
-                position: actualTrail.first,
-                icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
-                  gmaps.BitmapDescriptor.hueGreen,
-                ),
-                infoWindow: const gmaps.InfoWindow(title: 'Trip start'),
-              ),
-            if (actualTrail.length > 1)
-              gmaps.Marker(
-                markerId: const gmaps.MarkerId('actual-end'),
-                position: actualTrail.last,
-                icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
-                  completed
-                      ? gmaps.BitmapDescriptor.hueRed
-                      : gmaps.BitmapDescriptor.hueAzure,
-                ),
-                infoWindow: gmaps.InfoWindow(
-                  title: completed ? 'Actual end' : 'Current position',
-                ),
-              ),
-            if (actualTrail.length < 2 && plannedPath.isNotEmpty)
-              gmaps.Marker(
-                markerId: const gmaps.MarkerId('planned-start'),
-                position: plannedPath.first,
-                icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
-                  gmaps.BitmapDescriptor.hueGreen,
-                ),
-                infoWindow: const gmaps.InfoWindow(title: 'Planned start'),
-              ),
-            if (actualTrail.length < 2 && plannedPath.length > 1)
-              gmaps.Marker(
-                markerId: const gmaps.MarkerId('planned-destination'),
-                position: plannedPath.last,
-                icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
-                  gmaps.BitmapDescriptor.hueRed,
-                ),
-                infoWindow: const gmaps.InfoWindow(title: 'Destination'),
-              ),
-            ..._routeStopMarkers(routeStops, actualTrail.length < 2),
-          },
+    final map = Container(
+      height: isMobile ? 280 : 380,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
         ),
       ),
+      clipBehavior: Clip.antiAlias,
+      child: PioneerGoogleMap(
+        initialCenter: center,
+        initialZoom: 13,
+        zoomControlsEnabled: false,
+        polygons: geofences.toSet(),
+        polylines: {
+          if (plannedPath.length > 1)
+            gmaps.Polyline(
+              polylineId: const gmaps.PolylineId('planned-path'),
+              points: plannedPath,
+              color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.85),
+              width: 3,
+            ),
+          if (actualTrail.length > 1)
+            gmaps.Polyline(
+              polylineId: const gmaps.PolylineId('actual-trail'),
+              points: actualTrail,
+              color: AppTheme.colorFF1A3A6B,
+              width: 4,
+            ),
+        },
+        markers: {
+          if (historyPoints.isNotEmpty)
+            ..._tripHistoryMarkers(historyPoints, completed),
+          if (historyPoints.isEmpty && plannedPath.isNotEmpty)
+            gmaps.Marker(
+              markerId: const gmaps.MarkerId('planned-start'),
+              position: plannedPath.first,
+              icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                gmaps.BitmapDescriptor.hueGreen,
+              ),
+              infoWindow: const gmaps.InfoWindow(title: 'Planned start'),
+            ),
+          if (historyPoints.isEmpty && plannedPath.length > 1)
+            gmaps.Marker(
+              markerId: const gmaps.MarkerId('planned-destination'),
+              position: plannedPath.last,
+              icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+                gmaps.BitmapDescriptor.hueRed,
+              ),
+              infoWindow: const gmaps.InfoWindow(title: 'Destination'),
+            ),
+          ..._routeStopMarkers(routeStops, actualTrail.length < 2),
+        },
+        circles: _tripStopCircles(routeStops),
+      ),
+    );
+
+    final replayPanel = _buildTripReplayPanel(
+      isDark: isDark,
+      isMobile: isMobile,
+      historyPoints: historyPoints,
+      stopReports: stopReports,
+      distanceKm: tripDistanceKm,
+    );
+
+    return _buildSection(isDark, 'Trip Map', [
+      _tripMapNotice(
+        isDark,
+        'The solid navy line is the GeoTab actual GPS trail. The blue line is the planned route returned by the backend/GeoTab route map. Stop reports are analyzed from timestamped GPS logs.',
+      ),
+      const SizedBox(height: 12),
+      if (isMobile)
+        Column(children: [map, const SizedBox(height: 12), replayPanel])
+      else
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 7, child: map),
+            const SizedBox(width: 14),
+            SizedBox(width: 350, child: replayPanel),
+          ],
+        ),
       const SizedBox(height: 12),
       if (actualTrail.length < 2 && plannedPath.length > 1) ...[
         _tripMapNotice(isDark, routeMessage),
@@ -2809,15 +2969,23 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         children: [
           _tripMapChip(
             isDark,
-            'Actual trail',
+            'GeoTab actual trail',
             actualTrail.length > 1
-                ? '${actualTrail.length} points'
+                ? '${actualTrail.length} GPS points'
                 : 'No log trail',
             AppTheme.colorFF27AE60,
           ),
           _tripMapChip(
             isDark,
-            'Planned route',
+            'Driven distance',
+            tripDistanceKm > 0
+                ? '${tripDistanceKm.toStringAsFixed(1)} km'
+                : 'Awaiting logs',
+            AppTheme.colorFF0EA5E9,
+          ),
+          _tripMapChip(
+            isDark,
+            'Planned route path',
             plannedPath.length > 1
                 ? '${plannedPath.length} waypoints'
                 : 'No planned path',
@@ -2825,11 +2993,21 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           ),
           _tripMapChip(
             isDark,
-            'Geofences',
-            '${geofences.length} zones',
+            'Analyzed stop reports',
+            stopReports.isEmpty
+                ? 'No long stop'
+                : '${stopReports.length} event${stopReports.length == 1 ? '' : 's'}',
             AppTheme.colorFFF39C12,
           ),
         ],
+      ),
+      const SizedBox(height: 12),
+      _buildTripMapSourceLegend(
+        isDark: isDark,
+        actualCount: actualTrail.length,
+        plannedCount: plannedPath.length,
+        stopCount: routeStops.length,
+        reportCount: stopReports.length,
       ),
       if (routeStops.isNotEmpty) ...[
         const SizedBox(height: 14),
@@ -2922,6 +3100,105 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     );
   }
 
+  Widget _buildTripMapSourceLegend({
+    required bool isDark,
+    required int actualCount,
+    required int plannedCount,
+    required int stopCount,
+    required int reportCount,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? AppTheme.white.withValues(alpha: 0.035)
+            : AppTheme.colorFFF8FAFC,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.07),
+        ),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _tripSourceBadge(
+            isDark: isDark,
+            icon: Icons.gps_fixed_rounded,
+            label: 'GeoTab GPS trail',
+            value: '$actualCount points',
+            color: AppTheme.colorFF27AE60,
+          ),
+          _tripSourceBadge(
+            isDark: isDark,
+            icon: Icons.alt_route_rounded,
+            label: 'Planned route',
+            value: '$plannedCount waypoints',
+            color: AppTheme.colorFF4B7BE5,
+          ),
+          _tripSourceBadge(
+            isDark: isDark,
+            icon: Icons.flag_rounded,
+            label: 'Route stops',
+            value: '$stopCount stops',
+            color: AppTheme.colorFFF59E0B,
+          ),
+          _tripSourceBadge(
+            isDark: isDark,
+            icon: Icons.analytics_rounded,
+            label: 'Frontend analysis',
+            value: '$reportCount reports',
+            color: AppTheme.colorFF7C3AED,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripSourceBadge({
+    required bool isDark,
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 14),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _tripMapNotice(bool isDark, String message) {
     return Container(
       width: double.infinity,
@@ -2956,6 +3233,453 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     );
   }
 
+  Widget _buildTripReplayPanel({
+    required bool isDark,
+    required bool isMobile,
+    required List<_TripHistoryPoint> historyPoints,
+    required List<_TripStopReport> stopReports,
+    required double distanceKm,
+  }) {
+    final samples = _timelineSamples(historyPoints);
+    return Container(
+      constraints: BoxConstraints(minHeight: isMobile ? 0 : 340),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF111827 : AppTheme.colorFFF8FAFC,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.08)
+              : AppTheme.black.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.timeline_rounded,
+                  color: AppTheme.colorFF4B7BE5,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'GeoTab Trip Replay',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'GPS checkpoints, timing, speed, and stop analysis',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.09),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.18),
+              ),
+            ),
+            child: Text(
+              historyPoints.isEmpty
+                  ? 'Awaiting GeoTab GPS points for this trip replay.'
+                  : 'Timeline names are generated from GeoTab timestamps, addresses, speed logs, and nearby route stops.',
+              style: TextStyle(
+                fontSize: 11.5,
+                height: 1.32,
+                fontWeight: FontWeight.w700,
+                color: isDark ? AppTheme.gray200 : AppTheme.colorFF1F2937,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _tripReplayMiniStat(
+                isDark,
+                Icons.route_rounded,
+                distanceKm > 0 ? '${distanceKm.toStringAsFixed(1)} km' : '--',
+                AppTheme.colorFF0EA5E9,
+                label: 'Driven',
+              ),
+              _tripReplayMiniStat(
+                isDark,
+                Icons.location_searching_rounded,
+                '${historyPoints.length}',
+                AppTheme.colorFF27AE60,
+                label: 'GPS logs',
+              ),
+              _tripReplayMiniStat(
+                isDark,
+                Icons.warning_amber_rounded,
+                '${stopReports.length}',
+                AppTheme.colorFFF59E0B,
+                label: 'Reports',
+              ),
+              _tripReplayMiniStat(
+                isDark,
+                Icons.verified_rounded,
+                historyPoints.isEmpty ? 'Pending' : 'GeoTab',
+                AppTheme.colorFF7C3AED,
+                label: 'Source',
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'GPS Checkpoints',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (samples.isEmpty)
+            Text(
+              'No timestamped GPS replay is available for this trip yet.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+              ),
+            )
+          else
+            ...samples.map((point) => _tripReplayTimelineRow(point, isDark)),
+          const SizedBox(height: 12),
+          Divider(
+            height: 1,
+            color: isDark
+                ? AppTheme.white.withValues(alpha: 0.08)
+                : AppTheme.black.withValues(alpha: 0.08),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Stop And Idle Analysis',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: isDark ? AppTheme.gray200 : AppTheme.colorFF374151,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (stopReports.isEmpty)
+            _tripReplayReportRow(
+              _TripStopReport(
+                title: 'No long stop detected',
+                detail:
+                    'Frontend analysis did not find an extended stop in the GeoTab GPS trail.',
+                timestampLabel: 'Clear',
+                color: AppTheme.colorFF27AE60,
+                icon: Icons.check_circle_rounded,
+              ),
+              isDark,
+            )
+          else
+            ...stopReports
+                .take(4)
+                .map((report) => _tripReplayReportRow(report, isDark)),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripReplayMiniStat(
+    bool isDark,
+    IconData icon,
+    String value,
+    Color color, {
+    String? label,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 5),
+          if (label != null) ...[
+            Text(
+              '$label ',
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                color: isDark ? AppTheme.gray300 : AppTheme.gray600,
+              ),
+            ),
+          ],
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripReplayTimelineRow(_TripHistoryPoint point, bool isDark) {
+    final speedText = point.speedKph == null
+        ? 'Speed unavailable'
+        : '${point.speedKph!.round()} km/h';
+    final gpsText =
+        '${point.position.latitude.toStringAsFixed(5)}, ${point.position.longitude.toStringAsFixed(5)}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 46,
+            child: Text(
+              _formatHistoryTime(point.timestamp),
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: AppTheme.colorFF4B7BE5,
+              ),
+            ),
+          ),
+          Column(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                margin: const EdgeInsets.only(top: 3),
+                decoration: const BoxDecoration(
+                  color: AppTheme.colorFF4B7BE5,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 40,
+                margin: const EdgeInsets.only(top: 3),
+                color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.25),
+              ),
+            ],
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? AppTheme.white.withValues(alpha: 0.035)
+                    : AppTheme.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isDark
+                      ? AppTheme.white.withValues(alpha: 0.07)
+                      : AppTheme.black.withValues(alpha: 0.06),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          point.pointName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                            color: isDark
+                                ? AppTheme.white
+                                : AppTheme.colorFF1F2937,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        point.sourceLabel,
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.colorFF27AE60,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    point.label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10.8,
+                      height: 1.25,
+                      color: isDark ? AppTheme.gray300 : AppTheme.gray700,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 5,
+                    children: [
+                      _tripTinyFact(
+                        icon: Icons.speed_rounded,
+                        label: speedText,
+                        color: AppTheme.colorFF0EA5E9,
+                        isDark: isDark,
+                      ),
+                      _tripTinyFact(
+                        icon: Icons.gps_fixed_rounded,
+                        label: gpsText,
+                        color: AppTheme.colorFF4B7BE5,
+                        isDark: isDark,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripTinyFact({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required bool isDark,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: isDark ? AppTheme.gray200 : AppTheme.colorFF334155,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripReplayReportRow(_TripStopReport report, bool isDark) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: report.color.withValues(alpha: isDark ? 0.14 : 0.09),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: report.color.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(report.icon, size: 16, color: report.color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        report.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: isDark
+                              ? AppTheme.white
+                              : AppTheme.colorFF1F2937,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      report.timestampLabel,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: report.color,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  report.detail,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    height: 1.25,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Set<gmaps.Marker> _routeStopMarkers(List<Map> routeStops, bool showStops) {
     if (!showStops) {
       return const <gmaps.Marker>{};
@@ -2964,11 +3688,12 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     return routeStops.indexed
         .map((entry) {
           final (index, stop) = entry;
-          final center = _latLngFromMap((stop['center'] as Map?) ?? const {});
+          final center = _routeStopCenter(stop);
           if (center == null) {
             return null;
           }
 
+          final stopName = _routeStopName(stop, index);
           return gmaps.Marker(
             markerId: gmaps.MarkerId('route-stop-$index'),
             position: center,
@@ -2976,7 +3701,8 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
               gmaps.BitmapDescriptor.hueOrange,
             ),
             infoWindow: gmaps.InfoWindow(
-              title: stop['name']?.toString() ?? 'Stop ${index + 1}',
+              title: stopName,
+              snippet: 'GeoTab route stop / planned checkpoint',
             ),
           );
         })
@@ -2984,14 +3710,401 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         .toSet();
   }
 
+  Set<gmaps.Marker> _tripHistoryMarkers(
+    List<_TripHistoryPoint> historyPoints,
+    bool completed,
+  ) {
+    if (historyPoints.isEmpty) {
+      return const <gmaps.Marker>{};
+    }
+
+    final markers = <gmaps.Marker>{
+      gmaps.Marker(
+        markerId: const gmaps.MarkerId('history-start'),
+        position: historyPoints.first.position,
+        icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+          gmaps.BitmapDescriptor.hueGreen,
+        ),
+        infoWindow: gmaps.InfoWindow(
+          title: historyPoints.first.pointName,
+          snippet:
+              '${_formatHistoryTime(historyPoints.first.timestamp)} - ${historyPoints.first.label}',
+        ),
+      ),
+      if (historyPoints.length > 1)
+        gmaps.Marker(
+          markerId: const gmaps.MarkerId('history-end'),
+          position: historyPoints.last.position,
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            completed
+                ? gmaps.BitmapDescriptor.hueRed
+                : gmaps.BitmapDescriptor.hueAzure,
+          ),
+          infoWindow: gmaps.InfoWindow(
+            title: completed ? 'Trip end' : historyPoints.last.pointName,
+            snippet:
+                '${_formatHistoryTime(historyPoints.last.timestamp)} - ${historyPoints.last.label}',
+          ),
+        ),
+    };
+
+    final samples = _timelineSamples(historyPoints);
+    for (var index = 0; index < samples.length; index++) {
+      final point = samples[index];
+      if (point == historyPoints.first || point == historyPoints.last) {
+        continue;
+      }
+      markers.add(
+        gmaps.Marker(
+          markerId: gmaps.MarkerId('history-sample-$index'),
+          position: point.position,
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            gmaps.BitmapDescriptor.hueViolet,
+          ),
+          infoWindow: gmaps.InfoWindow(
+            title: point.pointName,
+            snippet: point.speedKph == null
+                ? '${point.sourceLabel} - ${point.label}'
+                : '${point.sourceLabel} - ${point.speedKph!.round()} km/h - ${point.label}',
+          ),
+        ),
+      );
+    }
+
+    return markers;
+  }
+
+  Set<gmaps.Circle> _tripStopCircles(List<Map> routeStops) {
+    return routeStops.indexed
+        .map((entry) {
+          final (index, stop) = entry;
+          final center = _routeStopCenter(stop);
+          if (center == null) {
+            return null;
+          }
+
+          return gmaps.Circle(
+            circleId: gmaps.CircleId('route-stop-radius-$index'),
+            center: center,
+            radius: ((_numFrom(stop['radius']) ?? 120).clamp(
+              60,
+              420,
+            )).toDouble(),
+            fillColor: AppTheme.colorFFF59E0B.withValues(alpha: 0.10),
+            strokeColor: AppTheme.colorFFF59E0B.withValues(alpha: 0.38),
+            strokeWidth: 2,
+          );
+        })
+        .whereType<gmaps.Circle>()
+        .toSet();
+  }
+
+  gmaps.LatLng? _routeStopCenter(Map stop) {
+    return _latLngFromMap((stop['center'] as Map?) ?? stop);
+  }
+
+  String _routeStopName(Map stop, int index) {
+    final name = _firstNonEmptyString([
+      stop['name'],
+      stop['title'],
+      stop['address'],
+      stop['zoneName'],
+    ]);
+    return name ?? 'Route stop ${index + 1}';
+  }
+
+  String? _nearestRouteStopName(gmaps.LatLng point, List<Map> routeStops) {
+    String? nearestName;
+    var nearestMeters = double.infinity;
+    for (var index = 0; index < routeStops.length; index++) {
+      final stop = routeStops[index];
+      final center = _routeStopCenter(stop);
+      if (center == null) {
+        continue;
+      }
+      final meters = _distanceMeters(point, center);
+      if (meters < nearestMeters) {
+        nearestMeters = meters;
+        nearestName = _routeStopName(stop, index);
+      }
+    }
+    return nearestMeters <= 180 ? nearestName : null;
+  }
+
+  String? _firstNonEmptyString(List<dynamic> values) {
+    for (final value in values) {
+      final text = value?.toString().trim() ?? '';
+      if (text.isNotEmpty && text.toUpperCase() != 'N/A') {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  String _gpsPointName({
+    required int index,
+    required int total,
+    required DateTime? timestamp,
+    required String? nearbyStop,
+  }) {
+    if (index == 0) {
+      return 'GeoTab departure point';
+    }
+    if (index == total - 1) {
+      return 'GeoTab latest point';
+    }
+    if (nearbyStop != null) {
+      return 'GeoTab checkpoint near $nearbyStop';
+    }
+    final time = _formatHistoryTime(timestamp);
+    return time == '--:--'
+        ? 'GeoTab GPS checkpoint ${index + 1}'
+        : 'GeoTab GPS checkpoint $time';
+  }
+
+  String _historySourceLabel(Map raw) {
+    final source = _firstNonEmptyString([
+      raw['source'],
+      raw['provider'],
+      raw['deviceSource'],
+    ]);
+    if (source == null) {
+      return 'GeoTab';
+    }
+    return source.toLowerCase().contains('geotab') ? 'GeoTab' : source;
+  }
+
+  List<_TripHistoryPoint> _historyPointsFromTrail(
+    List<Map> rawTrail,
+    List<Map> routeStops,
+  ) {
+    final fallbackStart =
+        _parseHistoryDate(trip['startedAt']) ??
+        _parseHistoryDate(trip['date']) ??
+        DateTime.now().subtract(Duration(minutes: rawTrail.length * 3));
+    final points = <_TripHistoryPoint>[];
+
+    for (var index = 0; index < rawTrail.length; index++) {
+      final raw = rawTrail[index];
+      final position = _latLngFromMap(raw);
+      if (position == null) {
+        continue;
+      }
+      final timestamp =
+          _parseHistoryDate(raw['timestamp']) ??
+          _parseHistoryDate(raw['dateTime']) ??
+          _parseHistoryDate(raw['date']) ??
+          _parseHistoryDate(raw['loggedAt']) ??
+          fallbackStart.add(Duration(minutes: index * 3));
+      final nearbyStop = _nearestRouteStopName(position, routeStops);
+      final rawLabel = _firstNonEmptyString([
+        raw['address'],
+        raw['location'],
+        raw['formattedAddress'],
+        raw['zone'],
+      ]);
+      final label =
+          rawLabel ??
+          (nearbyStop == null
+              ? 'GPS position ${index + 1}'
+              : 'Near $nearbyStop');
+      final pointName = _gpsPointName(
+        index: index,
+        total: rawTrail.length,
+        timestamp: timestamp,
+        nearbyStop: nearbyStop,
+      );
+
+      points.add(
+        _TripHistoryPoint(
+          position: position,
+          timestamp: timestamp,
+          pointName: pointName,
+          label: label,
+          sourceLabel: _historySourceLabel(raw),
+          speedKph:
+              _numFrom(raw['speedKph']) ??
+              _numFrom(raw['speed']) ??
+              _numFrom(raw['velocity']),
+        ),
+      );
+    }
+
+    points.sort((a, b) {
+      final timeA = a.timestamp;
+      final timeB = b.timestamp;
+      if (timeA == null && timeB == null) {
+        return 0;
+      }
+      if (timeA == null) {
+        return 1;
+      }
+      if (timeB == null) {
+        return -1;
+      }
+      return timeA.compareTo(timeB);
+    });
+    return points;
+  }
+
+  List<_TripHistoryPoint> _timelineSamples(List<_TripHistoryPoint> points) {
+    if (points.length <= 5) {
+      return points;
+    }
+
+    final selectedIndexes = <int>{
+      0,
+      points.length - 1,
+      (points.length * 0.25).floor(),
+      (points.length * 0.5).floor(),
+      (points.length * 0.75).floor(),
+    }.toList()..sort();
+
+    return selectedIndexes.map((index) => points[index]).toList();
+  }
+
+  List<_TripStopReport> _tripStopReports(
+    List<_TripHistoryPoint> points,
+    List<Map> routeStops,
+  ) {
+    final reports = <_TripStopReport>[];
+    for (var index = 1; index < points.length; index++) {
+      final previous = points[index - 1];
+      final current = points[index];
+      final duration = _durationBetween(previous.timestamp, current.timestamp);
+      if (duration == null || duration.inMinutes < 10) {
+        continue;
+      }
+      final distanceMeters = _distanceMeters(
+        previous.position,
+        current.position,
+      );
+      final currentSpeed = current.speedKph ?? 0;
+      final previousSpeed = previous.speedKph ?? currentSpeed;
+      final stationary =
+          distanceMeters < 80 || (currentSpeed <= 3 && previousSpeed <= 3);
+      if (!stationary) {
+        continue;
+      }
+
+      reports.add(
+        _TripStopReport(
+          title: duration.inMinutes >= 30 ? 'Long stop detected' : 'Idle stop',
+          detail:
+              '${_formatDuration(duration)} near ${current.label}; movement stayed within ${distanceMeters.round()} m.',
+          timestampLabel: _formatHistoryTime(current.timestamp),
+          color: duration.inMinutes >= 30
+              ? AppTheme.colorFFE74C3C
+              : AppTheme.colorFFF59E0B,
+          icon: duration.inMinutes >= 30
+              ? Icons.report_problem_rounded
+              : Icons.pause_circle_filled_rounded,
+        ),
+      );
+    }
+
+    if (reports.isEmpty && routeStops.isNotEmpty) {
+      for (final stop in routeStops.take(2)) {
+        final name = stop['name']?.toString().trim();
+        reports.add(
+          _TripStopReport(
+            title: 'Route stop checkpoint',
+            detail: name == null || name.isEmpty
+                ? 'Planned stop reached or awaiting GeoTab arrival logs.'
+                : 'Checkpoint available at $name.',
+            timestampLabel: 'Stop',
+            color: AppTheme.colorFF4B7BE5,
+            icon: Icons.flag_rounded,
+          ),
+        );
+      }
+    }
+
+    return reports;
+  }
+
+  double _distanceKmFor(List<gmaps.LatLng> points) {
+    if (points.length < 2) {
+      return 0;
+    }
+    var meters = 0.0;
+    for (var index = 1; index < points.length; index++) {
+      meters += _distanceMeters(points[index - 1], points[index]);
+    }
+    return meters / 1000;
+  }
+
+  double _distanceMeters(gmaps.LatLng a, gmaps.LatLng b) {
+    const earthRadius = 6371000.0;
+    final lat1 = _radians(a.latitude);
+    final lat2 = _radians(b.latitude);
+    final dLat = _radians(b.latitude - a.latitude);
+    final dLng = _radians(b.longitude - a.longitude);
+    final h =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1) *
+            math.cos(lat2) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return earthRadius * 2 * math.atan2(math.sqrt(h), math.sqrt(1 - h));
+  }
+
+  double _radians(double degrees) => degrees * math.pi / 180;
+
+  Duration? _durationBetween(DateTime? start, DateTime? end) {
+    if (start == null || end == null) {
+      return null;
+    }
+    final duration = end.difference(start).abs();
+    return duration == Duration.zero ? null : duration;
+  }
+
+  DateTime? _parseHistoryDate(dynamic value) {
+    final raw = value?.toString().trim() ?? '';
+    if (raw.isEmpty || raw == 'N/A') {
+      return null;
+    }
+    return DateTime.tryParse(raw);
+  }
+
+  String _formatHistoryTime(DateTime? value) {
+    if (value == null) {
+      return '--:--';
+    }
+    final local = value.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String _formatDuration(Duration duration) {
+    if (duration.inHours > 0) {
+      final minutes = duration.inMinutes.remainder(60);
+      return '${duration.inHours}h ${minutes}m';
+    }
+    return '${duration.inMinutes}m';
+  }
+
   gmaps.LatLng? _latLngFromMap(Map raw) {
-    final latitude = (raw['latitude'] as num?)?.toDouble();
-    final longitude = (raw['longitude'] as num?)?.toDouble();
+    final latitude =
+        _numFrom(raw['latitude']) ?? _numFrom(raw['lat']) ?? _numFrom(raw['y']);
+    final longitude =
+        _numFrom(raw['longitude']) ??
+        _numFrom(raw['lng']) ??
+        _numFrom(raw['lon']) ??
+        _numFrom(raw['x']);
     if (latitude == null || longitude == null) {
       return null;
     }
 
     return gmaps.LatLng(latitude, longitude);
+  }
+
+  double? _numFrom(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+    return double.tryParse(value?.toString() ?? '');
   }
 
   gmaps.Polygon? _polygonFromGeofence(Map raw) {
@@ -3542,103 +4655,152 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     final isMobile = MediaQuery.of(context).size.width < 600;
 
     final pageActions = <Widget>[
-        OutlinedButton.icon(
-          onPressed: _printTripManifest,
-          icon: const Icon(Icons.assignment_rounded),
-          label: const Text('Print Manifest'),
+      OutlinedButton.icon(
+        onPressed: _printTripManifest,
+        icon: const Icon(Icons.assignment_rounded),
+        label: const Text('Print Manifest'),
+      ),
+      if (_isCompletedTrip)
+        FilledButton.icon(
+          onPressed: _printDeliveryReceipt,
+          icon: const Icon(Icons.receipt_long_rounded),
+          label: const Text('Delivery Receipt'),
         ),
-        if (_isCompletedTrip)
-          FilledButton.icon(
-            onPressed: _printDeliveryReceipt,
-            icon: const Icon(Icons.receipt_long_rounded),
-            label: const Text('Delivery Receipt'),
-          ),
-        IconButton(
-          icon: Icon(
-            Icons.arrow_back_rounded,
-            color: isDark ? AppTheme.gray400 : AppTheme.gray700,
-          ),
-          onPressed: () => Navigator.pop(context),
-          tooltip: 'Back to Trips',
+      IconButton(
+        icon: Icon(
+          Icons.arrow_back_rounded,
+          color: isDark ? AppTheme.gray400 : AppTheme.gray700,
         ),
-      ];
+        onPressed: () => Navigator.pop(context),
+        tooltip: 'Back to Trips',
+      ),
+    ];
     final detailContent = SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile ? 16 : 24),
-        child:
-            Container(
-                  padding: EdgeInsets.all(isMobile ? 20 : 28),
-                  decoration: BoxDecoration(
-                    color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: isDark
-                          ? AppTheme.white.withValues(alpha: 0.08)
-                          : AppTheme.black.withValues(alpha: 0.08),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: isDark
-                            ? AppTheme.black.withValues(alpha: 0.24)
-                            : AppTheme.black.withValues(alpha: 0.08),
-                        blurRadius: 30,
-                        offset: const Offset(0, 16),
-                      ),
-                    ],
+      padding: EdgeInsets.all(isMobile ? 16 : 24),
+      child:
+          Container(
+                padding: EdgeInsets.all(isMobile ? 20 : 28),
+                decoration: BoxDecoration(
+                  color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isDark
+                        ? AppTheme.white.withValues(alpha: 0.08)
+                        : AppTheme.black.withValues(alpha: 0.08),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.all(isMobile ? 16 : 20),
-                        decoration: BoxDecoration(
+                  boxShadow: [
+                    BoxShadow(
+                      color: isDark
+                          ? AppTheme.black.withValues(alpha: 0.24)
+                          : AppTheme.black.withValues(alpha: 0.08),
+                      blurRadius: 30,
+                      offset: const Offset(0, 16),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(isMobile ? 16 : 20),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? AppTheme.colorFF111722
+                            : AppTheme.colorFFF5F6F8,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
                           color: isDark
-                              ? AppTheme.colorFF111722
-                              : AppTheme.colorFFF5F6F8,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: isDark
-                                ? AppTheme.white.withValues(alpha: 0.08)
-                                : AppTheme.black.withValues(alpha: 0.08),
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: isDark
-                                  ? AppTheme.black.withValues(alpha: 0.12)
-                                  : AppTheme.black.withValues(alpha: 0.05),
-                              blurRadius: 22,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
+                              ? AppTheme.white.withValues(alpha: 0.08)
+                              : AppTheme.black.withValues(alpha: 0.08),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (isMobile) ...[
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Column(
+                        boxShadow: [
+                          BoxShadow(
+                            color: isDark
+                                ? AppTheme.black.withValues(alpha: 0.12)
+                                : AppTheme.black.withValues(alpha: 0.05),
+                            blurRadius: 22,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (isMobile) ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      trip['tripId'],
+                                      style: TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w900,
+                                        color: isDark
+                                            ? AppTheme.white
+                                            : AppTheme.colorFF2C3E50,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      trip['date'],
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: isDark
+                                            ? AppTheme.gray400
+                                            : AppTheme.gray600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                IconButton(
+                                  onPressed: () =>
+                                      _showKebabMenu(context, isDark),
+                                  icon: Icon(
+                                    Icons.more_vert_rounded,
+                                    color: isDark
+                                        ? AppTheme.gray400
+                                        : AppTheme.gray600,
+                                  ),
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: isDark
+                                        ? AppTheme.colorFF0F1117
+                                        : AppTheme.colorFFF5F6F8,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ] else
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         trip['tripId'],
                                         style: TextStyle(
-                                          fontSize: 22,
+                                          fontSize: 28,
                                           fontWeight: FontWeight.w900,
                                           color: isDark
                                               ? AppTheme.white
                                               : AppTheme.colorFF2C3E50,
                                         ),
                                       ),
-                                      const SizedBox(height: 6),
+                                      const SizedBox(height: 8),
                                       Text(
                                         trip['date'],
                                         style: TextStyle(
-                                          fontSize: 13,
+                                          fontSize: 14,
                                           color: isDark
                                               ? AppTheme.gray400
                                               : AppTheme.gray600,
@@ -3646,303 +4808,241 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                                       ),
                                     ],
                                   ),
-                                  IconButton(
-                                    onPressed: () =>
-                                        _showKebabMenu(context, isDark),
-                                    icon: Icon(
-                                      Icons.more_vert_rounded,
-                                      color: isDark
-                                          ? AppTheme.gray400
-                                          : AppTheme.gray600,
-                                    ),
-                                    style: IconButton.styleFrom(
-                                      backgroundColor: isDark
-                                          ? AppTheme.colorFF0F1117
-                                          : AppTheme.colorFFF5F6F8,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ] else
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          trip['tripId'],
-                                          style: TextStyle(
-                                            fontSize: 28,
-                                            fontWeight: FontWeight.w900,
-                                            color: isDark
-                                                ? AppTheme.white
-                                                : AppTheme.colorFF2C3E50,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          trip['date'],
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            color: isDark
-                                                ? AppTheme.gray400
-                                                : AppTheme.gray600,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 8,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: (trip['statusColor'] as Color)
-                                              .withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          border: Border.all(
-                                            color:
-                                                (trip['statusColor'] as Color)
-                                                    .withValues(alpha: 0.3),
-                                            width: 2,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          _getStatusText(trip['status']),
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w700,
-                                            color: trip['statusColor'] as Color,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      IconButton(
-                                        onPressed: () =>
-                                            _showKebabMenu(context, isDark),
-                                        icon: Icon(
-                                          Icons.more_vert_rounded,
-                                          color: isDark
-                                              ? AppTheme.gray400
-                                              : AppTheme.gray600,
-                                        ),
-                                        style: IconButton.styleFrom(
-                                          backgroundColor: isDark
-                                              ? AppTheme.colorFF0F1117
-                                              : AppTheme.colorFFF5F6F8,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              10,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            const SizedBox(height: 18),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _buildDetailSummaryChip(
-                                  'Client',
-                                  trip['customer'],
-                                  isDark,
-                                  compact: !isMobile,
                                 ),
-                                _buildDetailSummaryChip(
-                                  'Origin',
-                                  trip['origin'],
-                                  isDark,
-                                  compact: !isMobile,
-                                ),
-                                _buildDetailSummaryChip(
-                                  'Destination',
-                                  trip['destination'],
-                                  isDark,
-                                  compact: !isMobile,
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                      _buildSection(isDark, 'Customer Information', [
-                        _buildInfoRow(
-                          'Customer',
-                          trip['customer'],
-                          isDark,
-                          isMobile,
-                        ),
-                        _buildInfoRow('Phone', trip['phone'], isDark, isMobile),
-                      ], isMobile),
-                      const SizedBox(height: 24),
-                      _buildSection(isDark, 'Route Details', [
-                        _buildInfoRow(
-                          'Origin',
-                          trip['origin'],
-                          isDark,
-                          isMobile,
-                        ),
-                        _buildInfoRow(
-                          'Destination',
-                          trip['destination'],
-                          isDark,
-                          isMobile,
-                        ),
-                      ], isMobile),
-                      const SizedBox(height: 24),
-                      _buildWorkflowTimeline(isDark, isMobile),
-                      const SizedBox(height: 24),
-                      _buildBillingReadinessSection(isDark, isMobile),
-                      const SizedBox(height: 24),
-                      FutureBuilder<Map<String, dynamic>>(
-                        future: _tripMapFuture,
-                        initialData: _cachedTripMap(),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState ==
-                                  ConnectionState.waiting &&
-                              !snapshot.hasData) {
-                            return _buildTripMapSkeleton(isDark);
-                          }
-
-                          return _buildTripMapSection(
-                            isDark,
-                            isMobile,
-                            snapshot.data ?? const <String, dynamic>{},
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      _buildSection(isDark, 'Trip Details', [
-                        isMobile
-                            ? Column(
-                                children: [
-                                  _buildInfoBlock(
-                                    'Vehicle',
-                                    trip['vehicle'],
-                                    isDark,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  _buildInfoBlock(
-                                    'Driver',
-                                    trip['driver'],
-                                    isDark,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  _buildInfoBlock(
-                                    'Amount',
-                                    trip['amount'],
-                                    isDark,
-                                  ),
-                                ],
-                              )
-                            : Row(
-                                children: [
-                                  Expanded(
-                                    child: _buildInfoBlock(
-                                      'Vehicle',
-                                      trip['vehicle'],
-                                      isDark,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: _buildInfoBlock(
-                                      'Driver',
-                                      trip['driver'],
-                                      isDark,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: _buildInfoBlock(
-                                      'Amount',
-                                      trip['amount'],
-                                      isDark,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                      ], isMobile),
-                      if (trip['hasDelay']) ...[
-                        const SizedBox(height: 24),
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: AppTheme.colorFFE74C3C.withValues(
-                              alpha: 0.1,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: AppTheme.colorFFE74C3C.withValues(
-                                alpha: 0.3,
-                              ),
-                              width: 2,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.warning_rounded,
-                                color: AppTheme.colorFFE74C3C,
-                                size: 24,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                Row(
                                   children: [
-                                    const Text(
-                                      'Delay Warning',
-                                      style: TextStyle(
-                                        color: AppTheme.colorFFE74C3C,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 14,
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: (trip['statusColor'] as Color)
+                                            .withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: (trip['statusColor'] as Color)
+                                              .withValues(alpha: 0.3),
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        _getStatusText(trip['status']),
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
+                                          color: trip['statusColor'] as Color,
+                                        ),
                                       ),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      trip['delay'] ?? '',
-                                      style: const TextStyle(
-                                        color: AppTheme.colorFFE74C3C,
-                                        fontSize: 13,
+                                    const SizedBox(width: 12),
+                                    IconButton(
+                                      onPressed: () =>
+                                          _showKebabMenu(context, isDark),
+                                      icon: Icon(
+                                        Icons.more_vert_rounded,
+                                        color: isDark
+                                            ? AppTheme.gray400
+                                            : AppTheme.gray600,
+                                      ),
+                                      style: IconButton.styleFrom(
+                                        backgroundColor: isDark
+                                            ? AppTheme.colorFF0F1117
+                                            : AppTheme.colorFFF5F6F8,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ],
                                 ),
+                              ],
+                            ),
+                          const SizedBox(height: 18),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              _buildDetailSummaryChip(
+                                'Client',
+                                trip['customer'],
+                                isDark,
+                                compact: !isMobile,
+                              ),
+                              _buildDetailSummaryChip(
+                                'Origin',
+                                trip['origin'],
+                                isDark,
+                                compact: !isMobile,
+                              ),
+                              _buildDetailSummaryChip(
+                                'Destination',
+                                trip['destination'],
+                                isDark,
+                                compact: !isMobile,
                               ),
                             ],
                           ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    _buildSection(isDark, 'Customer Information', [
+                      _buildInfoRow(
+                        'Customer',
+                        trip['customer'],
+                        isDark,
+                        isMobile,
+                      ),
+                      _buildInfoRow('Phone', trip['phone'], isDark, isMobile),
+                    ], isMobile),
+                    const SizedBox(height: 24),
+                    _buildSection(isDark, 'Route Details', [
+                      _buildInfoRow('Origin', trip['origin'], isDark, isMobile),
+                      _buildInfoRow(
+                        'Destination',
+                        trip['destination'],
+                        isDark,
+                        isMobile,
+                      ),
+                    ], isMobile),
+                    const SizedBox(height: 24),
+                    _buildWorkflowTimeline(isDark, isMobile),
+                    const SizedBox(height: 24),
+                    _buildBillingReadinessSection(isDark, isMobile),
+                    const SizedBox(height: 24),
+                    FutureBuilder<Map<String, dynamic>>(
+                      future: _tripMapFuture,
+                      initialData: _cachedTripMap(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                                ConnectionState.waiting &&
+                            !snapshot.hasData) {
+                          return _buildTripMapSkeleton(isDark);
+                        }
+
+                        return _buildTripMapSection(
+                          isDark,
+                          isMobile,
+                          snapshot.data ?? const <String, dynamic>{},
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 24),
+                    _buildSection(isDark, 'Trip Details', [
+                      isMobile
+                          ? Column(
+                              children: [
+                                _buildInfoBlock(
+                                  'Vehicle',
+                                  trip['vehicle'],
+                                  isDark,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildInfoBlock(
+                                  'Driver',
+                                  trip['driver'],
+                                  isDark,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildInfoBlock(
+                                  'Amount',
+                                  trip['amount'],
+                                  isDark,
+                                ),
+                              ],
+                            )
+                          : Row(
+                              children: [
+                                Expanded(
+                                  child: _buildInfoBlock(
+                                    'Vehicle',
+                                    trip['vehicle'],
+                                    isDark,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: _buildInfoBlock(
+                                    'Driver',
+                                    trip['driver'],
+                                    isDark,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: _buildInfoBlock(
+                                    'Amount',
+                                    trip['amount'],
+                                    isDark,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ], isMobile),
+                    if (trip['hasDelay']) ...[
+                      const SizedBox(height: 24),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.colorFFE74C3C.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppTheme.colorFFE74C3C.withValues(
+                              alpha: 0.3,
+                            ),
+                            width: 2,
+                          ),
                         ),
-                      ],
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.warning_rounded,
+                              color: AppTheme.colorFFE74C3C,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Delay Warning',
+                                    style: TextStyle(
+                                      color: AppTheme.colorFFE74C3C,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    trip['delay'] ?? '',
+                                    style: const TextStyle(
+                                      color: AppTheme.colorFFE74C3C,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
-                  ),
-                )
-                .animate()
-                .fadeIn(duration: 500.ms)
-                .slideY(
-                  begin: 0.2,
-                  end: 0,
-                  duration: 500.ms,
-                  curve: Curves.easeOut,
+                  ],
                 ),
-      );
+              )
+              .animate()
+              .fadeIn(duration: 500.ms)
+              .slideY(
+                begin: 0.2,
+                end: 0,
+                duration: 500.ms,
+                curve: Curves.easeOut,
+              ),
+    );
 
     if (widget.embedded) {
       final size = MediaQuery.sizeOf(context);
@@ -4101,20 +5201,24 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       builder: (context, snapshot) {
         final hasPreview = snapshot.hasData && (snapshot.data ?? {}).isNotEmpty;
         final preview = snapshot.data ?? const <String, dynamic>{};
-        final stage = (preview['billingStageLabel'] ??
-                preview['collectionReadiness'] ??
-                _fallbackBillingStageLabel())
-            .toString();
+        final stage =
+            (preview['billingStageLabel'] ??
+                    preview['collectionReadiness'] ??
+                    _fallbackBillingStageLabel())
+                .toString();
         final podStatus =
             (preview['podReviewStatus'] ?? preview['podStatus'] ?? 'pending')
                 .toString();
         final amount =
-            (preview['totalWithVat'] ?? preview['amount'] ?? trip['amount'] ?? 'N/A')
+            (preview['totalWithVat'] ??
+                    preview['amount'] ??
+                    trip['amount'] ??
+                    'N/A')
                 .toString();
         final nextAction = hasPreview
             ? (preview['billingDecision'] ??
-                    'Accounting reviews the draft after POD verification.')
-                .toString()
+                      'Accounting reviews the draft after POD verification.')
+                  .toString()
             : 'Draft billing starts when the trip has enough dispatch, amount, and route evidence.';
 
         return _buildSection(isDark, 'Billing Readiness', [

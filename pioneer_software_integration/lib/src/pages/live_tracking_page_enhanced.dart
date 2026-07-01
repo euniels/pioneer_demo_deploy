@@ -10,6 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
 import 'package:latlong2/latlong.dart';
 
 import '../services/backend_api.dart';
+import '../services/external_link_service.dart';
 import '../services/fleet_sync_service.dart';
 import '../services/google_map_marker_factory.dart';
 import '../services/live_tracking_motion_math.dart';
@@ -92,6 +93,10 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   bool _showZoneOverlays = true;
   bool _showPredictiveContext = true;
   bool _showMapIntelligencePanel = false;
+  bool _sidebarRouteOrdersExpanded = false;
+  bool _sidebarFleetStatusExpanded = false;
+  bool _sidebarVehiclesExpanded = true;
+  bool _sidebarCollapsed = false;
   PioneerMapMarkerStyle? _sidebarStatusFilter;
   gmaps.MapType _mapType = gmaps.MapType.normal;
   late final DateTime _launchedAt;
@@ -104,11 +109,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   static const double _stationarySpeedThresholdKph = 2.0;
   static const double _bearingCorrectionThresholdDegrees = 5.0;
   static const Duration _markerRenderDelay = Duration(milliseconds: 900);
-  static const Duration _freeDriveProjectionLimit = Duration(seconds: 10);
-  static const double _roadLockToleranceMeters = 85.0;
+  static const Duration _freeDriveProjectionLimit = Duration(seconds: 18);
+  static const double _roadLockToleranceMeters = 80.0;
   static const double _viewportBufferFraction = 0.20;
   static const double _compactMarkerZoomThreshold = 12.0;
   static const double _closeMarkerZoomThreshold = 16.0;
+  static const double _trackingSidebarCollapsedWidth = 54.0;
   static const double _trackingSidebarMinWidth = 360.0;
   static const double _trackingSidebarMaxWidth = 560.0;
 
@@ -1113,13 +1119,22 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 ),
                 if (_selectedVehicle != null)
                   Positioned(
-                    bottom: 24,
-                    left: 24,
-                    right: 24,
+                    bottom: 14,
+                    left: 18,
+                    right: 18,
                     child: _buildSelectedVehicleCard(_selectedVehicle!)
                         .animate()
                         .fadeIn(duration: 700.ms)
                         .slideY(begin: 0.2, end: 0, duration: 500.ms),
+                  ),
+                if (_showMapIntelligencePanel)
+                  Positioned(
+                    top: 84,
+                    right: 82,
+                    child: _buildMapIntelligencePanel(
+                      context,
+                      width: _mapIntelligencePanelWidth(context),
+                    ),
                   ),
                 Positioned(
                   top: 100,
@@ -1157,13 +1172,22 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         ),
         if (_selectedVehicle != null)
           Positioned(
-            bottom: 16,
+            bottom: 10,
             left: 12,
             right: 12,
             child: _buildSelectedVehicleCard(_selectedVehicle!)
                 .animate()
                 .fadeIn(duration: 700.ms)
                 .slideY(begin: 0.2, end: 0, duration: 500.ms),
+          ),
+        if (_showMapIntelligencePanel)
+          Positioned(
+            top: 76,
+            right: 62,
+            child: _buildMapIntelligencePanel(
+              context,
+              width: _mapIntelligencePanelWidth(context),
+            ),
           ),
         Positioned(
           top: 84,
@@ -1299,9 +1323,23 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
               isDark: isDark,
               isMobile: isMobile,
             ),
+            SizedBox(width: isMobile ? 10 : 14),
+            _buildTopLegendDivider(isDark),
+            SizedBox(width: isMobile ? 10 : 14),
+            _buildMapMarkerLegend(context, compact: true),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildTopLegendDivider(bool isDark) {
+    return Container(
+      width: 1,
+      height: 26,
+      color: isDark
+          ? AppTheme.white.withValues(alpha: 0.14)
+          : AppTheme.black.withValues(alpha: 0.10),
     );
   }
 
@@ -1496,8 +1534,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     final screenWidth = MediaQuery.of(context).size.width;
     final reservedRight = _mapIntelligenceRightOffset(context);
     final available = screenWidth - reservedRight - 28;
-    final minimum = screenWidth < 420 ? 168.0 : 240.0;
-    return math.min(330.0, math.max(minimum, available));
+    final minimum = screenWidth < 420 ? 160.0 : 220.0;
+    return math.min(300.0, math.max(minimum, available));
   }
 
   Widget _buildMapIntelligencePanel(BuildContext context, {double? width}) {
@@ -1517,7 +1555,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             width: panelWidth,
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: isDark
                   ? AppTheme.colorFF111827.withValues(alpha: 0.98)
@@ -1539,15 +1577,15 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 Row(
                   children: [
                     Container(
-                      width: 34,
-                      height: 34,
+                      width: 30,
+                      height: 30,
                       decoration: BoxDecoration(
                         color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: const Icon(
                         Icons.tune_rounded,
-                        size: 18,
+                        size: 16,
                         color: AppTheme.colorFF4B7BE5,
                       ),
                     ),
@@ -1569,7 +1607,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                           Text(
                             'Google APIs and GeoTab layers',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 10.5,
                               fontWeight: FontWeight.w700,
                               color: isDark
                                   ? AppTheme.gray400
@@ -1592,9 +1630,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                _buildMapIntelligenceSummary(isDark),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 _intelligenceToggle(
                   isDark: isDark,
                   icon: Icons.traffic_rounded,
@@ -1664,19 +1700,23 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   onChanged: (value) =>
                       setState(() => _showPredictiveContext = value),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 Text(
                   'Map style',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w900,
                     color: isDark ? AppTheme.gray300 : AppTheme.colorFF374151,
                   ),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                const SizedBox(height: 6),
+                GridView.count(
+                  crossAxisCount: 2,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 6,
+                  crossAxisSpacing: 6,
+                  childAspectRatio: 3.35,
                   children: [
                     _mapTypeChip('Normal', gmaps.MapType.normal, isDark),
                     _mapTypeChip('Terrain', gmaps.MapType.terrain, isDark),
@@ -1692,148 +1732,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     );
   }
 
-  Widget _buildMapIntelligenceSummary(bool isDark) {
-    final layers = <Map<String, Object>>[
-      {
-        'label': 'Traffic',
-        'enabled': _showTrafficLayer,
-        'color': AppTheme.colorFFE67E22,
-      },
-      {
-        'label': 'Weather',
-        'enabled': _showWeatherContext,
-        'color': AppTheme.colorFF4B7BE5,
-      },
-      {
-        'label': 'ETA',
-        'enabled': _showTrafficEta,
-        'color': AppTheme.colorFF27AE60,
-      },
-      {
-        'label': 'Routes',
-        'enabled': _showRoutePath,
-        'color': AppTheme.colorFF7C3AED,
-      },
-      {
-        'label': 'Trails',
-        'enabled': _showVehicleTrail,
-        'color': AppTheme.colorFF0E7A43,
-      },
-      {
-        'label': 'Zones',
-        'enabled': _showZoneOverlays,
-        'color': AppTheme.colorFF0EA5E9,
-      },
-    ];
-    final activeCount = layers
-        .where((layer) => layer['enabled'] == true)
-        .length;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: isDark
-            ? AppTheme.white.withValues(alpha: 0.05)
-            : AppTheme.colorFFF8FAFC,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.visibility_rounded,
-                size: 15,
-                color: activeCount > 0
-                    ? AppTheme.colorFF27AE60
-                    : AppTheme.gray500,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '$activeCount of ${layers.length} live map layers active',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w900,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (final layer in layers)
-                _mapLayerStateChip(
-                  label: layer['label'] as String,
-                  enabled: layer['enabled'] as bool,
-                  color: layer['color'] as Color,
-                  isDark: isDark,
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _mapLayerStateChip({
-    required String label,
-    required bool enabled,
-    required Color color,
-    required bool isDark,
-  }) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: enabled
-            ? color.withValues(alpha: isDark ? 0.18 : 0.12)
-            : (isDark
-                  ? AppTheme.white.withValues(alpha: 0.035)
-                  : AppTheme.colorFFE5E7EB.withValues(alpha: 0.55)),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: enabled
-              ? color.withValues(alpha: 0.45)
-              : AppTheme.getBorderColor(context),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: enabled ? color : AppTheme.gray500,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              color: enabled
-                  ? (isDark ? AppTheme.white : AppTheme.colorFF111827)
-                  : (isDark ? AppTheme.gray500 : AppTheme.gray600),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _intelligenceToggle({
     required bool isDark,
     required IconData icon,
@@ -1844,13 +1742,13 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required ValueChanged<bool> onChanged,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 6),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
         onTap: () => onChanged(!value),
         child: Container(
-          constraints: const BoxConstraints(minHeight: 56),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
           decoration: BoxDecoration(
             color: value
                 ? color.withValues(alpha: isDark ? 0.16 : 0.10)
@@ -1866,8 +1764,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           ),
           child: Row(
             children: [
-              Icon(icon, color: value ? color : AppTheme.gray500, size: 18),
-              const SizedBox(width: 9),
+              Icon(icon, color: value ? color : AppTheme.gray500, size: 16),
+              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1877,18 +1775,18 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11.5,
                         fontWeight: FontWeight.w900,
                         color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 1),
                     Text(
                       detail,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 10.5,
+                        fontSize: 9.8,
                         fontWeight: FontWeight.w600,
                         color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                       ),
@@ -1896,11 +1794,11 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                constraints: const BoxConstraints(minWidth: 34),
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+                constraints: const BoxConstraints(minWidth: 30),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 decoration: BoxDecoration(
                   color: value
                       ? color.withValues(alpha: isDark ? 0.24 : 0.16)
@@ -1918,7 +1816,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   value ? 'ON' : 'OFF',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 9.5,
+                    fontSize: 8.8,
                     fontWeight: FontWeight.w900,
                     color: value
                         ? color
@@ -1926,9 +1824,9 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
               Transform.scale(
-                scale: 0.92,
+                scale: 0.82,
                 child: Switch.adaptive(
                   value: value,
                   onChanged: onChanged,
@@ -1981,6 +1879,13 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }
 
   Widget _buildResizableVehicleSidebar() {
+    if (_sidebarCollapsed) {
+      return SizedBox(
+        width: _trackingSidebarCollapsedWidth,
+        child: _buildCollapsedVehicleSidebar(),
+      );
+    }
+
     final width = _effectiveTrackingSidebarWidth(context);
     return SizedBox(
       width: width,
@@ -1989,6 +1894,79 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           _buildSidebarResizeHandle(),
           Expanded(child: _buildVehicleListSidebar()),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCollapsedVehicleSidebar() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppTheme.colorFF111827 : AppTheme.white,
+        border: Border(
+          left: BorderSide(color: AppTheme.getBorderColor(context)),
+        ),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          Tooltip(
+            message: 'Expand sidebar',
+            child: IconButton(
+              onPressed: () => setState(() => _sidebarCollapsed = false),
+              icon: const Icon(Icons.keyboard_double_arrow_left_rounded),
+              color: AppTheme.colorFF4B7BE5,
+            ),
+          ),
+          const Divider(height: 12),
+          _collapsedSidebarIcon(
+            icon: Icons.assignment_rounded,
+            label: '${_routeOrders.length}',
+            color: AppTheme.colorFF4B7BE5,
+            tooltip: 'Route orders',
+          ),
+          _collapsedSidebarIcon(
+            icon: Icons.filter_alt_rounded,
+            label: '${_sidebarVehicles.length}',
+            color: AppTheme.colorFF27AE60,
+            tooltip: 'Fleet status',
+          ),
+          _collapsedSidebarIcon(
+            icon: Icons.sensors_rounded,
+            label: '${_vehicleMarkers.length}',
+            color: AppTheme.colorFF0EA5E9,
+            tooltip: 'Tracked vehicles',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _collapsedSidebarIcon({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required String tooltip,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Tooltip(
+      message: tooltip,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Column(
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                color: isDark ? AppTheme.gray300 : AppTheme.colorFF334155,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2055,7 +2033,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       child: Column(
         children: [
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 9),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -2071,47 +2049,37 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 const Icon(
                   Icons.route_rounded,
                   color: AppTheme.colorFF4B7BE5,
-                  size: 24,
+                  size: 18,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Text(
                   'Live Orders',
-                  style: AppTheme.getHeadingStyle(context, fontSize: 18),
+                  style: AppTheme.getHeadingStyle(context, fontSize: 15),
+                ),
+                const Spacer(),
+                Tooltip(
+                  message: 'Collapse sidebar',
+                  child: IconButton(
+                    onPressed: () => setState(() => _sidebarCollapsed = true),
+                    icon: const Icon(Icons.keyboard_double_arrow_right_rounded),
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 18,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
                 ),
               ],
             ),
           ),
           _buildRouteOrdersPanel(isDark: isDark, isMobile: false),
           _buildSidebarStatusLegend(isDark: isDark, isMobile: false),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.sensors_rounded,
-                  size: 18,
-                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Tracked Vehicles',
-                  style: AppTheme.getCaptionStyle(
-                    context,
-                  ).copyWith(fontWeight: FontWeight.w900),
-                ),
-                const Spacer(),
-                Text(
-                  '${sidebarVehicles.length}/${_vehicleMarkers.length}',
-                  style: AppTheme.getCaptionStyle(context).copyWith(
-                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
+          _buildTrackedVehiclesHeader(
+            isDark: isDark,
+            visibleCount: sidebarVehicles.length,
           ),
           Expanded(
-            child: sidebarVehicles.isEmpty
+            child: !_sidebarVehiclesExpanded
+                ? _buildSidebarVehiclesCollapsedState(isDark)
+                : sidebarVehicles.isEmpty
                 ? _buildSidebarEmptyFilterState(isDark)
                 : ListView.builder(
                     itemCount: sidebarVehicles.length,
@@ -2366,127 +2334,217 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     );
   }
 
+  Widget _buildTrackedVehiclesHeader({
+    required bool isDark,
+    required int visibleCount,
+  }) {
+    return _buildSidebarDropdownHeader(
+      isDark: isDark,
+      icon: Icons.sensors_rounded,
+      title: 'Tracked Vehicles',
+      countLabel: '$visibleCount/${_vehicleMarkers.length}',
+      expanded: _sidebarVehiclesExpanded,
+      onTap: () =>
+          setState(() => _sidebarVehiclesExpanded = !_sidebarVehiclesExpanded),
+    );
+  }
+
+  Widget _buildSidebarDropdownHeader({
+    required bool isDark,
+    required IconData icon,
+    required String title,
+    required String countLabel,
+    required bool expanded,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 2),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
+          child: Row(
+            children: [
+              Icon(icon, size: 16, color: AppTheme.colorFF4B7BE5),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.getCaptionStyle(context).copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
+                  ),
+                ),
+              ),
+              _buildSidebarCountPill(countLabel),
+              const SizedBox(width: 6),
+              AnimatedRotation(
+                duration: const Duration(milliseconds: 180),
+                turns: expanded ? 0.5 : 0,
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 20,
+                  color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarVehiclesCollapsedState(bool isDark) {
+    return Center(
+      child: TextButton.icon(
+        onPressed: () => setState(() => _sidebarVehiclesExpanded = true),
+        icon: const Icon(Icons.unfold_more_rounded, size: 16),
+        label: const Text('Show tracked vehicles'),
+        style: TextButton.styleFrom(
+          foregroundColor: AppTheme.colorFF4B7BE5,
+          textStyle: const TextStyle(fontWeight: FontWeight.w900),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarCountPill(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+          color: AppTheme.colorFF4B7BE5,
+        ),
+      ),
+    );
+  }
+
   Widget _buildSidebarStatusLegend({
     required bool isDark,
     required bool isMobile,
   }) {
-    return Container(
-      margin: EdgeInsets.fromLTRB(
-        isMobile ? 12 : 16,
-        12,
-        isMobile ? 12 : 16,
-        0,
-      ),
-      padding: EdgeInsets.all(isMobile ? 10 : 12),
-      decoration: BoxDecoration(
-        color: isDark
-            ? AppTheme.colorFF111827.withValues(alpha: 0.95)
-            : AppTheme.colorFFF8FAFC,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            height: 30,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.filter_alt_rounded,
-                      size: 16,
-                      color: isDark ? AppTheme.gray400 : AppTheme.colorFF64748B,
-                    ),
-                    const SizedBox(width: 7),
-                    Text(
-                      'Fleet Status',
-                      style: AppTheme.getCaptionStyle(context).copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
-                      ),
-                    ),
-                  ],
+    final expanded = isMobile || _sidebarFleetStatusExpanded;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _buildSidebarDropdownHeader(
+          isDark: isDark,
+          icon: Icons.filter_alt_rounded,
+          title: _sidebarStatusFilter == null
+              ? 'Fleet Status'
+              : 'Fleet: ${_sidebarStatusFilterLabel(_sidebarStatusFilter!)}',
+          countLabel: '${_sidebarVehicles.length}/${_vehicleMarkers.length}',
+          expanded: expanded,
+          onTap: isMobile
+              ? () {}
+              : () => setState(
+                  () => _sidebarFleetStatusExpanded =
+                      !_sidebarFleetStatusExpanded,
                 ),
-                if (_sidebarStatusFilter != null)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(999),
-                      onTap: () => setState(() => _sidebarStatusFilter = null),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 5,
-                        ),
-                        child: Text(
-                          'Clear',
-                          style: AppTheme.getCaptionStyle(context).copyWith(
-                            color: AppTheme.colorFF4B7BE5,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+        ),
+        if (_sidebarStatusFilter != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: TextButton.icon(
+                onPressed: () => setState(() => _sidebarStatusFilter = null),
+                icon: const Icon(Icons.close_rounded, size: 13),
+                label: const Text('Clear'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  foregroundColor: AppTheme.colorFF4B7BE5,
+                  textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          Wrap(
-            alignment: WrapAlignment.center,
-            runAlignment: WrapAlignment.center,
-            spacing: 7,
-            runSpacing: 7,
+        AnimatedCrossFade(
+          firstChild: const SizedBox.shrink(),
+          secondChild: Column(
             children: [
-              _buildSidebarLegendChip(
-                label: 'All',
-                count: _vehicleMarkers.length,
-                icon: Icons.select_all_rounded,
-                color: AppTheme.colorFF4B7BE5,
-                state: null,
-                isDark: isDark,
-              ),
-              _buildSidebarLegendChip(
-                label: 'Moving',
-                count: _sidebarCountFor(PioneerMapMarkerStyle.moving),
-                icon: Icons.navigation_rounded,
-                color: AppTheme.successGreen,
-                state: PioneerMapMarkerStyle.moving,
-                isDark: isDark,
-              ),
-              _buildSidebarLegendChip(
-                label: 'Idling',
-                count: _sidebarCountFor(PioneerMapMarkerStyle.idle),
-                icon: Icons.pause_circle_filled_rounded,
-                color: AppTheme.warningOrange,
-                state: PioneerMapMarkerStyle.idle,
-                isDark: isDark,
-              ),
-              _buildSidebarLegendChip(
-                label: 'Stopped',
-                count: _sidebarCountFor(PioneerMapMarkerStyle.offline),
-                icon: Icons.power_settings_new_rounded,
-                color: AppTheme.colorFF64748B,
-                state: PioneerMapMarkerStyle.offline,
-                isDark: isDark,
-              ),
-              _buildSidebarLegendChip(
-                label: 'Offline',
-                count: _sidebarCountFor(PioneerMapMarkerStyle.stale),
-                icon: Icons.cloud_off_rounded,
-                color: AppTheme.colorFF94A3B8,
-                state: PioneerMapMarkerStyle.stale,
-                isDark: isDark,
+              const SizedBox(height: 6),
+              Wrap(
+                alignment: WrapAlignment.center,
+                runAlignment: WrapAlignment.center,
+                spacing: 7,
+                runSpacing: 7,
+                children: [
+                  _buildSidebarLegendChip(
+                    label: 'All',
+                    count: _vehicleMarkers.length,
+                    icon: Icons.select_all_rounded,
+                    color: AppTheme.colorFF4B7BE5,
+                    state: null,
+                    isDark: isDark,
+                  ),
+                  _buildSidebarLegendChip(
+                    label: 'Moving',
+                    count: _sidebarCountFor(PioneerMapMarkerStyle.moving),
+                    icon: Icons.navigation_rounded,
+                    color: AppTheme.successGreen,
+                    state: PioneerMapMarkerStyle.moving,
+                    isDark: isDark,
+                  ),
+                  _buildSidebarLegendChip(
+                    label: 'Idling',
+                    count: _sidebarCountFor(PioneerMapMarkerStyle.idle),
+                    icon: Icons.pause_circle_filled_rounded,
+                    color: AppTheme.warningOrange,
+                    state: PioneerMapMarkerStyle.idle,
+                    isDark: isDark,
+                  ),
+                  _buildSidebarLegendChip(
+                    label: 'Stopped',
+                    count: _sidebarCountFor(PioneerMapMarkerStyle.offline),
+                    icon: Icons.power_settings_new_rounded,
+                    color: AppTheme.colorFF64748B,
+                    state: PioneerMapMarkerStyle.offline,
+                    isDark: isDark,
+                  ),
+                  _buildSidebarLegendChip(
+                    label: 'Offline',
+                    count: _sidebarCountFor(PioneerMapMarkerStyle.stale),
+                    icon: Icons.cloud_off_rounded,
+                    color: AppTheme.colorFF94A3B8,
+                    state: PioneerMapMarkerStyle.stale,
+                    isDark: isDark,
+                  ),
+                ],
               ),
             ],
           ),
-        ],
-      ),
+          crossFadeState: expanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 180),
+          sizeCurve: Curves.easeOutCubic,
+        ),
+      ],
     );
+  }
+
+  String _sidebarStatusFilterLabel(PioneerMapMarkerStyle state) {
+    switch (state) {
+      case PioneerMapMarkerStyle.moving:
+        return 'Moving';
+      case PioneerMapMarkerStyle.idle:
+        return 'Idling';
+      case PioneerMapMarkerStyle.offline:
+        return 'Stopped';
+      case PioneerMapMarkerStyle.stale:
+        return 'Offline';
+    }
   }
 
   Widget _buildSidebarLegendChip({
@@ -2891,7 +2949,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           physics: const NeverScrollableScrollPhysics(),
           mainAxisSpacing: 8,
           crossAxisSpacing: 8,
-          childAspectRatio: columns == 2 ? 3.1 : 1.42,
+          childAspectRatio: columns == 2 ? 2.55 : 1.08,
           children: [
             _buildSidebarActionButton(
               icon: Icons.my_location_rounded,
@@ -2912,10 +2970,10 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
               onTap: () => unawaited(_shareVehicleLocation(vehicle)),
             ),
             _buildSidebarActionButton(
-              icon: Icons.more_horiz_rounded,
-              label: 'More',
+              icon: Icons.streetview_rounded,
+              label: 'Street',
               color: AppTheme.colorFF64748B,
-              onTap: () => _openVehicleOperationsSheet(vehicle),
+              onTap: () => unawaited(_openVehicleOperationsSheet(vehicle)),
             ),
           ],
         );
@@ -2945,12 +3003,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
             ),
             child: Center(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(icon, size: 18, color: color),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 5),
                     Text(
                       label,
                       maxLines: 1,
@@ -3200,93 +3258,67 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     bool closeOnSelect = false,
   }) {
     final orders = _routeOrders;
+    final expanded = isMobile || closeOnSelect || _sidebarRouteOrdersExpanded;
 
-    return Container(
-      margin: EdgeInsets.fromLTRB(isMobile ? 12 : 16, 0, isMobile ? 12 : 16, 0),
-      padding: EdgeInsets.all(isMobile ? 12 : 14),
-      decoration: BoxDecoration(
-        color: isDark ? AppTheme.colorFF111827 : AppTheme.colorFFF3F7FF,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.22),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildSidebarDropdownHeader(
+          isDark: isDark,
+          icon: Icons.assignment_rounded,
+          title: 'GeoTab Route Orders',
+          countLabel: '${orders.length}',
+          expanded: expanded,
+          onTap: isMobile || closeOnSelect
+              ? () {}
+              : () => setState(
+                  () => _sidebarRouteOrdersExpanded =
+                      !_sidebarRouteOrdersExpanded,
+                ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
+        AnimatedCrossFade(
+          firstChild: const SizedBox.shrink(),
+          secondChild: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.assignment_rounded,
-                  color: AppTheme.colorFF4B7BE5,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'GeoTab Route Orders',
+              const SizedBox(height: 10),
+              if (orders.isEmpty)
+                Text(
+                  'No planned route orders are available yet.',
                   style: TextStyle(
-                    fontSize: isMobile ? 13 : 14,
-                    fontWeight: FontWeight.w900,
-                    color: isDark ? AppTheme.white : AppTheme.colorFF1A1D23,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  '${orders.length}',
-                  style: const TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    color: AppTheme.colorFF4B7BE5,
+                    height: 1.35,
+                    color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                  ),
+                )
+              else
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: isMobile ? 180 : 220),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: orders.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final order = orders[index];
+                      return _buildRouteOrderTile(
+                        order,
+                        isDark: isDark,
+                        isMobile: isMobile,
+                        closeOnSelect: closeOnSelect,
+                      );
+                    },
                   ),
                 ),
-              ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (orders.isEmpty)
-            Text(
-              'No planned route orders are available yet.',
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.35,
-                color: isDark ? AppTheme.gray400 : AppTheme.gray600,
-              ),
-            )
-          else
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: isMobile ? 180 : 250),
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: orders.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  final order = orders[index];
-                  return _buildRouteOrderTile(
-                    order,
-                    isDark: isDark,
-                    isMobile: isMobile,
-                    closeOnSelect: closeOnSelect,
-                  );
-                },
-              ),
-            ),
-        ],
-      ),
+          crossFadeState: expanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 180),
+          sizeCurve: Curves.easeOutCubic,
+        ),
+      ],
     );
   }
 
@@ -3448,49 +3480,87 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
 
   Future<void> _locateSidebarVehicle(Map<String, dynamic> vehicle) async {
     await _selectVehicle(vehicle);
-    final zoom = math.max(_currentMapZoom, 16.0);
+    final zoom = math.max(_currentMapZoom, 17.0);
     _moveMap(_animatedLatLngOf(vehicle), zoom);
     _showLiveTrackingHint('${_plateLabelOf(vehicle)} centered on the map.');
   }
 
   Future<void> _focusVehicleTrip(Map<String, dynamic> vehicle) async {
+    final plate = _plateLabelOf(vehicle);
+    if (mounted) {
+      setState(() {
+        _showRoutePath = true;
+        _showVehicleTrail = true;
+        _sidebarRouteOrdersExpanded = true;
+      });
+    }
     await _selectVehicle(vehicle);
-    final stopCount = _routeStopsFor(vehicle).length;
-    if (stopCount > 0) {
-      _showLiveTrackingHint(
-        '${_plateLabelOf(vehicle)} route and $stopCount stop${stopCount == 1 ? '' : 's'} highlighted.',
-      );
+    if (!mounted) {
       return;
     }
-    if (_selectedTrail.length > 1) {
-      _showLiveTrackingHint(
-        '${_plateLabelOf(vehicle)} recent movement trail highlighted.',
-      );
-      return;
-    }
-    _showLiveTrackingHint(
-      '${_plateLabelOf(vehicle)} has no active Geotab route yet.',
+    _showLiveTrackingHint('Opening $plate trip history and route replay.');
+    await Navigator.of(context).pushNamed(
+      '/trips',
+      arguments: {
+        'vehicle': plate,
+        'openTripForVehicle': true,
+        'source': 'live-tracking',
+      },
     );
   }
 
   Future<void> _shareVehicleLocation(Map<String, dynamic> vehicle) async {
     final point = _animatedLatLngOf(vehicle);
     final fuelPercent = _fuelPercentOf(vehicle);
+    final mapsUrl = _googleMapsUrl(point.latitude, point.longitude);
     final text = [
       _plateLabelOf(vehicle),
       _statusLabel(vehicle),
       'Location: ${_lastKnownAddressLabel(vehicle)}',
       'GPS: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+      'Map: $mapsUrl',
       'Fuel: ${fuelPercent == null ? 'N/A' : '${fuelPercent.round()}%'}',
       'Ignition: ${_ignitionOn(vehicle) ? 'On' : 'Off'}',
       _lastSeenLabel(vehicle),
     ].join('\n');
 
     await Clipboard.setData(ClipboardData(text: text));
-    _showLiveTrackingHint('${_plateLabelOf(vehicle)} tracking summary copied.');
+    _showLiveTrackingHint(
+      '${_plateLabelOf(vehicle)} exact map link copied for sharing.',
+    );
   }
 
-  void _openVehicleOperationsSheet(Map<String, dynamic> vehicle) {
+  Future<void> _openVehicleOperationsSheet(Map<String, dynamic> vehicle) async {
+    await _openStreetViewForVehicle(vehicle);
+  }
+
+  Future<void> _openStreetViewForVehicle(Map<String, dynamic> vehicle) async {
+    final point = _animatedLatLngOf(vehicle);
+    final url = _streetViewUrl(point.latitude, point.longitude);
+    final opened = await openExternalLink(url);
+    if (opened) {
+      _showLiveTrackingHint(
+        'Street View opened for ${_plateLabelOf(vehicle)}.',
+      );
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: url));
+    _showLiveTrackingHint(
+      'Street View link copied for ${_plateLabelOf(vehicle)}.',
+    );
+  }
+
+  String _googleMapsUrl(double latitude, double longitude) {
+    return 'https://www.google.com/maps/search/?api=1&query=${latitude.toStringAsFixed(6)},${longitude.toStringAsFixed(6)}';
+  }
+
+  String _streetViewUrl(double latitude, double longitude) {
+    return 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${latitude.toStringAsFixed(6)},${longitude.toStringAsFixed(6)}';
+  }
+
+  // ignore: unused_element
+  void _showVehicleOperationsSheet(Map<String, dynamic> vehicle) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final markerColor = _sidebarStateAccent(vehicle);
     showModalBottomSheet(
@@ -3915,34 +3985,34 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     final isMobile = screenWidth < 600;
 
     return Container(
-      padding: EdgeInsets.all(isMobile ? 12 : 20),
+      padding: EdgeInsets.all(isMobile ? 10 : 14),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.colorFF1A1D23 : AppTheme.white,
-        borderRadius: BorderRadius.circular(isMobile ? 16 : 20),
+        borderRadius: BorderRadius.circular(isMobile ? 14 : 16),
         boxShadow: [
           BoxShadow(
             color: AppTheme.black.withValues(alpha: isDark ? 0.4 : 0.08),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
+            blurRadius: 16,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            width: isMobile ? 44 : 60,
-            height: isMobile ? 44 : 60,
+            width: isMobile ? 40 : 48,
+            height: isMobile ? 40 : 48,
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: _motionStateGradient(vehicle)),
-              borderRadius: BorderRadius.circular(isMobile ? 12 : 16),
+              borderRadius: BorderRadius.circular(isMobile ? 11 : 13),
             ),
             child: Icon(
               _motionStateIcon(vehicle),
               color: AppTheme.white,
-              size: isMobile ? 22 : 32,
+              size: isMobile ? 21 : 27,
             ),
           ),
-          SizedBox(width: isMobile ? 10 : 16),
+          SizedBox(width: isMobile ? 9 : 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3951,29 +4021,29 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 Text(
                   _plateOf(vehicle),
                   style: TextStyle(
-                    fontSize: isMobile ? 15 : 20,
+                    fontSize: isMobile ? 14 : 17,
                     fontWeight: FontWeight.w900,
                     color: isDark ? AppTheme.white : AppTheme.colorFF2C3E50,
                   ),
                 ),
-                SizedBox(height: isMobile ? 4 : 8),
+                SizedBox(height: isMobile ? 3 : 5),
                 Wrap(
-                  spacing: isMobile ? 8 : 16,
-                  runSpacing: 4,
+                  spacing: isMobile ? 7 : 10,
+                  runSpacing: 3,
                   children: [
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
                           Icons.speed_rounded,
-                          size: isMobile ? 14 : 16,
+                          size: isMobile ? 13 : 14,
                           color: AppTheme.colorFF4B7BE5,
                         ),
                         SizedBox(width: isMobile ? 4 : 6),
                         Text(
                           '${_speedOf(vehicle)} km/h',
                           style: TextStyle(
-                            fontSize: isMobile ? 11 : 14,
+                            fontSize: isMobile ? 10.5 : 12,
                             fontWeight: FontWeight.w700,
                             color: AppTheme.colorFF4B7BE5,
                           ),
@@ -3985,14 +4055,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                       children: [
                         Icon(
                           Icons.route_rounded,
-                          size: isMobile ? 14 : 16,
+                          size: isMobile ? 13 : 14,
                           color: AppTheme.colorFF27AE60,
                         ),
                         SizedBox(width: isMobile ? 4 : 6),
                         Text(
                           _statusLabel(vehicle),
                           style: TextStyle(
-                            fontSize: isMobile ? 11 : 14,
+                            fontSize: isMobile ? 10.5 : 12,
                             color: isDark
                                 ? AppTheme.gray300
                                 : AppTheme.colorFF2C3E50,
@@ -4005,14 +4075,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                       children: [
                         Icon(
                           Icons.explore_rounded,
-                          size: isMobile ? 14 : 16,
+                          size: isMobile ? 13 : 14,
                           color: AppTheme.colorFF27AE60,
                         ),
                         SizedBox(width: isMobile ? 4 : 6),
                         Text(
                           _directionDisplay(vehicle),
                           style: TextStyle(
-                            fontSize: isMobile ? 11 : 14,
+                            fontSize: isMobile ? 10.5 : 12,
                             color: AppTheme.colorFF27AE60,
                           ),
                         ),
@@ -4025,7 +4095,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                           _ignitionOn(vehicle)
                               ? Icons.power_settings_new_rounded
                               : Icons.power_off_rounded,
-                          size: isMobile ? 14 : 16,
+                          size: isMobile ? 13 : 14,
                           color: _ignitionOn(vehicle)
                               ? AppTheme.colorFFFFD166
                               : AppTheme.colorFF95A5A6,
@@ -4034,7 +4104,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                         Text(
                           _syncLabel(vehicle),
                           style: TextStyle(
-                            fontSize: isMobile ? 11 : 14,
+                            fontSize: isMobile ? 10.5 : 12,
                             color: isDark
                                 ? AppTheme.gray300
                                 : AppTheme.colorFF2C3E50,
@@ -4045,7 +4115,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   ],
                 ),
                 if (_shouldShowSelectedVehicleIntelligence(vehicle)) ...[
-                  SizedBox(height: isMobile ? 8 : 12),
+                  SizedBox(height: isMobile ? 6 : 8),
                   _buildSelectedVehicleIntelligenceCard(
                     vehicle: vehicle,
                     isDark: isDark,
@@ -4053,11 +4123,11 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                   ),
                 ],
                 if (_isFollowingSelected) ...[
-                  SizedBox(height: isMobile ? 6 : 10),
+                  SizedBox(height: isMobile ? 5 : 7),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
+                      horizontal: 8,
+                      vertical: 5,
                     ),
                     decoration: BoxDecoration(
                       color: AppTheme.colorFF4B7BE5.withValues(alpha: 0.14),
@@ -4071,14 +4141,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                       children: [
                         const Icon(
                           Icons.my_location_rounded,
-                          size: 14,
+                          size: 12,
                           color: AppTheme.colorFF4B7BE5,
                         ),
                         const SizedBox(width: 6),
                         Text(
                           'Following ${_plateOf(vehicle)}',
                           style: TextStyle(
-                            fontSize: isMobile ? 11 : 12,
+                            fontSize: isMobile ? 10.5 : 11,
                             fontWeight: FontWeight.w700,
                             color: isDark
                                 ? AppTheme.white
@@ -4089,14 +4159,14 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                     ),
                   ),
                 ],
-                SizedBox(height: isMobile ? 6 : 10),
+                SizedBox(height: isMobile ? 5 : 7),
                 Text(
                   _secondaryText(vehicle),
                   style: TextStyle(
-                    fontSize: isMobile ? 11 : 13,
+                    fontSize: isMobile ? 10.5 : 11.5,
                     color: isDark ? AppTheme.gray400 : AppTheme.gray600,
                   ),
-                  maxLines: 2,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -4248,12 +4318,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       width: double.infinity,
-      padding: EdgeInsets.all(isMobile ? 8 : 10),
+      padding: EdgeInsets.all(isMobile ? 7 : 8),
       decoration: BoxDecoration(
         color: isDark
             ? AppTheme.colorFF0B1220.withValues(alpha: 0.9)
             : AppTheme.colorFFF8FAFC,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: AppTheme.colorFF4B7BE5.withValues(alpha: isDark ? 0.28 : 0.22),
         ),
@@ -4488,8 +4558,8 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
   }) {
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: isMobile ? 8 : 10,
-        vertical: isMobile ? 5 : 6,
+        horizontal: isMobile ? 7 : 8,
+        vertical: isMobile ? 4 : 5,
       ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: isDark ? 0.18 : 0.12),
@@ -4499,12 +4569,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: isMobile ? 13 : 15, color: color),
-          const SizedBox(width: 5),
+          Icon(icon, size: isMobile ? 12 : 13, color: color),
+          const SizedBox(width: 4),
           Text(
             label,
             style: TextStyle(
-              fontSize: isMobile ? 10.5 : 12,
+              fontSize: isMobile ? 10 : 10.8,
               fontWeight: FontWeight.w800,
               color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
             ),
@@ -4600,28 +4670,54 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
                 top: _selectedPulseOffset!.dy - 28,
                 child: IgnorePointer(child: _buildSelectedPulse()),
               ),
-            Positioned(
-              right: 14,
-              bottom: 14,
-              child: _buildMapMarkerLegend(context),
-            ),
-            if (_showMapIntelligencePanel)
-              Positioned(
-                top: 14,
-                right: _mapIntelligenceRightOffset(context),
-                child: _buildMapIntelligencePanel(
-                  context,
-                  width: _mapIntelligencePanelWidth(context),
-                ),
-              ),
           ],
         );
       },
     );
   }
 
-  Widget _buildMapMarkerLegend(BuildContext context) {
+  Widget _buildMapMarkerLegend(BuildContext context, {bool compact = false}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final rows = [
+      (
+        icon: Icons.navigation_rounded,
+        color: AppTheme.colorFF1A3A6B,
+        label: 'Moving',
+      ),
+      (
+        icon: Icons.pause_rounded,
+        color: AppTheme.colorFFFFB020,
+        label: 'Idle, ignition on',
+      ),
+      (
+        icon: Icons.power_settings_new_rounded,
+        color: AppTheme.colorFF64748B,
+        label: 'Stopped, ignition off',
+      ),
+      (
+        icon: Icons.schedule_rounded,
+        color: AppTheme.colorFF94A3B8,
+        label: 'Stale / offline',
+      ),
+    ];
+
+    if (compact) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final row in rows) ...[
+            _legendRow(
+              icon: row.icon,
+              color: row.color,
+              label: row.label,
+              isDark: isDark,
+              compact: true,
+            ),
+            if (row != rows.last) const SizedBox(width: 9),
+          ],
+        ],
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -4643,33 +4739,15 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _legendRow(
-            icon: Icons.navigation_rounded,
-            color: AppTheme.colorFF1A3A6B,
-            label: 'Moving',
-            isDark: isDark,
-          ),
-          const SizedBox(height: 7),
-          _legendRow(
-            icon: Icons.pause_rounded,
-            color: AppTheme.colorFFFFB020,
-            label: 'Idle, ignition on',
-            isDark: isDark,
-          ),
-          const SizedBox(height: 7),
-          _legendRow(
-            icon: Icons.power_settings_new_rounded,
-            color: AppTheme.colorFF64748B,
-            label: 'Stopped, ignition off',
-            isDark: isDark,
-          ),
-          const SizedBox(height: 7),
-          _legendRow(
-            icon: Icons.schedule_rounded,
-            color: AppTheme.colorFF94A3B8,
-            label: 'Stale / offline',
-            isDark: isDark,
-          ),
+          for (final row in rows) ...[
+            _legendRow(
+              icon: row.icon,
+              color: row.color,
+              label: row.label,
+              isDark: isDark,
+            ),
+            if (row != rows.last) const SizedBox(height: 7),
+          ],
         ],
       ),
     );
@@ -4680,25 +4758,28 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     required Color color,
     required String label,
     required bool isDark,
+    bool compact = false,
   }) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 22,
-          height: 22,
+          width: compact ? 18 : 22,
+          height: compact ? 18 : 22,
           decoration: BoxDecoration(
             color: color,
             shape: BoxShape.circle,
-            border: Border.all(color: AppTheme.white, width: 2),
+            border: Border.all(color: AppTheme.white, width: compact ? 1.5 : 2),
           ),
-          child: Icon(icon, color: AppTheme.white, size: 13),
+          child: Icon(icon, color: AppTheme.white, size: compact ? 10 : 13),
         ),
-        const SizedBox(width: 8),
+        SizedBox(width: compact ? 5 : 8),
         Text(
           label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            fontSize: 12,
+            fontSize: compact ? 10.5 : 12,
             fontWeight: FontWeight.w700,
             color: isDark ? AppTheme.white : AppTheme.colorFF1F2937,
           ),
@@ -4970,7 +5051,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     for (final vehicle in _vehicleMarkers) {
       final key = _markerKeyOf(vehicle);
       activeKeys.add(key);
-      final existing = _markerMotionStates[key];
+      final plateKey = _plateOf(vehicle);
+      final existing =
+          _markerMotionStates[key] ??
+          (plateKey.isNotEmpty && plateKey != key
+              ? _markerMotionStates.remove(plateKey)
+              : null);
 
       final rawNextPoint = LatLng(_latitudeOf(vehicle), _longitudeOf(vehicle));
       final nextSpeedKph = _speedKphOf(vehicle);
@@ -4984,13 +5070,24 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
           rawNextPoint;
       final pathBearing = _bearingAlongPath(routePath, nextPoint);
       final incomingBearing = _tryBearingOf(vehicle);
+      final inferredBearing = existing == null
+          ? null
+          : _bearingFromMovement(existing.pointAt(now), nextPoint);
       final nextBearing =
-          pathBearing ?? incomingBearing ?? existing?.baseBearing ?? 0.0;
-      final hasMotionInputs =
-          _trySpeedKphOf(vehicle) != null &&
-          (incomingBearing != null || pathBearing != null || existing != null);
+          pathBearing ??
+          incomingBearing ??
+          inferredBearing ??
+          existing?.baseBearing ??
+          0.0;
       final motionIgnitionOn =
           _hasIdleTelemetry(vehicle) || _hasMovingTelemetry(vehicle);
+      final hasMotionInputs =
+          _trySpeedKphOf(vehicle) != null &&
+          (motionIgnitionOn ||
+              incomingBearing != null ||
+              pathBearing != null ||
+              inferredBearing != null ||
+              existing?.hasMotionInputs == true);
       final lastGeotabAt = _parseDisplayTimestamp(
         vehicle['lastGeotabAt'] ?? vehicle['lastUpdated'],
       );
@@ -5030,6 +5127,12 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       if (lastGeotabAt != null &&
           existing.lastServerAt != null &&
           !lastGeotabAt.isAfter(existing.lastServerAt!) &&
+          !(motionIgnitionOn &&
+              nextSpeedKph >= _stationarySpeedThresholdKph &&
+              !existing.isMovingAt(
+                now,
+                stationaryThresholdKph: _stationarySpeedThresholdKph,
+              )) &&
           !_hasSameTimestampMotionUpdate(
             existing: existing,
             nextPoint: nextPoint,
@@ -5125,41 +5228,13 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       // Compare the incoming fix with the point currently painted on-screen.
       // Using the preceding server fix here makes an in-flight marker snap.
       final driftMeters = _distanceMeters(currentPoint, nextPoint);
-      final snapThresholdMeters = _snapThresholdMeters(
-        previousSpeedKph: previousSpeedKph,
-        nextSpeedKph: normalizedNextSpeedKph,
+      // GPS fixes arrive in bursts. Always blend toward the newest GeoTab
+      // point from the current painted frame instead of snapping there.
+      final correctionDuration = _motionCorrectionDuration(
+        driftMeters: driftMeters,
+        speedKph: normalizedNextSpeedKph,
+        routeAware: routePath.length > 1,
       );
-      if (driftMeters > snapThresholdMeters) {
-        existing
-          ..basePosition = nextPoint
-          ..baseAt = now
-          ..baseBearing = resolvedBearing
-          ..baseSpeedKph = normalizedNextSpeedKph
-          ..ignitionOn = motionIgnitionOn
-          ..hasMotionInputs = hasMotionInputs
-          ..speedTransitionStartKph = normalizedNextSpeedKph
-          ..speedTransitionTargetKph = normalizedNextSpeedKph
-          ..speedTransitionStartedAt = now
-          ..speedTransitionDuration = Duration.zero
-          ..correctionMode = _MarkerCorrectionMode.none
-          ..lastCorrectionMode = _MarkerCorrectionMode.none
-          ..correctionStartedAt = now
-          ..correctionDuration = Duration.zero
-          ..correctionFromPoint = nextPoint
-          ..correctionToPoint = nextPoint
-          ..correctionFromBearing = resolvedBearing
-          ..correctionToBearing = resolvedBearing
-          ..blendLegacyBearing = null
-          ..lastRawSampleAt = null
-          ..lastEffectiveSampleAt = null
-          ..lastServerAt = lastGeotabAt ?? existing.lastServerAt
-          ..roadPath = routePath;
-        continue;
-      }
-
-      // GPS fixes arrive every 30 seconds. Render the next leg over the
-      // interval minus a small buffer, always starting at the current frame.
-      final correctionDuration = _pollAlignedLerpDuration;
       existing
         ..basePosition = nextPoint
         ..baseAt = now.add(correctionDuration)
@@ -5187,6 +5262,31 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     }
 
     _markerMotionStates.removeWhere((key, _) => !activeKeys.contains(key));
+  }
+
+  Duration _motionCorrectionDuration({
+    required double driftMeters,
+    required double speedKph,
+    required bool routeAware,
+  }) {
+    if (driftMeters < 8) {
+      return const Duration(milliseconds: 900);
+    }
+    if (driftMeters < 35) {
+      return const Duration(seconds: 8);
+    }
+
+    final visualSpeedKph = speedKph <= _stationarySpeedThresholdKph
+        ? 12.0
+        : speedKph.clamp(10.0, routeAware ? 38.0 : 30.0).toDouble();
+    final distanceSeconds = driftMeters / (visualSpeedKph / 3.6);
+    final minimumSeconds = routeAware ? 18.0 : 24.0;
+    final maximumSeconds = routeAware ? 58.0 : 75.0;
+    final seconds = math.max(
+      minimumSeconds,
+      math.min(maximumSeconds, distanceSeconds),
+    );
+    return Duration(milliseconds: (seconds * 1000).round());
   }
 
   double _latitudeOf(Map<String, dynamic>? vehicle) {
@@ -5377,17 +5477,6 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
         existing.ignitionOn != ignitionOn;
   }
 
-  double _snapThresholdMeters({
-    required double previousSpeedKph,
-    required double nextSpeedKph,
-  }) {
-    return LiveTrackingMotionMath.snapThresholdMeters(
-      previousSpeedKph: previousSpeedKph,
-      nextSpeedKph: nextSpeedKph,
-      pollInterval: _livePollInterval,
-    );
-  }
-
   double _distanceMeters(LatLng from, LatLng to) {
     final dLat = _degreesToRadians(to.latitude - from.latitude);
     final dLng = _degreesToRadians(to.longitude - from.longitude);
@@ -5457,6 +5546,13 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
     return _bearingBetween(from, to);
   }
 
+  double? _bearingFromMovement(LatLng from, LatLng to) {
+    if (_distanceMeters(from, to) < 2.5) {
+      return null;
+    }
+    return _bearingBetween(from, to);
+  }
+
   _PathProjection? _nearestPointOnPath(LatLng point, List<LatLng> path) {
     if (path.length < 2) {
       return null;
@@ -5498,6 +5594,7 @@ class _LiveTrackingPageEnhancedState extends State<LiveTrackingPageEnhanced>
       point: projected,
       distanceMeters: _distanceMeters(point, projected),
       segmentIndex: segmentIndex,
+      segmentFraction: clampedT.toDouble(),
     );
   }
 
@@ -6410,11 +6507,13 @@ class _PathProjection {
     required this.point,
     required this.distanceMeters,
     required this.segmentIndex,
+    required this.segmentFraction,
   });
 
   final LatLng point;
   final double distanceMeters;
   final int segmentIndex;
+  final double segmentFraction;
 }
 
 class _MarkerMotionState {
@@ -6482,17 +6581,27 @@ class _MarkerMotionState {
         if (progress >= 1.0) {
           return _estimatedPositionAt(effectiveNow);
         }
-        return _constrainToRoadPath(
-          _lerpLatLng(correctionFromPoint, correctionToPoint, progress),
-        );
+        return _interpolateAlongRoadPath(
+              correctionFromPoint,
+              correctionToPoint,
+              progress,
+            ) ??
+            _constrainToRoadPath(
+              _lerpLatLng(correctionFromPoint, correctionToPoint, progress),
+            );
       case _MarkerCorrectionMode.direct:
       case _MarkerCorrectionMode.strictLerp:
         if (progress >= 1.0) {
           return _estimatedPositionAt(effectiveNow);
         }
-        return _constrainToRoadPath(
-          _lerpLatLng(correctionFromPoint, correctionToPoint, progress),
-        );
+        return _interpolateAlongRoadPath(
+              correctionFromPoint,
+              correctionToPoint,
+              progress,
+            ) ??
+            _constrainToRoadPath(
+              _lerpLatLng(correctionFromPoint, correctionToPoint, progress),
+            );
     }
   }
 
@@ -6614,10 +6723,31 @@ class _MarkerMotionState {
 
   LatLng _estimatedPositionAt(DateTime now) {
     final speedKph = _speedAt(now);
+    final elapsed = now.difference(baseAt);
+    final projectedSpeedKph = _visualProjectionSpeedKph(speedKph);
+    final projectedMeters =
+        (projectedSpeedKph / 3.6) *
+        math.min(
+          math.max(elapsed.inMicroseconds / 1000000.0, 0.0),
+          _maxDeadReckoningDuration.inMicroseconds / 1000000.0,
+        );
+    if (roadPath.length > 1 &&
+        ignitionOn &&
+        projectedSpeedKph >= _stationaryThresholdKph &&
+        elapsed > Duration.zero) {
+      return _advanceAlongRoadPath(
+            basePosition,
+            roadPath,
+            projectedMeters,
+            baseBearing,
+          ) ??
+          _constrainToRoadPath(basePosition);
+    }
+
     final estimated = LiveTrackingMotionMath.estimatePosition(
       basePosition: basePosition,
-      elapsed: now.difference(baseAt),
-      speedKph: hasMotionInputs ? speedKph : 0,
+      elapsed: elapsed,
+      speedKph: hasMotionInputs ? projectedSpeedKph : 0,
       headingDegrees: baseBearing,
       ignitionOn: ignitionOn,
       stationaryThresholdKph: _stationaryThresholdKph,
@@ -6626,15 +6756,155 @@ class _MarkerMotionState {
     return _constrainToRoadPath(estimated);
   }
 
+  double _visualProjectionSpeedKph(double speedKph) {
+    if (!hasMotionInputs || speedKph < _stationaryThresholdKph) {
+      return 0.0;
+    }
+    return speedKph.clamp(4.0, 16.0).toDouble();
+  }
+
   LatLng _constrainToRoadPath(LatLng point) {
     if (roadPath.length < 2) {
       return point;
     }
     final projected = _nearestPointOnPath(point, roadPath);
-    if (projected == null || projected.distanceMeters > 110) {
+    if (projected == null) {
       return point;
     }
     return projected.point;
+  }
+
+  LatLng? _interpolateAlongRoadPath(LatLng from, LatLng to, double progress) {
+    if (roadPath.length < 2) {
+      return null;
+    }
+    final start = _nearestPointOnPath(from, roadPath);
+    final end = _nearestPointOnPath(to, roadPath);
+    if (start == null || end == null) {
+      return null;
+    }
+
+    final startMeters = _distanceAlongPath(start, roadPath);
+    final endMeters = _distanceAlongPath(end, roadPath);
+    final targetMeters = startMeters + ((endMeters - startMeters) * progress);
+    return _pointAtDistanceOnPath(roadPath, targetMeters);
+  }
+
+  static double _distanceAlongPath(
+    _PathProjection projection,
+    List<LatLng> path,
+  ) {
+    var distance = 0.0;
+    for (var index = 0; index < projection.segmentIndex; index++) {
+      distance += _distanceMeters(path[index], path[index + 1]);
+    }
+    distance +=
+        _distanceMeters(
+          path[projection.segmentIndex],
+          path[projection.segmentIndex + 1],
+        ) *
+        projection.segmentFraction;
+    return distance;
+  }
+
+  static LatLng _pointAtDistanceOnPath(List<LatLng> path, double meters) {
+    if (path.length < 2) {
+      return path.first;
+    }
+    var remaining = meters.clamp(0.0, _pathLengthMeters(path)).toDouble();
+    for (var index = 0; index < path.length - 1; index++) {
+      final segmentLength = _distanceMeters(path[index], path[index + 1]);
+      if (segmentLength < 0.5) {
+        continue;
+      }
+      if (remaining <= segmentLength) {
+        return _lerpLatLng(
+          path[index],
+          path[index + 1],
+          remaining / segmentLength,
+        );
+      }
+      remaining -= segmentLength;
+    }
+    return path.last;
+  }
+
+  static double _pathLengthMeters(List<LatLng> path) {
+    var distance = 0.0;
+    for (var index = 0; index < path.length - 1; index++) {
+      distance += _distanceMeters(path[index], path[index + 1]);
+    }
+    return distance;
+  }
+
+  static LatLng? _advanceAlongRoadPath(
+    LatLng from,
+    List<LatLng> path,
+    double meters,
+    double headingDegrees,
+  ) {
+    if (path.length < 2 || meters <= 0) {
+      return from;
+    }
+
+    final projection = _nearestPointOnPath(from, path);
+    if (projection == null) {
+      return null;
+    }
+
+    var segmentIndex = projection.segmentIndex;
+    var distanceOnSegment =
+        _distanceMeters(path[segmentIndex], path[segmentIndex + 1]) *
+        projection.segmentFraction;
+    final segmentBearing = _bearingBetween(
+      path[segmentIndex],
+      path[segmentIndex + 1],
+    );
+    final forward =
+        _bearingDeltaAbsStatic(segmentBearing, headingDegrees) <= 100;
+    var remainingMeters = meters;
+
+    while (remainingMeters > 0 &&
+        segmentIndex >= 0 &&
+        segmentIndex < path.length - 1) {
+      final start = path[segmentIndex];
+      final end = path[segmentIndex + 1];
+      final segmentLength = _distanceMeters(start, end);
+      if (segmentLength < 0.5) {
+        segmentIndex += forward ? 1 : -1;
+        distanceOnSegment = forward && segmentIndex < path.length - 1
+            ? 0
+            : segmentIndex >= 0 && segmentIndex < path.length - 1
+            ? _distanceMeters(path[segmentIndex], path[segmentIndex + 1])
+            : 0;
+        continue;
+      }
+
+      final available = forward
+          ? segmentLength - distanceOnSegment
+          : distanceOnSegment;
+      if (remainingMeters <= available) {
+        final newDistance = forward
+            ? distanceOnSegment + remainingMeters
+            : distanceOnSegment - remainingMeters;
+        final t = (newDistance / segmentLength).clamp(0.0, 1.0);
+        return _lerpLatLng(start, end, t);
+      }
+
+      remainingMeters -= math.max(available, 0);
+      segmentIndex += forward ? 1 : -1;
+      if (segmentIndex < 0) {
+        return path.first;
+      }
+      if (segmentIndex >= path.length - 1) {
+        return path.last;
+      }
+      distanceOnSegment = forward
+          ? 0
+          : _distanceMeters(path[segmentIndex], path[segmentIndex + 1]);
+    }
+
+    return forward ? path.last : path.first;
   }
 
   static _PathProjection? _nearestPointOnPath(LatLng point, List<LatLng> path) {
@@ -6677,7 +6947,23 @@ class _MarkerMotionState {
       point: projected,
       distanceMeters: _distanceMeters(point, projected),
       segmentIndex: segmentIndex,
+      segmentFraction: clampedT.toDouble(),
     );
+  }
+
+  static double _bearingBetween(LatLng from, LatLng to) {
+    final lat1 = _degreesToRadians(from.latitude);
+    final lat2 = _degreesToRadians(to.latitude);
+    final deltaLng = _degreesToRadians(to.longitude - from.longitude);
+    final y = math.sin(deltaLng) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(deltaLng);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
+  static double _bearingDeltaAbsStatic(double from, double to) {
+    return ((((to - from) % 360) + 540) % 360 - 180.0).abs();
   }
 
   static double _distanceMeters(LatLng from, LatLng to) {
