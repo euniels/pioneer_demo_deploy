@@ -9,6 +9,7 @@ use App\Models\MaintenanceHistory;
 use App\Models\ManualDriver;
 use App\Models\NotificationHistory;
 use App\Models\SystemSetting;
+use App\Models\User;
 use App\Services\GeotabService;
 use Carbon\CarbonInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -410,6 +411,40 @@ test('manual driver crud preserves full profile fields for frontend forms', func
         ->assertJsonPath('data.deleted', true);
 
     expect(ManualDriver::query()->find($driverId))->toBeNull();
+});
+
+test('manual driver can create linked driver login account', function () {
+    $create = $this->postJson('/api/fleet/drivers/manual', [
+        'name' => 'Linked Portal Driver',
+        'license' => 'N05-22-999999',
+        'phone' => '+63 917 456 7890',
+        'email' => 'linked.driver@example.test',
+        'status' => 'available',
+        'assignedVehiclePlate' => 'PTC-105',
+        'createLoginAccount' => true,
+        'temporaryPassword' => 'Pioneer@Test123',
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.hasLoginAccount', true)
+        ->assertJsonPath('data.userAccount.email', 'linked.driver@example.test')
+        ->assertJsonPath('data.temporaryPasswordShownOnce', true);
+
+    $driverId = $create->json('data.id');
+    $userId = $create->json('data.userAccount.id');
+
+    expect(ManualDriver::query()->find($driverId)?->user_id)->toBe((int) $userId);
+    expect(User::query()->find($userId)?->role)->toBe('driver');
+
+    $this->postJson('/api/fleet/users/login-check', [
+        'username' => 'linked.driver@example.test',
+        'password' => 'Pioneer@Test123',
+        'platform' => 'web',
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.role', 'driver')
+        ->assertJsonPath('data.driverProfile.id', (string) $driverId)
+        ->assertJsonPath('data.driverProfile.driverId', 'manual-'.$driverId)
+        ->assertJsonPath('data.assignedVehicle', 'PTC-105');
 });
 
 test('billing invoices expose policy intelligence and pod collection readiness', function () {

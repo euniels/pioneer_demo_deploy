@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Model;
 
 class ManualDriver extends Model
@@ -10,6 +11,7 @@ class ManualDriver extends Model
     use HasFactory;
 
     protected $fillable = [
+        'user_id',
         'name',
         'license',
         'phone',
@@ -32,4 +34,9 @@ class ManualDriver extends Model
         'geotab_snapshot' => 'array',
         'meta' => 'array',
     ];
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
 }

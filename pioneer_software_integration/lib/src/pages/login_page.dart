@@ -931,7 +931,7 @@ class _LoginPageState extends State<LoginPage> {
                                                 _accountRow(
                                                   isDark: isDark,
                                                   username:
-                                                      'driver@pioneerpath.local',
+                                                      'juan.demo@example.com',
                                                   label: 'Truck Driver',
                                                   description:
                                                       'Assignments, trip status updates, and proof of delivery',
@@ -941,7 +941,7 @@ class _LoginPageState extends State<LoginPage> {
                                                   isLast: true,
                                                   onFill: () {
                                                     _userCtrl.text =
-                                                        'driver@pioneerpath.local';
+                                                        'juan.demo@example.com';
                                                     _passCtrl.text =
                                                         'Pioneer@12345';
                                                     setState(

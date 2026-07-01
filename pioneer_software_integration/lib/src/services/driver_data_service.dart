@@ -4,30 +4,77 @@ import 'trips_store.dart';
 import 'vehicles_store.dart';
 
 class DriverDataService {
-  static String get _driverName => AuthService.currentUserData?.fullName ?? '';
+  static String get _driverName =>
+      AuthService.currentUserData?.driverProfileName ??
+      AuthService.currentUserData?.fullName ??
+      '';
+
+  static String get _driverEmail =>
+      AuthService.currentUserData?.driverProfileEmail ??
+      AuthService.currentUserData?.email ??
+      '';
+
+  static Set<String> get _driverKeys {
+    final user = AuthService.currentUserData;
+    return {
+      user?.manualDriverId,
+      user?.driverProfileId,
+      if ((user?.manualDriverId ?? '').isNotEmpty)
+        'manual-${user!.manualDriverId}',
+      _driverName,
+      _driverEmail,
+    }
+        .whereType<String>()
+        .map((value) => value.trim().toLowerCase())
+        .where((value) => value.isNotEmpty && value != 'n/a')
+        .toSet();
+  }
+
+  static bool _belongsToCurrentDriver(Map<String, dynamic> row) {
+    final keys = _driverKeys;
+    if (keys.isEmpty) {
+      return false;
+    }
+    final candidates = <String>[
+      row['driver']?.toString() ?? '',
+      row['driverName']?.toString() ?? '',
+      row['assignedDriver']?.toString() ?? '',
+      row['driverId']?.toString() ?? '',
+      row['assignedDriverId']?.toString() ?? '',
+    ];
+    final meta = row['meta'];
+    if (meta is Map) {
+      candidates.addAll([
+        meta['driverId']?.toString() ?? '',
+        meta['assignedDriverId']?.toString() ?? '',
+        meta['driverEmail']?.toString() ?? '',
+      ]);
+    }
+
+    return candidates
+        .map((value) => value.trim().toLowerCase())
+        .any(keys.contains);
+  }
 
   static List<Map<String, dynamic>> getDriverTrips() {
-    final name = _driverName;
-    if (name.isEmpty) {
+    if (_driverKeys.isEmpty) {
       return [];
     }
 
     return tripsNotifier.value
-        .where((trip) => (trip['driver'] ?? '').toString() == name)
+        .where(_belongsToCurrentDriver)
         .map(_mapTripForDriver)
         .toList();
   }
 
   static Map<String, dynamic>? getCurrentTrip() {
-    final name = _driverName;
-    if (name.isEmpty) {
+    if (_driverKeys.isEmpty) {
       return null;
     }
 
     final activeTrips = tripsNotifier.value.where((trip) {
-      final driver = (trip['driver'] ?? '').toString();
       final status = (trip['status'] ?? '').toString().toLowerCase();
-      return driver == name &&
+      return _belongsToCurrentDriver(trip) &&
           (status == 'dispatched' ||
               status == 'in progress' ||
               status == 'inprogress' ||
@@ -42,32 +89,28 @@ class DriverDataService {
   }
 
   static List<Map<String, dynamic>> getUpcomingTrips() {
-    final name = _driverName;
-    if (name.isEmpty) {
+    if (_driverKeys.isEmpty) {
       return [];
     }
 
     return tripsNotifier.value
         .where((trip) {
-          final driver = (trip['driver'] ?? '').toString();
           final status = (trip['status'] ?? '').toString().toLowerCase();
-          return driver == name && status == 'pending';
+          return _belongsToCurrentDriver(trip) && status == 'pending';
         })
         .map(_mapUpcomingTrip)
         .toList();
   }
 
   static List<Map<String, dynamic>> getCompletedTrips() {
-    final name = _driverName;
-    if (name.isEmpty) {
+    if (_driverKeys.isEmpty) {
       return [];
     }
 
     return tripsNotifier.value
         .where((trip) {
-          final driver = (trip['driver'] ?? '').toString();
           final status = (trip['status'] ?? '').toString().toLowerCase();
-          return driver == name && status == 'completed';
+          return _belongsToCurrentDriver(trip) && status == 'completed';
         })
         .map(_mapTripForDriver)
         .toList();
@@ -127,11 +170,25 @@ class DriverDataService {
   }
 
   static Map<String, dynamic>? getDriverVehicle() {
-    final name = _driverName;
-    if (name.isEmpty) {
+    if (_driverKeys.isEmpty) {
       return null;
     }
 
+    final assignedPlate =
+        AuthService.currentUserData?.driverAssignedVehicle?.trim() ?? '';
+    if (assignedPlate.isNotEmpty && assignedPlate.toLowerCase() != 'n/a') {
+      final vehicle = vehiclesNotifier.value.cast<Map<String, dynamic>?>().firstWhere(
+        (entry) =>
+            entry?['plate']?.toString() == assignedPlate ||
+            entry?['plateNumber']?.toString() == assignedPlate,
+        orElse: () => null,
+      );
+      if (vehicle != null) {
+        return _mapVehicleForDriver(vehicle);
+      }
+    }
+
+    final name = _driverName;
     final assigned = vehiclesNotifier.value.where((vehicle) {
       return (vehicle['driver'] ?? '').toString() == name;
     }).toList();
@@ -201,9 +258,8 @@ class DriverDataService {
     }).toList();
 
     final inProgress = tripsNotifier.value.where((trip) {
-      final driver = (trip['driver'] ?? '').toString();
       final status = (trip['status'] ?? '').toString().toLowerCase();
-      return driver == _driverName &&
+      return _belongsToCurrentDriver(trip) &&
           (status == 'in progress' ||
               status == 'inprogress' ||
               status == 'dispatched' ||

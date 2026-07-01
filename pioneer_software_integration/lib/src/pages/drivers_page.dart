@@ -277,7 +277,11 @@ class _DriversPageState extends State<DriversPage>
       barrierDismissible: true,
       builder: (ctx) => _AddDriverDialog(
         onAdd: (driver) async {
-          await addDriverToBackend(driver);
+          final created = await addDriverToBackend(driver);
+          final password = created['temporaryPassword']?.toString() ?? '';
+          if (password.isNotEmpty) {
+            return 'Driver added successfully. Temporary password: $password';
+          }
           return 'Driver added successfully.';
         },
       ),
@@ -340,6 +344,64 @@ class _DriversPageState extends State<DriversPage>
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  Future<void> _createDriverLoginAccount(Map<String, dynamic> driver) async {
+    try {
+      final updated = await createDriverAccountInBackend(driver);
+      if (!mounted) return;
+      final password = updated['temporaryPassword']?.toString() ?? '';
+      final message = password.isEmpty
+          ? 'Driver login account linked successfully.'
+          : 'Driver login created. Temporary password: $password';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(behavior: SnackBarBehavior.floating, content: Text(message)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Driver login account could not be created.',
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _resetDriverLoginPassword(Map<String, dynamic> driver) async {
+    try {
+      final updated = await resetDriverAccountPasswordInBackend(driver);
+      if (!mounted) return;
+      final password = updated['temporaryPassword']?.toString() ?? '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            password.isEmpty
+                ? 'Driver password reset successfully.'
+                : 'Temporary password: $password',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            FormValidation.backendError(
+              error,
+              'Driver password could not be reset.',
+            ),
+          ),
+        ),
+      );
     }
   }
 
@@ -692,6 +754,17 @@ class _DriversPageState extends State<DriversPage>
     return delays <= 0
         ? 'No delays recorded'
         : '$delays delay${delays == 1 ? '' : 's'}';
+  }
+
+  String _driverPortalStatus(Map<String, dynamic> driver) {
+    if (driver['hasLoginAccount'] != true) {
+      return 'No login account';
+    }
+    final userAccount = driver['userAccount'];
+    if (userAccount is Map && userAccount['mustChangePassword'] == true) {
+      return 'Linked - password change needed';
+    }
+    return 'Linked driver account';
   }
 
   String _driverRevenue(Map<String, dynamic> driver) {
@@ -1243,6 +1316,14 @@ class _DriversPageState extends State<DriversPage>
                     label: 'Delays',
                     value: _driverDelayText(driver),
                   ),
+                  SizedBox(height: 7 * scale),
+                  _DriverCardFact(
+                    icon: driver['hasLoginAccount'] == true
+                        ? Icons.verified_user_rounded
+                        : Icons.no_accounts_rounded,
+                    label: 'Portal',
+                    value: _driverPortalStatus(driver),
+                  ),
                   SizedBox(height: 10 * scale),
                   _DriverCardDivider(isDark: isDark),
                   SizedBox(height: 10 * scale),
@@ -1339,6 +1420,10 @@ class _DriversPageState extends State<DriversPage>
           }
         } else if (value == 'edit') {
           _showEditDriverModal(driver);
+        } else if (value == 'create_account') {
+          await _createDriverLoginAccount(driver);
+        } else if (value == 'reset_account') {
+          await _resetDriverLoginPassword(driver);
         } else if (value == 'push_geotab') {
           if (!crudPolicy.canPushToGeotab) {
             _showDriverActionMessage(crudPolicy.pushDisabledReason);
@@ -1406,6 +1491,27 @@ class _DriversPageState extends State<DriversPage>
             child: _DriverActionMenuItem(
               icon: Icons.edit_rounded,
               label: crudPolicy.canEdit ? 'Edit' : 'Edit - GeoTab read-only',
+            ),
+          ),
+        if (CrudPermissions.canEdit(CrudEntity.drivers) &&
+            driver['hasLoginAccount'] != true)
+          PopupMenuItem(
+            value: 'create_account',
+            enabled: driver['canCreateLoginAccount'] == true,
+            child: _DriverActionMenuItem(
+              icon: Icons.login_rounded,
+              label: driver['canCreateLoginAccount'] == true
+                  ? 'Create driver login'
+                  : 'Create login - email required',
+            ),
+          ),
+        if (CrudPermissions.canEdit(CrudEntity.drivers) &&
+            driver['hasLoginAccount'] == true)
+          const PopupMenuItem(
+            value: 'reset_account',
+            child: _DriverActionMenuItem(
+              icon: Icons.password_rounded,
+              label: 'Reset driver password',
             ),
           ),
         PopupMenuItem(
@@ -2638,6 +2744,7 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
 
   String _status = 'available';
   bool _saving = false;
+  bool _createLoginAccount = false;
 
   @override
   void initState() {
@@ -2697,6 +2804,8 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
       'assignedVehiclePlate': _assignedVehicleCtrl.text.trim(),
       'assignedVehicleGeotabId': _selectedVehicleGeotabId,
       'status': _status,
+      if (_createLoginAccount && widget.initialDriver == null)
+        'createLoginAccount': true,
       'meta': {
         'licenseExpiry': _licenseExpiryCtrl.text.trim(),
         'address': _addressCtrl.text.trim(),
@@ -2952,8 +3061,23 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
                               icon: Icons.email_rounded,
                               isDark: isDark,
                               keyboardType: TextInputType.emailAddress,
-                              validator: (_) => null,
+                              validator: (value) {
+                                if (!_createLoginAccount) return null;
+                                final email = value?.trim() ?? '';
+                                if (email.isEmpty) {
+                                  return 'Email is required for driver login';
+                                }
+                                if (!email.contains('@') ||
+                                    !email.contains('.')) {
+                                  return 'Enter a valid email address';
+                                }
+                                return null;
+                              },
                             ),
+                            if (widget.initialDriver == null) ...[
+                              const SizedBox(height: 12),
+                              _driverAccountToggle(isDark),
+                            ],
                             const SizedBox(height: 16),
                             _licenseExpiryDatePicker(isDark),
                             const SizedBox(height: 16),
@@ -3086,6 +3210,63 @@ class _AddDriverDialogState extends State<_AddDriverDialog> {
           end: const Offset(1, 1),
           duration: 200.ms,
         );
+  }
+
+  Widget _driverAccountToggle(bool isDark) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => setState(() => _createLoginAccount = !_createLoginAccount),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: isDark
+              ? AppTheme.darkCardBg.withAlpha(170)
+              : AppTheme.colorFFF5F6F8,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _createLoginAccount
+                ? AppTheme.accentCyan.withAlpha(130)
+                : (isDark
+                    ? AppTheme.white.withAlpha(22)
+                    : AppTheme.black.withAlpha(18)),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: _createLoginAccount,
+              onChanged: (value) =>
+                  setState(() => _createLoginAccount = value ?? false),
+              activeColor: AppTheme.accentCyan,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Create PioneerPath driver login',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? AppTheme.white : AppTheme.gray800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Uses the driver email and issues a one-time temporary password.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? AppTheme.gray400 : AppTheme.gray600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _licenseExpiryDatePicker(bool isDark) {

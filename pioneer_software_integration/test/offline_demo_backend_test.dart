@@ -18,6 +18,8 @@ void main() {
     expect(backendApi, contains('OfflineDemoBackend.mutate(method, path'));
     expect(offlineDemo, contains("bool.fromEnvironment(\n    'OFFLINE_DEMO'"));
     expect(offlineDemo, contains('DEMO-TRK-01'));
+    expect(offlineDemo, contains('juan.demo@example.com'));
+    expect(offlineDemo, contains('driverProfile'));
     expect(offlineDemo, contains('DEMO-TRIP-BILLED'));
     expect(offlineDemo, contains('INV-DEMO-001'));
   });

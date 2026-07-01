@@ -1367,6 +1367,36 @@ class BackendApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> createManualDriverAccount(
+    String driverId, {
+    String? temporaryPassword,
+  }) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/drivers/manual/$driverId/account',
+      {
+        if ((temporaryPassword ?? '').trim().isNotEmpty)
+          'temporaryPassword': temporaryPassword!.trim(),
+      },
+    );
+    clearCache('/fleet/drivers/manual');
+    clearCache('/fleet/users');
+    return response;
+  }
+
+  static Future<Map<String, dynamic>> resetManualDriverAccountPassword(
+    String driverId,
+  ) async {
+    final response = await _sendJsonRequest(
+      'POST',
+      '/fleet/drivers/manual/$driverId/account/reset-password',
+      const <String, dynamic>{},
+    );
+    clearCache('/fleet/drivers/manual');
+    clearCache('/fleet/users');
+    return response;
+  }
+
   static Future<Map<String, dynamic>> deactivateManualDriver(
     String driverId, {
     required String reason,

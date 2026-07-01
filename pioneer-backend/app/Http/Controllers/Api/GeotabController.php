@@ -1923,8 +1923,15 @@ class GeotabController extends Controller
             'perTripBonus' => ['nullable', 'numeric'],
             'assignedVehicleGeotabId' => ['nullable', 'string', 'max:120'],
             'assignedVehiclePlate' => ['nullable', 'string', 'max:120'],
+            'createLoginAccount' => ['nullable', 'boolean'],
+            'temporaryPassword' => ['nullable', 'string', 'min:8', 'max:255'],
             'meta' => ['nullable', 'array'],
         ]);
+
+        if (filter_var($validated['createLoginAccount'] ?? false, FILTER_VALIDATE_BOOL)
+            && (! $this->managedUsersTableAvailable() || ! Schema::hasColumn('manual_drivers', 'user_id'))) {
+            return $this->respondError('Run the driver account linking migration before creating driver login accounts.', 503);
+        }
 
         $driver = ManualDriver::query()->create([
             'name' => trim((string) $validated['name']),
@@ -1940,6 +1947,15 @@ class GeotabController extends Controller
         ]);
         $this->markManualDriverGeotabDirty($driver);
 
+        $accountPayload = [];
+        if (filter_var($validated['createLoginAccount'] ?? false, FILTER_VALIDATE_BOOL)) {
+            $accountPayload = $this->createOrLinkManualDriverAccount(
+                $driver->refresh(),
+                $request,
+                trim((string) ($validated['temporaryPassword'] ?? '')) ?: null,
+            );
+        }
+
         $this->storeCustomNotification(
             'driver',
             'Manual Driver Added',
@@ -1948,7 +1964,10 @@ class GeotabController extends Controller
         );
         $this->clearFleetCaches();
 
-        return $this->respondData($this->formatManualDriver($driver));
+        return $this->respondData([
+            ...$this->formatManualDriver($driver->refresh()),
+            ...$accountPayload,
+        ]);
     }
 
     public function deactivateManualDriver(Request $request, string $driverId): JsonResponse
@@ -1978,10 +1997,88 @@ class GeotabController extends Controller
                 'deactivatedAt' => now()->toIso8601String(),
             ],
         ])->save();
+        $this->syncLinkedDriverAccount($driver->refresh());
         $this->markManualDriverGeotabDirty($driver);
         $this->clearFleetCaches();
 
         return $this->respondData($this->formatManualDriver($driver->refresh()));
+    }
+
+    public function createManualDriverAccount(Request $request, string $driverId): JsonResponse
+    {
+        if (! $this->manualDriversTableAvailable() || ! $this->managedUsersTableAvailable()) {
+            return $this->respondError('Driver account linking requires manual drivers and managed users tables.', 503);
+        }
+
+        $driver = ManualDriver::query()->find($driverId);
+        if ($driver === null) {
+            return $this->respondError('Manual driver not found.', 404);
+        }
+
+        $validated = $request->validate([
+            'temporaryPassword' => ['nullable', 'string', 'min:8', 'max:255'],
+            'actor' => ['nullable', 'string', 'max:255'],
+            'actorRole' => ['nullable', 'string'],
+        ]);
+
+        $accountPayload = $this->createOrLinkManualDriverAccount(
+            $driver,
+            $request,
+            trim((string) ($validated['temporaryPassword'] ?? '')) ?: null,
+        );
+        $this->clearFleetCaches();
+
+        return $this->respondData([
+            ...$this->formatManualDriver($driver->refresh()),
+            ...$accountPayload,
+        ]);
+    }
+
+    public function resetManualDriverAccountPassword(Request $request, string $driverId): JsonResponse
+    {
+        if (! $this->manualDriversTableAvailable() || ! $this->managedUsersTableAvailable()) {
+            return $this->respondError('Driver account linking requires manual drivers and managed users tables.', 503);
+        }
+
+        $driver = ManualDriver::query()->find($driverId);
+        if ($driver === null) {
+            return $this->respondError('Manual driver not found.', 404);
+        }
+
+        $user = $this->linkedUserForManualDriver($driver);
+        if ($user === null) {
+            return $this->respondError('Create a driver login account before resetting its password.', 422);
+        }
+
+        $actorRole = $this->actorManagedUserRole($request);
+        if (! $this->managedUserCanManageRole($actorRole, 'driver')) {
+            return $this->respondError('Your role cannot reset driver account passwords.', 403);
+        }
+
+        $validated = $request->validate([
+            'actor' => ['nullable', 'string', 'max:255'],
+            'actorRole' => ['nullable', 'string'],
+        ]);
+        $actor = $this->sanitizeText($validated['actor'] ?? $actorRole, $actorRole);
+        $temporaryPassword = $this->generateTemporaryPassword();
+        $activity = is_array($user->activity_log) ? $user->activity_log : [];
+        $activity[] = $this->managedUserActivity('password_reset', $actor, [
+            'driverId' => (string) $driver->id,
+            'manualDriverName' => $driver->name,
+            'temporaryPasswordIssued' => true,
+        ]);
+
+        $user->forceFill([
+            'password' => Hash::make($temporaryPassword),
+            'must_change_password' => true,
+            'activity_log' => array_slice($activity, -50),
+        ])->save();
+
+        return $this->respondData([
+            ...$this->formatManualDriver($driver->refresh()),
+            'temporaryPassword' => $temporaryPassword,
+            'temporaryPasswordShownOnce' => true,
+        ]);
     }
 
     public function deleteManualDriver(string $driverId): JsonResponse
@@ -2007,6 +2104,12 @@ class GeotabController extends Controller
                 ->exists()) {
             return $this->respondError(
                 'This driver has GeoTab sync history and cannot be deleted. Use Deactivate instead to preserve records.',
+                409
+            );
+        }
+        if ($this->linkedUserForManualDriver($driver) !== null) {
+            return $this->respondError(
+                'This driver has a login account. Use Deactivate instead to preserve account and audit history.',
                 409
             );
         }
@@ -2095,8 +2198,28 @@ class GeotabController extends Controller
             'perTripBonus' => ['nullable', 'numeric'],
             'assignedVehicleGeotabId' => ['nullable', 'string', 'max:120'],
             'assignedVehiclePlate' => ['nullable', 'string', 'max:120'],
+            'createLoginAccount' => ['nullable', 'boolean'],
+            'temporaryPassword' => ['nullable', 'string', 'min:8', 'max:255'],
             'meta' => ['nullable', 'array'],
         ]);
+
+        if (filter_var($validated['createLoginAccount'] ?? false, FILTER_VALIDATE_BOOL)
+            && (! $this->managedUsersTableAvailable() || ! Schema::hasColumn('manual_drivers', 'user_id'))) {
+            return $this->respondError('Run the driver account linking migration before creating driver login accounts.', 503);
+        }
+        if (array_key_exists('email', $validated) && $this->managedUsersTableAvailable()) {
+            $nextEmail = strtolower(trim((string) ($validated['email'] ?? '')));
+            $linkedUser = $this->linkedUserForManualDriver($driver);
+            if ($linkedUser !== null && $nextEmail !== '' && filter_var($nextEmail, FILTER_VALIDATE_EMAIL)) {
+                $emailOwner = User::query()
+                    ->whereRaw('LOWER(email) = ?', [$nextEmail])
+                    ->whereKeyNot($linkedUser->id)
+                    ->first();
+                if ($emailOwner !== null) {
+                    return $this->respondError('That email already belongs to another user account.', 422);
+                }
+            }
+        }
 
         $driver->fill([
             'name' => isset($validated['name']) ? trim((string) $validated['name']) : $driver->name,
@@ -2117,9 +2240,23 @@ class GeotabController extends Controller
         $driver->save();
         $this->markManualDriverGeotabDirty($driver);
 
+        $accountPayload = [];
+        if (filter_var($validated['createLoginAccount'] ?? false, FILTER_VALIDATE_BOOL)) {
+            $accountPayload = $this->createOrLinkManualDriverAccount(
+                $driver->refresh(),
+                $request,
+                trim((string) ($validated['temporaryPassword'] ?? '')) ?: null,
+            );
+        } elseif ($driver->user_id !== null) {
+            $this->syncLinkedDriverAccount($driver->refresh());
+        }
+
         $this->clearFleetCaches();
 
-        return $this->respondData($this->formatManualDriver($driver));
+        return $this->respondData([
+            ...$this->formatManualDriver($driver->refresh()),
+            ...$accountPayload,
+        ]);
     }
 
     public function maintenanceHistory(Request $request): JsonResponse
@@ -2640,6 +2777,8 @@ class GeotabController extends Controller
             'cargoType' => $this->sanitizeText($request->input('cargoType', 'General'), 'General'),
             'vehicle' => trim((string) $request->input('vehicle', '')),
             'driver' => trim((string) $request->input('driver', '')),
+            'driverId' => trim((string) $request->input('driverId', $request->input('assignedDriverId', ''))),
+            'assignedDriverId' => trim((string) $request->input('assignedDriverId', $request->input('driverId', ''))),
             'status' => $requestedStatus,
             'amount' => $amount,
             'orderValue' => $orderValue,
@@ -10505,6 +10644,8 @@ class GeotabController extends Controller
             'cargoType',
             'vehicle',
             'driver',
+            'driverId',
+            'assignedDriverId',
             'notes',
             'specialInstructions',
             'fulfillmentMethod',
@@ -12173,7 +12314,206 @@ class GeotabController extends Controller
             $payload['activityLog'] = array_values(is_array($user->activity_log) ? $user->activity_log : []);
         }
 
+        if ($role === 'driver') {
+            $driver = $this->linkedManualDriverForUser($user);
+            if ($driver !== null) {
+                $payload['driverProfile'] = $this->formatDriverAccountProfile($driver);
+                $payload['assignedVehicle'] = $driver->assigned_vehicle_plate ?: null;
+            } else {
+                $payload['driverProfile'] = null;
+                $payload['driverProfileMissing'] = true;
+            }
+        }
+
         return $payload;
+    }
+
+    private function linkedManualDriverForUser(User $user): ?ManualDriver
+    {
+        if (! $this->manualDriversTableAvailable()) {
+            return null;
+        }
+
+        if (Schema::hasColumn('manual_drivers', 'user_id')) {
+            $linked = ManualDriver::query()->where('user_id', $user->id)->first();
+            if ($linked !== null) {
+                return $linked;
+            }
+        }
+
+        $email = strtolower(trim((string) $user->email));
+        if ($email !== '') {
+            $match = ManualDriver::query()
+                ->whereRaw('LOWER(email) = ?', [$email])
+                ->first();
+            if ($match !== null) {
+                return $match;
+            }
+        }
+
+        $name = strtolower(trim((string) $user->name));
+        if ($name === '') {
+            return null;
+        }
+
+        return ManualDriver::query()
+            ->whereRaw('LOWER(name) = ?', [$name])
+            ->first();
+    }
+
+    private function formatDriverAccountProfile(ManualDriver $driver): array
+    {
+        return [
+            'id' => (string) $driver->id,
+            'driverId' => 'manual-'.$driver->id,
+            'name' => $this->sanitizeText($driver->name, 'Driver'),
+            'email' => $driver->email ?: null,
+            'phone' => $driver->phone ?: null,
+            'status' => $driver->status ?: 'available',
+            'assignedVehicle' => $driver->assigned_vehicle_plate ?: null,
+            'assignedVehicleGeotabId' => $driver->assigned_vehicle_geotab_id,
+        ];
+    }
+
+    private function createOrLinkManualDriverAccount(ManualDriver $driver, Request $request, ?string $temporaryPassword = null): array
+    {
+        if (! Schema::hasColumn('manual_drivers', 'user_id')) {
+            throw ValidationException::withMessages([
+                'createLoginAccount' => 'Run the driver account linking migration before creating driver login accounts.',
+            ]);
+        }
+
+        $actorRole = $this->actorManagedUserRole($request);
+        if (! $this->managedUserCanManageRole($actorRole, 'driver')) {
+            throw ValidationException::withMessages([
+                'createLoginAccount' => 'Your role cannot create driver login accounts.',
+            ]);
+        }
+
+        $email = strtolower(trim((string) $driver->email));
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw ValidationException::withMessages([
+                'email' => 'A valid driver email is required before creating a login account.',
+            ]);
+        }
+
+        $existingLinkedUser = $this->linkedUserForManualDriver($driver);
+        if ($existingLinkedUser !== null) {
+            $this->syncLinkedDriverAccount($driver);
+
+            return [
+                'loginAccountLinked' => true,
+                'temporaryPasswordShownOnce' => false,
+            ];
+        }
+
+        $user = User::query()->whereRaw('LOWER(email) = ?', [$email])->first();
+        if ($user !== null) {
+            if ($this->normalizeManagedUserRole($user->role ?? '') !== 'driver') {
+                throw ValidationException::withMessages([
+                    'email' => 'That email already belongs to a non-driver account.',
+                ]);
+            }
+            $alreadyLinked = ManualDriver::query()
+                ->where('user_id', $user->id)
+                ->whereKeyNot($driver->id)
+                ->exists();
+            if ($alreadyLinked) {
+                throw ValidationException::withMessages([
+                    'email' => 'That driver account is already linked to another driver profile.',
+                ]);
+            }
+
+            $driver->forceFill(['user_id' => $user->id])->save();
+            $this->syncLinkedDriverAccount($driver->refresh());
+
+            return [
+                'loginAccountLinked' => true,
+                'temporaryPasswordShownOnce' => false,
+            ];
+        }
+
+        $password = $temporaryPassword ?: $this->generateTemporaryPassword();
+        $actor = $this->sanitizeText($request->input('actor') ?: $actorRole, $actorRole);
+        $user = User::query()->create([
+            'name' => $this->sanitizeText($driver->name, 'Driver'),
+            'email' => $email,
+            'password' => Hash::make($password),
+            'role' => 'driver',
+            'phone' => trim((string) $driver->phone) ?: null,
+            'status' => $this->manualDriverAccountStatus($driver),
+            'must_change_password' => true,
+            'created_by' => $actor,
+            'activity_log' => [
+                $this->managedUserActivity('created_from_driver_profile', $actor, [
+                    'driverId' => (string) $driver->id,
+                    'manualDriverName' => $driver->name,
+                    'temporaryPasswordIssued' => true,
+                ]),
+            ],
+        ]);
+
+        $driver->forceFill(['user_id' => $user->id])->save();
+
+        return [
+            'loginAccountLinked' => true,
+            'temporaryPassword' => $password,
+            'temporaryPasswordShownOnce' => true,
+        ];
+    }
+
+    private function linkedUserForManualDriver(ManualDriver $driver): ?User
+    {
+        if (! $this->managedUsersTableAvailable()) {
+            return null;
+        }
+
+        if (Schema::hasColumn('manual_drivers', 'user_id') && $driver->user_id !== null) {
+            $user = User::query()->find($driver->user_id);
+            if ($user !== null) {
+                return $user;
+            }
+        }
+
+        $email = strtolower(trim((string) $driver->email));
+        if ($email === '') {
+            return null;
+        }
+
+        return User::query()
+            ->where('role', 'driver')
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->first();
+    }
+
+    private function syncLinkedDriverAccount(ManualDriver $driver): void
+    {
+        $user = $this->linkedUserForManualDriver($driver);
+        if ($user === null) {
+            return;
+        }
+
+        $updates = [
+            'name' => $this->sanitizeText($driver->name, 'Driver'),
+            'phone' => trim((string) $driver->phone) ?: null,
+            'status' => $this->manualDriverAccountStatus($driver),
+        ];
+        $email = strtolower(trim((string) $driver->email));
+        if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $updates['email'] = $email;
+        }
+
+        $user->forceFill($updates)->save();
+        if (Schema::hasColumn('manual_drivers', 'user_id') && $driver->user_id === null) {
+            $driver->forceFill(['user_id' => $user->id])->save();
+        }
+    }
+
+    private function manualDriverAccountStatus(ManualDriver $driver): string
+    {
+        $status = strtolower(trim((string) $driver->status));
+
+        return in_array($status, ['inactive', 'deactivated'], true) ? 'inactive' : 'active';
     }
 
     private function actorManagedUserRole(Request $request): string
@@ -12377,7 +12717,12 @@ class GeotabController extends Controller
             return false;
         }
 
+        $linkedDriver = $this->linkedManualDriverForUser($user);
         $driverKeys = array_filter([
+            $linkedDriver !== null ? strtolower(trim((string) $linkedDriver->id)) : '',
+            $linkedDriver !== null ? strtolower(trim('manual-'.$linkedDriver->id)) : '',
+            $linkedDriver !== null ? strtolower(trim((string) $linkedDriver->name)) : '',
+            $linkedDriver !== null ? strtolower(trim((string) $linkedDriver->email)) : '',
             strtolower(trim((string) $user->name)),
             strtolower(trim((string) $user->email)),
         ]);
@@ -12396,8 +12741,14 @@ class GeotabController extends Controller
                 continue;
             }
 
-            $tripDriver = strtolower(trim((string) ($trip['driver'] ?? $trip['driverName'] ?? $trip['assignedDriver'] ?? '')));
-            if ($tripDriver !== '' && in_array($tripDriver, $driverKeys, true)) {
+            $tripDriverKeys = array_filter([
+                strtolower(trim((string) ($trip['driver'] ?? ''))),
+                strtolower(trim((string) ($trip['driverName'] ?? ''))),
+                strtolower(trim((string) ($trip['assignedDriver'] ?? ''))),
+                strtolower(trim((string) ($trip['driverId'] ?? ''))),
+                strtolower(trim((string) ($trip['assignedDriverId'] ?? ''))),
+            ]);
+            if (array_intersect($driverKeys, $tripDriverKeys) !== []) {
                 return true;
             }
         }
@@ -12435,6 +12786,8 @@ class GeotabController extends Controller
     private function manualDriverHasActiveTrip(ManualDriver $driver): bool
     {
         $driverKeys = array_filter([
+            strtolower(trim((string) $driver->id)),
+            strtolower(trim('manual-'.$driver->id)),
             strtolower(trim((string) $driver->name)),
             strtolower(trim((string) $driver->email)),
         ]);
@@ -12453,8 +12806,14 @@ class GeotabController extends Controller
                 continue;
             }
 
-            $tripDriver = strtolower(trim((string) ($trip['driver'] ?? $trip['driverName'] ?? $trip['assignedDriver'] ?? '')));
-            if ($tripDriver !== '' && in_array($tripDriver, $driverKeys, true)) {
+            $tripDriverKeys = array_filter([
+                strtolower(trim((string) ($trip['driver'] ?? ''))),
+                strtolower(trim((string) ($trip['driverName'] ?? ''))),
+                strtolower(trim((string) ($trip['assignedDriver'] ?? ''))),
+                strtolower(trim((string) ($trip['driverId'] ?? ''))),
+                strtolower(trim((string) ($trip['assignedDriverId'] ?? ''))),
+            ]);
+            if (array_intersect($driverKeys, $tripDriverKeys) !== []) {
                 return true;
             }
         }
@@ -12582,6 +12941,15 @@ class GeotabController extends Controller
     {
         $syncStates = is_array($context['syncStates'] ?? null) ? $context['syncStates'] : [];
         $syncState = $syncStates[(string) $driver->id] ?? $this->driverGeotabSyncState($driver);
+        $linkedUser = $this->linkedUserForManualDriver($driver);
+        $userAccount = $linkedUser !== null ? [
+            'id' => (string) $linkedUser->id,
+            'fullName' => $this->sanitizeText($linkedUser->name, 'Driver'),
+            'email' => (string) $linkedUser->email,
+            'status' => $this->normalizeManagedUserStatus($linkedUser->status ?? 'active'),
+            'mustChangePassword' => (bool) ($linkedUser->must_change_password ?? false),
+            'lastLoginAt' => $linkedUser->last_login_at?->toIso8601String(),
+        ] : null;
 
         return [
             'id' => (string) $driver->id,
@@ -12604,6 +12972,11 @@ class GeotabController extends Controller
             'assignedVehicleGeotabId' => $driver->assigned_vehicle_geotab_id,
             'employeeNumber' => (string) data_get($driver->meta, 'employeeNumber', ''),
             'hosRuleSet' => (string) data_get($driver->meta, 'hosRuleSet', 'N/A'),
+            'userId' => $linkedUser !== null ? (string) $linkedUser->id : null,
+            'hasLoginAccount' => $linkedUser !== null,
+            'canCreateLoginAccount' => $linkedUser === null
+                && filter_var(strtolower(trim((string) $driver->email)), FILTER_VALIDATE_EMAIL) !== false,
+            'userAccount' => $userAccount,
             'syncStatus' => $syncState['status'],
             'syncLabel' => $syncState['label'],
             'syncBadgeColor' => $syncState['color'],

@@ -234,6 +234,15 @@ class Api {
       return;
     }
 
+    try {
+      await Future.wait([
+        refreshDriversFromBackend(forceRefresh: false),
+        refreshVehiclesFromBackend(),
+      ]);
+    } catch (_) {
+      // Driver pages can still render trip data if related stores are stale.
+    }
+
     final trips = await BackendApiService.getFleetTrips();
     if (jsonEncode(tripsNotifier.value) != jsonEncode(trips)) {
       tripsNotifier.value = trips;

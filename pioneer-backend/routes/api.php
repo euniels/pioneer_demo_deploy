@@ -58,6 +58,8 @@ Route::prefix('fleet')->group(function () {
     Route::post('/drivers/manual', [GeotabController::class, 'storeManualDriver']);
     Route::get('/drivers/manual/{driverId}', [GeotabController::class, 'manualDriver']);
     Route::patch('/drivers/manual/{driverId}', [GeotabController::class, 'updateManualDriver']);
+    Route::post('/drivers/manual/{driverId}/account', [GeotabController::class, 'createManualDriverAccount']);
+    Route::post('/drivers/manual/{driverId}/account/reset-password', [GeotabController::class, 'resetManualDriverAccountPassword']);
     Route::delete('/drivers/manual/{driverId}', [GeotabController::class, 'deactivateManualDriver']);
     Route::delete('/drivers/manual/{driverId}/permanent', [GeotabController::class, 'deleteManualDriver']);
     Route::post('/drivers/manual/{driverId}/anonymize', [GeotabController::class, 'anonymizeManualDriver']);

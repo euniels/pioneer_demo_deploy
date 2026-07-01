@@ -188,10 +188,33 @@ class PioneerDemoFlowSeeder extends Seeder
 
         return array_map(function (array $record): ManualDriver {
             [$name, $license, $phone, $email, $status, $vehicle] = $record;
+            $user = null;
+            if (Schema::hasTable('users')) {
+                $user = User::query()->updateOrCreate(
+                    ['email' => $email],
+                    [
+                        'name' => $name,
+                        'password' => Hash::make('Pioneer@12345'),
+                        'role' => 'driver',
+                        'phone' => $phone,
+                        'status' => in_array($status, ['inactive', 'deactivated'], true) ? 'inactive' : 'active',
+                        'must_change_password' => false,
+                        'created_by' => 'demo seeder',
+                        'activity_log' => [
+                            [
+                                'timestamp' => now()->toIso8601String(),
+                                'action' => 'demo_seeded_driver_account',
+                                'description' => 'Linked demo driver portal account prepared for client walkthrough.',
+                            ],
+                        ],
+                    ],
+                );
+            }
 
             return ManualDriver::query()->updateOrCreate(
                 ['email' => $email],
                 [
+                    ...(Schema::hasColumn('manual_drivers', 'user_id') ? ['user_id' => $user?->id] : []),
                     'name' => $name,
                     'license' => $license,
                     'phone' => $phone,
@@ -332,6 +355,8 @@ class PioneerDemoFlowSeeder extends Seeder
             'cargoType' => str_contains($tripId, 'LIVE') ? 'Temperature-sensitive cargo' : 'General delivery',
             'vehicle' => $vehicle?->plate_number ?? '',
             'driver' => $driver?->name ?? '',
+            'driverId' => $driver !== null ? 'manual-'.$driver->id : '',
+            'assignedDriverId' => $driver !== null ? 'manual-'.$driver->id : '',
             'status' => $status,
             'amount' => $amount,
             'orderValue' => $amount,

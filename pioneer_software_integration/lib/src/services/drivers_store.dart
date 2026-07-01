@@ -112,6 +112,9 @@ Future<Map<String, dynamic>> addDriverToBackend(
     'phone': driver['phone'],
     'email': driver['email'],
     'assignedVehiclePlate': driver['assignedVehiclePlate'],
+    if (driver['createLoginAccount'] == true) 'createLoginAccount': true,
+    if ((driver['temporaryPassword']?.toString().trim() ?? '').isNotEmpty)
+      'temporaryPassword': driver['temporaryPassword'].toString().trim(),
     'status': driver['status'] ?? 'available',
     'meta': {
       ...((driver['meta'] is Map)
@@ -301,6 +304,50 @@ Future<Map<String, dynamic>> updateDriverInBackend(
       'The driver update could not be confirmed by the server yet. Check your connection and try again.',
     );
   }
+  final updated = _normalizedDriver({
+    ...driver,
+    ...Map<String, dynamic>.from(response),
+  });
+  driversNotifier.value = driversNotifier.value
+      .map((item) => item['id']?.toString() == id ? updated : item)
+      .toList();
+  _persistDriversMirror();
+  return updated;
+}
+
+Future<Map<String, dynamic>> createDriverAccountInBackend(
+  Map<String, dynamic> driver,
+) async {
+  final id = driver['id']?.toString() ?? '';
+  if (id.isEmpty || driver['source'] != 'manual') {
+    throw const BackendApiException(
+      'Only locally managed drivers can receive PioneerPath login accounts.',
+    );
+  }
+
+  final response = await BackendApiService.createManualDriverAccount(id);
+  final updated = _normalizedDriver({
+    ...driver,
+    ...Map<String, dynamic>.from(response),
+  });
+  driversNotifier.value = driversNotifier.value
+      .map((item) => item['id']?.toString() == id ? updated : item)
+      .toList();
+  _persistDriversMirror();
+  return updated;
+}
+
+Future<Map<String, dynamic>> resetDriverAccountPasswordInBackend(
+  Map<String, dynamic> driver,
+) async {
+  final id = driver['id']?.toString() ?? '';
+  if (id.isEmpty || driver['source'] != 'manual') {
+    throw const BackendApiException(
+      'Only locally managed driver accounts can be reset.',
+    );
+  }
+
+  final response = await BackendApiService.resetManualDriverAccountPassword(id);
   final updated = _normalizedDriver({
     ...driver,
     ...Map<String, dynamic>.from(response),

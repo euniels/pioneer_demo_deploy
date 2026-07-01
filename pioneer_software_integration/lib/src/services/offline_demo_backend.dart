@@ -637,6 +637,9 @@ class OfflineDemoBackend {
     _userRow('2', 'Demo Fleet Manager', 'demo.fleet@pioneerpath.local', 'fleet_manager'),
     _userRow('3', 'Demo Dispatcher', 'demo.dispatch@pioneerpath.local', 'dispatcher'),
     _userRow('4', 'Demo Accounting Staff', 'demo.accounting@pioneerpath.local', 'accounting_staff'),
+    _userRow('5', 'Demo Driver Juan Dela Cruz', 'juan.demo@example.com', 'driver'),
+    _userRow('6', 'Demo Driver Ana Lopez', 'ana.demo@example.com', 'driver'),
+    _userRow('7', 'Demo Driver Mark Lim', 'mark.demo@example.com', 'driver'),
   ];
 
   static List<Map<String, dynamic>> _auditLogs() => [
@@ -752,6 +755,11 @@ class OfflineDemoBackend {
             ? 'accounting_staff'
             : normalized.contains('fleet')
                 ? 'fleet_manager'
+                : normalized.contains('juan.demo') ||
+                      normalized.contains('ana.demo') ||
+                      normalized.contains('mark.demo') ||
+                      normalized.contains('driver')
+                ? 'driver'
                 : 'super_administrator';
     final name = _users().firstWhere(
       (user) => user['email'] == normalized,
@@ -770,12 +778,41 @@ class OfflineDemoBackend {
         'managedRole': role,
         'createdAt': _iso(DateTime.now().subtract(const Duration(days: 30))),
         'mustChangePassword': false,
+        if (role == 'driver') ...{
+          'assignedVehicle': normalized.contains('ana.demo')
+              ? 'DEMO-TRK-02'
+              : normalized.contains('mark.demo')
+              ? null
+              : 'DEMO-TRK-01',
+          'driverProfile': _driverProfileForEmail(normalized),
+        },
         'auth': {
           'accessToken': 'offline-demo-access-token',
           'refreshToken': 'offline-demo-refresh-token',
           'expiresAt': _iso(DateTime.now().add(const Duration(hours: 8))),
         },
       },
+    };
+  }
+
+  static Map<String, dynamic>? _driverProfileForEmail(String email) {
+    final driver = _drivers.cast<Map<String, dynamic>?>().firstWhere(
+      (row) => row?['email']?.toString().toLowerCase() == email.toLowerCase(),
+      orElse: () => null,
+    );
+    if (driver == null) {
+      return null;
+    }
+
+    final id = driver['id']?.toString() ?? '';
+    return {
+      'id': id,
+      'driverId': id.startsWith('manual-') ? id : id,
+      'name': driver['name'],
+      'email': driver['email'],
+      'phone': driver['phone'],
+      'status': driver['status'],
+      'assignedVehicle': driver['assignedVehicle'],
     };
   }
 

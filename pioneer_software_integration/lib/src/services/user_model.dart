@@ -14,6 +14,7 @@ class UserModel {
   final String? roleDescription;
   final String? managedRole;
   final bool mustChangePassword;
+  final Map<String, dynamic>? driverProfile;
 
   // Convenience getter — derived from role
   String get roleName =>
@@ -33,6 +34,7 @@ class UserModel {
     this.roleDescription,
     this.managedRole,
     this.mustChangePassword = false,
+    this.driverProfile,
   });
 
   Map<String, dynamic> toJson() => {
@@ -49,10 +51,14 @@ class UserModel {
     if (roleDescription != null) 'roleDescription': roleDescription,
     if (managedRole != null) 'managedRole': managedRole,
     'mustChangePassword': mustChangePassword,
+    if (driverProfile != null) 'driverProfile': driverProfile,
   };
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
     final rawRole = json['managedRole'] ?? json['role'];
+    final driverProfile = json['driverProfile'] is Map
+        ? Map<String, dynamic>.from(json['driverProfile'] as Map)
+        : null;
     return UserModel(
       id: json['id'] as String,
       username: json['username'] as String,
@@ -70,6 +76,7 @@ class UserModel {
           json['roleLabel'] as String? ?? json['roleDescription'] as String?,
       managedRole: _managedRoleFromJson(rawRole),
       mustChangePassword: json['mustChangePassword'] == true,
+      driverProfile: driverProfile,
     );
   }
 
@@ -87,6 +94,7 @@ class UserModel {
     Object? roleDescription = _sentinel,
     Object? managedRole = _sentinel,
     bool? mustChangePassword,
+    Object? driverProfile = _sentinel,
   }) => UserModel(
     id: id ?? this.id,
     username: username ?? this.username,
@@ -107,7 +115,26 @@ class UserModel {
         ? this.managedRole
         : managedRole as String?,
     mustChangePassword: mustChangePassword ?? this.mustChangePassword,
+    driverProfile: driverProfile == _sentinel
+        ? this.driverProfile
+        : driverProfile as Map<String, dynamic>?,
   );
+
+  String? get driverProfileId =>
+      driverProfile?['driverId']?.toString().trim().isNotEmpty == true
+      ? driverProfile!['driverId'].toString()
+      : driverProfile?['id']?.toString();
+
+  String? get manualDriverId => driverProfile?['id']?.toString();
+
+  String? get driverProfileName => driverProfile?['name']?.toString();
+
+  String? get driverProfileEmail => driverProfile?['email']?.toString();
+
+  String? get driverAssignedVehicle =>
+      driverProfile?['assignedVehicle']?.toString().trim().isNotEmpty == true
+      ? driverProfile!['assignedVehicle'].toString()
+      : assignedVehicle;
 }
 
 // Sentinel for copyWith nullable fields

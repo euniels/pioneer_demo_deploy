@@ -66,4 +66,30 @@ void main() {
 
     expect(user.role, UserRole.admin);
   });
+
+  test('driver login model keeps linked driver profile identity', () {
+    final user = UserModel.fromJson({
+      'id': 'u-driver',
+      'username': 'juan.demo',
+      'fullName': 'Demo Driver Juan Dela Cruz',
+      'email': 'juan.demo@example.com',
+      'role': 'driver',
+      'createdAt': '2024-01-01T00:00:00.000',
+      'assignedVehicle': 'DEMO-TRK-01',
+      'driverProfile': {
+        'id': '1',
+        'driverId': 'manual-1',
+        'name': 'Demo Driver Juan Dela Cruz',
+        'email': 'juan.demo@example.com',
+        'assignedVehicle': 'DEMO-TRK-01',
+      },
+    });
+
+    expect(user.role, UserRole.driver);
+    expect(user.driverProfileId, 'manual-1');
+    expect(user.manualDriverId, '1');
+    expect(user.driverProfileName, 'Demo Driver Juan Dela Cruz');
+    expect(user.driverAssignedVehicle, 'DEMO-TRK-01');
+    expect(user.toJson()['driverProfile'], isA<Map<String, dynamic>>());
+  });
 }
