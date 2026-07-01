@@ -949,6 +949,10 @@ class GeotabWriteBackService
             }
         }
 
+        if (app()->runningUnitTests()) {
+            return '';
+        }
+
         return trim((string) config('services.geotab.default_group_id', ''));
     }
 

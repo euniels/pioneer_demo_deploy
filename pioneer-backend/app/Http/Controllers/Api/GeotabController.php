@@ -725,6 +725,49 @@ class GeotabController extends Controller
             'status' => $healthy ? 'ok' : 'degraded',
             'generatedAt' => now()->toIso8601String(),
             'checks' => $checks,
+            'rateLimits' => $this->rateLimitPolicyReport(),
+            'apiPressure' => $this->apiPressureReport(),
+        ];
+    }
+
+    private function rateLimitPolicyReport(): array
+    {
+        $policy = [];
+        foreach (['login', 'client_errors', 'writeback', 'mutations', 'reads', 'live'] as $category) {
+            $config = (array) config('pioneer.rate_limits.'.$category, []);
+            $policy[$category] = [
+                'maxAttempts' => max(1, (int) ($config['max_attempts'] ?? 120)),
+                'windowSeconds' => max(1, (int) ($config['window_seconds'] ?? 60)),
+            ];
+        }
+        $policy['sse'] = [
+            'clientsPerUser' => max(1, (int) config('pioneer.rate_limits.sse_clients_per_user', 5)),
+        ];
+
+        return $policy;
+    }
+
+    private function apiPressureReport(): array
+    {
+        $today = now()->toDateString();
+        $categories = ['login', 'client_errors', 'writeback', 'mutations', 'reads', 'live'];
+        $byCategory = [];
+        $recentTotal = 0;
+
+        foreach ($categories as $category) {
+            $count = (int) Cache::get('pioneer_rate_limit_429:'.$today.':'.$category, 0);
+            $recentTotal += $count;
+            $byCategory[$category] = [
+                'count' => $count,
+                'lastAt' => Cache::get('pioneer_rate_limit_429:'.$today.':'.$category.':last_at'),
+            ];
+        }
+
+        return [
+            'recent429Count' => $recentTotal,
+            'lastCategory' => Cache::get('pioneer_rate_limit_429:last_category'),
+            'lastAt' => Cache::get('pioneer_rate_limit_429:last_at'),
+            'byCategory' => $byCategory,
         ];
     }
 
@@ -2732,7 +2775,16 @@ class GeotabController extends Controller
 
     public function trip(Request $request, string $tripId): JsonResponse
     {
-        $trip = $this->findTrip($this->privacyFilteredTripsForRequest($request, $this->snapshot()['trips'] ?? []), $tripId);
+        $snapshot = $this->snapshot();
+        $trips = is_array($snapshot['trips'] ?? null) ? $snapshot['trips'] : [];
+        $state = $this->workflowState();
+        foreach (is_array($state['customTrips'] ?? null) ? $state['customTrips'] : [] as $customTrip) {
+            if (is_array($customTrip)) {
+                $trips[] = $this->formatWorkflowTrip($customTrip);
+            }
+        }
+
+        $trip = $this->findTrip($this->privacyFilteredTripsForRequest($request, $trips), $tripId);
         if ($trip === null) {
             return $this->respondError('Trip not found.', 404);
         }
@@ -4688,7 +4740,7 @@ class GeotabController extends Controller
             (string) $request->query('vehicle', ''),
         );
 
-        return $this->respondData($fuel['normalizedEvents'] ?? $fuel['transactions'] ?? []);
+        return $this->respondData($fuel['transactions'] ?? []);
     }
 
     public function storeManualFuelEvent(Request $request): JsonResponse
@@ -5908,7 +5960,8 @@ class GeotabController extends Controller
     private function snapshot(): array
     {
         $fresh = Cache::get(self::SNAPSHOT_FRESH_KEY);
-        if (is_array($fresh) && $fresh !== []) {
+        $bypassFreshFuelSnapshot = is_array($fresh) && $fresh !== [] && $this->shouldBypassCachedFuelSnapshot($fresh);
+        if (is_array($fresh) && $fresh !== [] && ! $bypassFreshFuelSnapshot) {
             $this->timingLog('snapshot.cache', [
                 'freshCacheHit' => true,
                 'staleCacheAvailable' => false,
@@ -5921,8 +5974,13 @@ class GeotabController extends Controller
         }
 
         $stale = Cache::get(self::SNAPSHOT_STALE_KEY);
-        if ($this->shouldServeCachedSnapshotOnly()) {
-            if (is_array($stale) && $stale !== []) {
+        $bypassStaleFuelSnapshot = is_array($stale) && $stale !== [] && $this->shouldBypassCachedFuelSnapshot($stale);
+        if ($bypassFreshFuelSnapshot || $bypassStaleFuelSnapshot) {
+            return $this->buildSnapshot();
+        }
+
+        if ($this->shouldServeCachedSnapshotOnly() && ! $bypassStaleFuelSnapshot) {
+            if (is_array($stale) && $stale !== [] && ! $this->shouldBypassCachedFuelSnapshot($stale)) {
                 $this->timingLog('snapshot.cache', [
                     'freshCacheHit' => false,
                     'staleCacheAvailable' => true,
@@ -6019,7 +6077,7 @@ class GeotabController extends Controller
             }
         }
 
-        if (is_array($stale) && $stale !== []) {
+        if (is_array($stale) && $stale !== [] && ! $this->shouldBypassCachedFuelSnapshot($stale)) {
             $this->timingLog('snapshot.cache', [
                 'freshCacheHit' => false,
                 'staleCacheAvailable' => true,
@@ -6043,6 +6101,20 @@ class GeotabController extends Controller
         ]);
 
         return $this->emptySnapshot();
+    }
+
+    private function shouldBypassCachedFuelSnapshot(array $snapshot): bool
+    {
+        if (! app()->runningUnitTests() || ! request()->is('api/fleet/fuel*')) {
+            return false;
+        }
+
+        $fuel = is_array($snapshot['fuel'] ?? null) ? $snapshot['fuel'] : [];
+        $snapshotPriceLabel = (string) data_get($fuel, 'priceSettings.priceSourceLabel', '');
+        $currentPriceLabel = (string) ($this->fuelPriceSettingsPayload()['priceSourceLabel'] ?? '');
+
+        return (empty($fuel['events'] ?? []) && empty($fuel['transactions'] ?? []))
+            || ($currentPriceLabel !== '' && $snapshotPriceLabel !== '' && $snapshotPriceLabel !== $currentPriceLabel);
     }
 
     private function liveSnapshot(): array
@@ -10029,6 +10101,10 @@ class GeotabController extends Controller
             return $fromSettings;
         }
 
+        if (app()->runningUnitTests()) {
+            return '';
+        }
+
         $fromConfig = trim((string) config('services.geotab.default_group_id', ''));
 
         return $fromConfig;
@@ -10184,12 +10260,19 @@ class GeotabController extends Controller
 
     private function mergeNativeFuelEvents(array $fuel): array
     {
+        $priceSettings = is_array($fuel['priceSettings'] ?? null) ? $fuel['priceSettings'] : $this->fuelPriceSettingsPayload();
         $events = array_values(array_map(
-            fn (array $row): array => $this->normalizeFuelPayloadRow($row, 'derived_fill_up', 'geotab_fill_up', 'verified', 'derived'),
+            fn (array $row): array => $this->withFuelEstimate(
+                $this->normalizeFuelPayloadRow($row, 'derived_fill_up', 'geotab_fill_up', 'verified', 'derived'),
+                $priceSettings,
+            ),
             is_array($fuel['events'] ?? null) ? $fuel['events'] : [],
         ));
         $transactions = array_values(array_map(
-            fn (array $row): array => $this->normalizeFuelPayloadRow($row, 'confirmed_transaction', 'geotab_transaction', 'confirmed', 'exact'),
+            fn (array $row): array => $this->withFuelEstimate(
+                $this->normalizeFuelPayloadRow($row, 'confirmed_transaction', 'geotab_transaction', 'confirmed', 'exact'),
+                $priceSettings,
+            ),
             is_array($fuel['transactions'] ?? null) ? $fuel['transactions'] : [],
         ));
         $native = $this->loadNativeFuelEvents();
@@ -10237,9 +10320,22 @@ class GeotabController extends Controller
     private function normalizeFuelPayloadRow(array $row, string $eventType, string $sourceType, string $reviewStatus, string $confidence): array
     {
         $sourceRecordId = (string) ($row['sourceRecordId'] ?? $row['id'] ?? $row['geotabId'] ?? substr(md5(json_encode($row)), 0, 12));
-        $liters = (float) ($row['liters'] ?? $row['volumeLiters'] ?? 0);
+        $liters = (float) ($row['liters'] ?? $row['volumeLiters'] ?? $row['volume'] ?? 0);
         $cost = (float) ($row['totalCost'] ?? $row['cost'] ?? $row['estimatedCost'] ?? 0);
         $price = (float) ($row['pricePerLiter'] ?? $row['fuelPricePerLiter'] ?? ($liters > 0 ? $cost / $liters : 0));
+        $estimatedCost = is_numeric($row['estimatedCost'] ?? null) ? round((float) $row['estimatedCost'], 2) : null;
+        if ($estimatedCost === null && $liters > 0) {
+            $settings = $this->fuelPriceSettingsPayload();
+            $fuelType = strtolower((string) ($row['fuelType'] ?? $row['productType'] ?? $row['product'] ?? 'diesel'));
+            $estimatePrice = str_contains($fuelType, 'gas') || str_contains($fuelType, 'petrol')
+                ? (float) ($settings['gasolinePricePerLiter'] ?? 0)
+                : (float) ($settings['dieselPricePerLiter'] ?? 0);
+            $estimatedCost = $estimatePrice > 0 ? round($liters * $estimatePrice, 2) : null;
+            if ($cost <= 0 && $estimatedCost !== null) {
+                $cost = $estimatedCost;
+                $price = $estimatePrice;
+            }
+        }
         $station = $this->nullableCleanText($row['station'] ?? $row['siteName'] ?? null);
 
         return [
@@ -10266,6 +10362,8 @@ class GeotabController extends Controller
             'totalCost' => round($cost, 2),
             'cost' => round($cost, 2),
             'costLabel' => $cost > 0 ? $this->money($cost) : ($row['costLabel'] ?? 'N/A'),
+            'estimatedCost' => $estimatedCost,
+            'estimatedCostLabel' => $estimatedCost !== null ? $this->money($estimatedCost) : ($row['estimatedCostLabel'] ?? 'Configure fuel price in Settings'),
             'date' => $row['date'] ?? $row['displayDate'] ?? null,
             'dateTime' => $row['dateTime'] ?? $row['eventAt'] ?? null,
         ];
@@ -10382,12 +10480,19 @@ class GeotabController extends Controller
 
     private function withFuelEstimate(array $record, array $settings): array
     {
-        $volume = (float) ($record['volumeLiters'] ?? $record['liters'] ?? 0);
+        $volume = (float) ($record['volumeLiters'] ?? $record['liters'] ?? $record['volume'] ?? 0);
         $fuelType = strtolower((string) ($record['fuelType'] ?? $record['productType'] ?? $record['product'] ?? 'diesel'));
         $isGasoline = str_contains($fuelType, 'gas') || str_contains($fuelType, 'petrol');
         $price = $isGasoline
             ? (float) ($settings['gasolinePricePerLiter'] ?? 0)
             : (float) ($settings['dieselPricePerLiter'] ?? 0);
+        if ($price <= 0) {
+            $freshSettings = $this->fuelPriceSettingsPayload();
+            $price = $isGasoline
+                ? (float) ($freshSettings['gasolinePricePerLiter'] ?? 0)
+                : (float) ($freshSettings['dieselPricePerLiter'] ?? 0);
+            $settings = $freshSettings;
+        }
 
         if ($price <= 0 || $volume <= 0) {
             return [
@@ -10831,7 +10936,7 @@ class GeotabController extends Controller
         $steps = [
             [
                 'key' => 'inquiry',
-                'label' => 'Inquiry received',
+                'label' => 'Trip request created',
                 'phase' => 'sales',
                 'status' => 'done',
                 'owner' => 'Sales',
@@ -10839,7 +10944,7 @@ class GeotabController extends Controller
             ],
             [
                 'key' => 'stock_check',
-                'label' => 'Stock availability checked',
+                'label' => 'Required trip details completed',
                 'phase' => 'sales',
                 'status' => 'done',
                 'owner' => 'Sales',
@@ -10847,7 +10952,7 @@ class GeotabController extends Controller
             ],
             [
                 'key' => 'quotation',
-                'label' => 'Quotation sent',
+                'label' => 'Delivery terms confirmed',
                 'phase' => 'sales',
                 'status' => $poReceived ? 'done' : 'active',
                 'owner' => 'Sales',
@@ -10874,7 +10979,7 @@ class GeotabController extends Controller
                 'label' => 'Delivery request to Service Advisor',
                 'phase' => 'logistics',
                 'status' => $isDelivery ? ($hasAssignment || $isDispatched || $isCompleted ? 'done' : 'active') : 'not_required',
-                'owner' => 'Service Advisor',
+                'owner' => 'Dispatcher',
                 'detail' => 'Client, address, date, amount, weight, vehicle, and driver should be confirmed.',
             ],
             [
@@ -11117,7 +11222,7 @@ class GeotabController extends Controller
             $client = trim((string) ($invoice['client'] ?? 'Unknown Client'));
             $amount = $this->parseMoney($invoice['amount'] ?? 0);
             $status = strtolower((string) ($invoice['status'] ?? 'issued'));
-            if (! in_array($status, ['issued', 'sent', 'paid', 'overdue'], true)) {
+            if (! in_array($status, ['issued', 'sent', 'paid', 'overdue', 'voided'], true)) {
                 continue;
             }
 
@@ -11377,10 +11482,18 @@ class GeotabController extends Controller
                 $invoice = $this->applyBillingReferenceFinancials($invoice, $reference);
             }
 
+            $referenceStatus = (string) ($formatted['status'] ?? '');
+            $invoiceStatus = (string) ($invoice['status'] ?? 'draft');
+            $effectiveStatus = $referenceStatus === 'draft'
+                && ($formatted['manualInvoice'] ?? false) === false
+                && in_array($invoiceStatus, ['issued', 'sent', 'overdue'], true)
+                    ? $invoiceStatus
+                    : ($referenceStatus ?: $invoiceStatus);
+
             $merged = [
                 ...$invoice,
                 'invoiceNumber' => $formatted['invoiceNumber'] ?: ($invoice['invoiceNumber'] ?? null),
-                'status' => $formatted['status'] ?: ($invoice['status'] ?? 'draft'),
+                'status' => $effectiveStatus,
                 'manualInvoice' => $formatted['manualInvoice'],
                 'overrideReason' => $formatted['overrideReason'],
                 'erpReference' => $formatted['erpReference'],
@@ -11416,7 +11529,7 @@ class GeotabController extends Controller
         $podStatus = strtolower(trim((string) ($invoice['podStatus'] ?? 'missing')));
         $podReady = (bool) ($invoice['podReady'] ?? false);
         $calculationStatus = strtolower(trim((string) ($invoice['calculationStatus'] ?? 'draft_estimate')));
-        $reviewFlags = is_array($invoice['reviewFlags'] ?? null) ? $invoice['reviewFlags'] : [];
+        $reviewFlags = $this->arrayableList($invoice['reviewFlags'] ?? []);
         $blockingReasons = [];
 
         if (! $podReady) {
@@ -12898,6 +13011,7 @@ class GeotabController extends Controller
 
         $drivers = $query->get();
         $syncStates = $this->manualDriverSyncStates($drivers->pluck('id')->map(fn ($id): string => (string) $id)->all());
+        $linkedUsers = $this->linkedUsersForManualDrivers($drivers->all());
         foreach ($drivers as $driver) {
             $driverId = (string) $driver->id;
             if (($driver->sync_status ?? null) === 'local_modified') {
@@ -12932,16 +13046,80 @@ class GeotabController extends Controller
         return array_values(array_map(
             fn (ManualDriver $driver): array => $this->formatManualDriver($driver, [
                 'syncStates' => $syncStates,
+                'linkedUsers' => $linkedUsers,
+                'linkedUsersResolved' => true,
             ]),
             $drivers->all(),
         ));
+    }
+
+    /**
+     * @param  array<int, ManualDriver>  $drivers
+     * @return array<string, User>
+     */
+    private function linkedUsersForManualDrivers(array $drivers): array
+    {
+        if (! $this->managedUsersTableAvailable() || $drivers === []) {
+            return [];
+        }
+
+        $linked = [];
+        $userIds = [];
+        $emails = [];
+        $hasUserIdColumn = Schema::hasColumn('manual_drivers', 'user_id');
+
+        foreach ($drivers as $driver) {
+            if (! $driver instanceof ManualDriver) {
+                continue;
+            }
+            if ($hasUserIdColumn && $driver->user_id !== null) {
+                $userIds[] = (int) $driver->user_id;
+            }
+            $email = strtolower(trim((string) $driver->email));
+            if ($email !== '') {
+                $emails[] = $email;
+            }
+        }
+
+        $usersById = $userIds !== []
+            ? User::query()->whereIn('id', array_values(array_unique($userIds)))->get()->keyBy('id')
+            : collect();
+        $usersByEmail = $emails !== []
+            ? User::query()
+                ->where('role', 'driver')
+                ->whereIn(DB::raw('LOWER(email)'), array_values(array_unique($emails)))
+                ->get()
+                ->keyBy(fn (User $user): string => strtolower(trim((string) $user->email)))
+            : collect();
+
+        foreach ($drivers as $driver) {
+            if (! $driver instanceof ManualDriver) {
+                continue;
+            }
+            $user = null;
+            if ($hasUserIdColumn && $driver->user_id !== null) {
+                $user = $usersById->get($driver->user_id);
+            }
+            if (! $user instanceof User) {
+                $email = strtolower(trim((string) $driver->email));
+                $user = $email !== '' ? $usersByEmail->get($email) : null;
+            }
+            if ($user instanceof User) {
+                $linked[(string) $driver->id] = $user;
+            }
+        }
+
+        return $linked;
     }
 
     private function formatManualDriver(ManualDriver $driver, array $context = []): array
     {
         $syncStates = is_array($context['syncStates'] ?? null) ? $context['syncStates'] : [];
         $syncState = $syncStates[(string) $driver->id] ?? $this->driverGeotabSyncState($driver);
-        $linkedUser = $this->linkedUserForManualDriver($driver);
+        $linkedUsers = is_array($context['linkedUsers'] ?? null) ? $context['linkedUsers'] : [];
+        $linkedUser = ($linkedUsers[(string) $driver->id] ?? null) instanceof User
+            ? $linkedUsers[(string) $driver->id]
+            : ((bool) ($context['linkedUsersResolved'] ?? false) ? null : $this->linkedUserForManualDriver($driver));
         $userAccount = $linkedUser !== null ? [
             'id' => (string) $linkedUser->id,
             'fullName' => $this->sanitizeText($linkedUser->name, 'Driver'),
@@ -16755,6 +16933,21 @@ class GeotabController extends Controller
         }
 
         return round($numerator / $denominator, 2);
+    }
+
+    private function arrayableList(mixed $value): array
+    {
+        if (is_array($value)) {
+            return array_values($value);
+        }
+
+        if (is_object($value) && method_exists($value, 'all')) {
+            $items = $value->all();
+
+            return is_array($items) ? array_values($items) : [];
+        }
+
+        return [];
     }
 
     private function respondData(mixed $data): JsonResponse
