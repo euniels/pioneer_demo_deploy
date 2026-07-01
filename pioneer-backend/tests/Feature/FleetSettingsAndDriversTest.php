@@ -802,8 +802,8 @@ test('custom trips expose delivery workflow state', function () {
         'driver' => 'Driver One',
     ])->assertOk()
         ->assertJsonPath('data.workflowPhase', 'transit')
-        ->assertJsonPath('data.workflowPhaseLabel', 'Delivery execution')
-        ->assertJsonPath('data.workflowPhaseNumber', 7)
+        ->assertJsonPath('data.workflowPhaseLabel', 'In transit')
+        ->assertJsonPath('data.workflowPhaseNumber', 10)
         ->assertJsonPath('data.workflowGroup', 'In Transit')
         ->assertJsonPath('data.clientWorkflowStatus', 'Your delivery is on its way')
         ->assertJsonCount(12, 'data.workflowSteps');
@@ -897,12 +897,14 @@ test('dispatch workflow phase can advance and stage relevant geotab writeback', 
     ])->assertOk();
 
     $this->patchJson('/api/fleet/trips/TRP-PHASE', [
-        'workflowPhaseNumber' => 7,
+        'workflowPhaseNumber' => 10,
         'status' => 'dispatched',
+        'vehicle' => 'PTC-PHASE',
+        'driver' => 'Phase Driver',
         'routeGeotabId' => 'route-phase',
         'deviceGeotabId' => 'device-phase',
     ])->assertOk()
-        ->assertJsonPath('data.workflowPhaseNumber', 7)
+        ->assertJsonPath('data.workflowPhaseNumber', 10)
         ->assertJsonPath('data.workflowGroup', 'In Transit')
         ->assertJsonPath('data.clientWorkflowStatus', 'Your delivery is on its way')
         ->assertJsonCount(12, 'data.workflowSteps');
@@ -912,6 +914,32 @@ test('dispatch workflow phase can advance and stage relevant geotab writeback', 
         ->where('local_type', 'trip')
         ->where('local_id', 'TRP-PHASE')
         ->count())->toBe(1);
+});
+
+test('dispatch workflow rejects unsafe phase transitions', function () {
+    Cache::flush();
+
+    $this->postJson('/api/fleet/trips', [
+        'tripId' => 'TRP-PHASE-GUARD',
+        'customer' => 'Guard Client',
+        'origin' => 'Warehouse',
+        'destination' => 'Client',
+        'amount' => 5000,
+    ])->assertOk();
+
+    $this->patchJson('/api/fleet/trips/TRP-PHASE-GUARD', [
+        'workflowPhaseNumber' => 10,
+        'status' => 'dispatched',
+    ])->assertStatus(422)
+        ->assertJsonPath('success', false);
+
+    $this->patchJson('/api/fleet/trips/TRP-PHASE-GUARD', [
+        'workflowPhaseNumber' => 12,
+        'status' => 'completed',
+        'vehicle' => 'PTC-GUARD',
+        'driver' => 'Guard Driver',
+    ])->assertStatus(422)
+        ->assertJsonPath('success', false);
 });
 
 test('maintenance due notification is created once for due records', function () {

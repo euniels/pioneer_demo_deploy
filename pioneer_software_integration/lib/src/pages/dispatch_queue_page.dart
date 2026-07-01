@@ -13,6 +13,7 @@ import '../services/realtime_stream_service.dart';
 import '../services/drivers_store.dart';
 import '../services/trips_store.dart' show tripsNotifier;
 import '../services/vehicles_store.dart';
+import '../utils/dispatch_workflow_policy.dart';
 import '../utils/workflow_status_helper.dart';
 import '../widgets/workflow_timeline.dart';
 import '../theme/app_theme.dart';
@@ -158,10 +159,10 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     final groups = <String, List<Map<String, dynamic>>>{
       'Pending Details': [],
       'Pending Assignment': [],
+      'Ready to Dispatch': [],
       'In Transit': [],
-      'Arrived': [],
-      'Pending POD': [],
-      'Billing Review': [],
+      'Arrived / POD Needed': [],
+      'Completed / POD Review Handoff': [],
     };
 
     for (final trip in _workflowTrips) {
@@ -240,9 +241,11 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
               'vehicle': vehicle,
               'startedAt': startedAt,
               'workflowPhaseNumber': 10,
-              'workflowGroup': _workflowGroupForPhase(10),
-              'workflowPhaseLabel': _workflowPhaseLabel(10),
-              'workflowNextAction': _workflowNextAction(10),
+              'workflowGroup': DispatchWorkflowPolicy.groupForPhase(10),
+              'workflowPhaseLabel': DispatchWorkflowPolicy.labelForPhase(10),
+              'workflowNextAction': DispatchWorkflowPolicy.nextActionForPhase(
+                10,
+              ),
             };
           }
           return item;
@@ -340,16 +343,27 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     final tripId = trip['tripId']?.toString() ?? '';
     if (tripId.isEmpty) return;
 
-    final current = _workflowPhaseNumber(trip);
-    if (current >= 12) return;
+    final blockedReason = DispatchWorkflowPolicy.blockedReason(trip);
+    if (blockedReason != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(blockedReason),
+        ),
+      );
+      return;
+    }
 
-    final next = current + 1;
+    final current = _workflowPhaseNumber(trip);
+    final updates = DispatchWorkflowPolicy.nextDispatchUpdates(trip);
+    final next = updates['workflowPhaseNumber'] as int;
+    final actionLabel = DispatchWorkflowPolicy.dispatchActionLabel(current);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
         return AlertDialog(
-          title: const Text('Mark next workflow phase?'),
+          title: Text('$actionLabel?'),
           content: Text(
             '${trip['tripId'] ?? 'This trip'} will move to phase $next: '
             '${_workflowPhaseLabel(next)}.\n\n'
@@ -363,7 +377,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
             ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Confirm Phase'),
+              child: Text(actionLabel),
             ),
           ],
         );
@@ -373,12 +387,10 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
 
     final previous = List<Map<String, dynamic>>.from(tripsNotifier.value);
     final localUpdates = {
-      'workflowPhaseNumber': next,
-      'workflowGroup': _workflowGroupForPhase(next),
-      'workflowPhaseLabel': _workflowPhaseLabel(next),
-      'workflowNextAction': _workflowNextAction(next),
-      if (next == 10) 'status': 'dispatched',
-      if (next == 12) 'status': 'completed',
+      ...updates,
+      'workflowGroup': DispatchWorkflowPolicy.groupForPhase(next),
+      'workflowPhaseLabel': DispatchWorkflowPolicy.labelForPhase(next),
+      'workflowNextAction': DispatchWorkflowPolicy.nextActionForPhase(next),
     };
     tripsNotifier.value = tripsNotifier.value.map((item) {
       if (item['tripId'] == tripId) {
@@ -388,11 +400,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     }).toList();
 
     try {
-      await BackendApiService.updateTrip(tripId, {
-        'workflowPhaseNumber': next,
-        if (next == 10) 'status': 'dispatched',
-        if (next == 12) 'status': 'completed',
-      });
+      await BackendApiService.updateTrip(tripId, updates);
       unawaited(refreshFleetSnapshot(forceRefresh: true));
     } catch (_) {
       tripsNotifier.value = previous;
@@ -1240,6 +1248,10 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
     final phone = _driverPhoneForTrip(trip);
     final hasDriver = driverName.toLowerCase() != 'unassigned driver';
     final hasVehicle = assignedVehicle.toLowerCase() != 'unassigned vehicle';
+    final workflowBlockedReason = DispatchWorkflowPolicy.blockedReason(trip);
+    final workflowActionLabel = DispatchWorkflowPolicy.dispatchActionLabel(
+      phaseNumber,
+    );
     final canDispatch =
         !isRoutePlan && phaseNumber <= 9 && status.toLowerCase() == 'pending';
     final statusPresentation = WorkflowStatusHelper.trip(
@@ -1533,13 +1545,24 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
                       ),
                     ),
                   if (!isRoutePlan && phaseNumber < 12)
-                    FilledButton.icon(
-                      onPressed: () => _advanceWorkflowPhase(trip),
-                      icon: const Icon(Icons.arrow_forward_rounded),
-                      label: const Text('Mark Next Phase'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppTheme.colorFF1A3A6B,
-                        foregroundColor: AppTheme.white,
+                    Tooltip(
+                      message:
+                          workflowBlockedReason ??
+                          'Move this trip to the next dispatch workflow step',
+                      child: FilledButton.icon(
+                        onPressed: workflowBlockedReason == null
+                            ? () => _advanceWorkflowPhase(trip)
+                            : null,
+                        icon: Icon(
+                          phaseNumber >= 11
+                              ? Icons.hourglass_top_rounded
+                              : Icons.arrow_forward_rounded,
+                        ),
+                        label: Text(workflowActionLabel),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppTheme.colorFF1A3A6B,
+                          foregroundColor: AppTheme.white,
+                        ),
                       ),
                     ),
                   Text(
@@ -1918,26 +1941,7 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   }
 
   int _workflowPhaseNumber(Map<String, dynamic> trip) {
-    final raw = trip['workflowPhaseNumber'];
-    if (raw is num) return raw.toInt().clamp(1, 12);
-    final parsed = int.tryParse(raw?.toString() ?? '');
-    if (parsed != null) return parsed.clamp(1, 12);
-
-    switch (trip['status']?.toString().trim().toLowerCase()) {
-      case 'completed':
-        return 12;
-      case 'arrived':
-        return 8;
-      case 'dispatched':
-      case 'active':
-      case 'in transit':
-      case 'on trip':
-        return 7;
-      case 'pending':
-        return 1;
-      default:
-        return 5;
-    }
+    return DispatchWorkflowPolicy.phaseNumber(trip, fallback: 5);
   }
 
   String _workflowGroupForTrip(Map<String, dynamic> trip) {
@@ -1945,29 +1949,15 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
   }
 
   String _workflowGroupForPhase(int phase) {
-    if (phase <= 2) return 'Pending Details';
-    if (phase <= 6) return 'Pending Assignment';
-    if (phase == 7) return 'In Transit';
-    if (phase == 8) return 'Arrived';
-    if (phase <= 10) return 'Pending POD';
-    return 'Billing Review';
+    return DispatchWorkflowPolicy.groupForPhase(phase);
   }
 
   String _workflowPhaseLabel(int phase) {
-    if (phase <= 2) return 'Trip request';
-    if (phase <= 6) return 'Dispatch assignment';
-    if (phase <= 8) return 'Delivery execution';
-    if (phase <= 10) return 'POD verification';
-    return 'Billing review';
+    return DispatchWorkflowPolicy.labelForPhase(phase);
   }
 
   String _workflowNextAction(int phase) {
-    if (phase <= 2) return 'Complete the delivery trip details.';
-    if (phase <= 6) return 'Assign vehicle, driver, and dispatch notification.';
-    if (phase == 7) return 'Dispatch the truck and share live tracking.';
-    if (phase == 8) return 'Confirm arrival at the destination.';
-    if (phase <= 10) return 'Submit and verify proof of delivery.';
-    return 'Review, issue, or settle the trip-linked invoice.';
+    return DispatchWorkflowPolicy.nextActionForPhase(phase);
   }
 
   Color _workflowGroupColor(String title) {
@@ -1976,14 +1966,14 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
         return AppTheme.colorFFF59E0B;
       case 'Pending Assignment':
         return AppTheme.colorFFF59E0B;
+      case 'Ready to Dispatch':
+        return AppTheme.colorFF4B7BE5;
       case 'In Transit':
         return AppTheme.colorFF4B7BE5;
-      case 'Arrived':
+      case 'Arrived / POD Needed':
         return AppTheme.colorFF14B8A6;
-      case 'Pending POD':
+      case 'Completed / POD Review Handoff':
         return AppTheme.colorFFF59E0B;
-      case 'Billing Review':
-        return AppTheme.colorFF16A34A;
       default:
         return AppTheme.colorFF16A34A;
     }
@@ -1995,13 +1985,13 @@ class _DispatchQueuePageState extends State<DispatchQueuePage>
         return 'Delivery requests needing complete trip details';
       case 'Pending Assignment':
         return 'Trips requiring vehicle and driver assignment';
+      case 'Ready to Dispatch':
+        return 'Assigned trips waiting for dispatch start';
       case 'In Transit':
         return 'Active delivery movement with live vehicle condition';
-      case 'Arrived':
+      case 'Arrived / POD Needed':
         return 'At destination, awaiting delivery receipt confirmation';
-      case 'Pending POD':
-        return 'Completed or arrived trips waiting for proof-of-delivery review';
-      case 'Billing Review':
+      case 'Completed / POD Review Handoff':
         return 'POD-backed trips ready for invoice and payment follow-up';
       default:
         return 'Delivery workflow status';

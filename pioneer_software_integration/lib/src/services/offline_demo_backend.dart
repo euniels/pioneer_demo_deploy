@@ -230,8 +230,8 @@ class OfflineDemoBackend {
     return [
       _trip('DEMO-TRIP-REQUEST', 'pending', 2, _clients[0], null, null, 0, now.add(const Duration(hours: 6))),
       _trip('DEMO-TRIP-ASSIGNED', 'assigned', 6, _clients[0], _vehicles[1], _drivers[1], 18500, now.add(const Duration(hours: 3))),
-      _trip('DEMO-TRIP-LIVE', 'in_progress', 7, _clients[1], _vehicles[0], _drivers[0], 24500, now.subtract(const Duration(hours: 1))),
-      _trip('DEMO-TRIP-POD-HOLD', 'completed', 10, _clients[1], _vehicles[1], _drivers[1], 21750, now.subtract(const Duration(days: 1))),
+      _trip('DEMO-TRIP-LIVE', 'in_progress', 10, _clients[1], _vehicles[0], _drivers[0], 24500, now.subtract(const Duration(hours: 1))),
+      _trip('DEMO-TRIP-POD-HOLD', 'pending_approval', 11, _clients[1], _vehicles[1], _drivers[1], 21750, now.subtract(const Duration(days: 1))),
       _trip('DEMO-TRIP-BILLED', 'completed', 12, _clients[0], _vehicles[0], _drivers[0], 32000, now.subtract(const Duration(days: 2))),
     ];
   }
@@ -810,18 +810,18 @@ class OfflineDemoBackend {
       'date': _isoDate(scheduledAt),
       'scheduledDepartureAt': _iso(scheduledAt),
       'estimatedArrivalAt': _iso(scheduledAt.add(const Duration(hours: 3))),
-      'startedAt': phase >= 7 ? _iso(scheduledAt) : null,
+      'startedAt': phase >= 10 ? _iso(scheduledAt) : null,
       'endedAt': completed ? _iso(scheduledAt.add(const Duration(hours: 3))) : null,
       'workflowPhaseNumber': phase,
       'workflowPhaseLabel': _phaseLabel(phase),
       'workflowGroup': _phaseGroup(phase),
       'deviceGeotabId': vehicle?['geotabId'],
       'routeName': 'Demo Route - Metro Manila Northbound',
-      'arrivalState': phase >= 8 ? 'arrived' : 'pending',
-      'arrivedAtDestination': phase >= 8,
-      'podReady': phase >= 11,
-      'podStatus': phase >= 11 ? 'verified' : phase >= 10 ? 'submitted' : 'missing',
-      'billingStatus': tripId == 'DEMO-TRIP-BILLED' ? 'issued' : phase >= 10 ? 'hold' : 'not_ready',
+      'arrivalState': phase >= 11 ? 'arrived' : 'pending',
+      'arrivedAtDestination': phase >= 11,
+      'podReady': completed,
+      'podStatus': completed ? 'verified' : phase >= 11 ? 'submitted' : 'missing',
+      'billingStatus': tripId == 'DEMO-TRIP-BILLED' ? 'issued' : phase >= 11 ? 'hold' : 'not_ready',
       'startPoint': {'latitude': 14.5794, 'longitude': 121.0359},
       'stopPoint': {'latitude': 14.6507, 'longitude': 120.9676},
     };
@@ -883,19 +883,19 @@ class OfflineDemoBackend {
   static String _phaseLabel(int phase) => switch (phase) {
     <= 2 => 'Trip request',
     <= 6 => 'Dispatch assignment',
-    7 => 'Delivery execution',
-    8 => 'Arrival confirmation',
-    <= 10 => 'Proof of delivery',
-    _ => 'Billing review',
+    <= 9 => 'Ready to dispatch',
+    10 => 'In transit',
+    11 => 'Arrived / POD needed',
+    _ => 'Completed / POD review handoff',
   };
 
   static String _phaseGroup(int phase) => switch (phase) {
     <= 2 => 'Pending Details',
     <= 6 => 'Pending Assignment',
-    7 => 'In Transit',
-    8 => 'Arrived',
-    <= 10 => 'Pending POD',
-    _ => 'Billing Review',
+    <= 9 => 'Ready to Dispatch',
+    10 => 'In Transit',
+    11 => 'Arrived / POD Needed',
+    _ => 'Completed / POD Review Handoff',
   };
 
   static String _roleLabel(String role) => switch (role) {

@@ -31,11 +31,11 @@ void main() {
         'DELIVERY REQUESTED',
       );
       expect(
-        clientTrackingHeadlineStatus({'workflowPhaseNumber': 7}),
+        clientTrackingHeadlineStatus({'workflowPhaseNumber': 10}),
         'IN TRANSIT',
       );
       expect(
-        clientTrackingHeadlineStatus({'workflowPhaseNumber': 8}),
+        clientTrackingHeadlineStatus({'workflowPhaseNumber': 11}),
         'ARRIVED AT DESTINATION',
       );
       expect(
@@ -46,7 +46,7 @@ void main() {
         clientTrackingHeadlineStatus({'status': 'dispatched'}),
         'IN TRANSIT',
       );
-      expect(clientTrackingPublicTimelineIndex({'workflowPhaseNumber': 7}), 2);
+      expect(clientTrackingPublicTimelineIndex({'workflowPhaseNumber': 10}), 2);
       expect(clientTrackingPublicTimelineIndex({'status': 'dispatched'}), 2);
     },
   );
@@ -55,7 +55,7 @@ void main() {
     expect(
       clientTrackingArrivalLabel({
         'status': 'dispatched',
-        'workflowPhaseNumber': 7,
+        'workflowPhaseNumber': 10,
         'eta': '2 hours 15 min',
         'etaSource': 'google_distance_matrix',
         'etaDurationSeconds': 8100,
@@ -77,10 +77,14 @@ void main() {
       );
       expect(
         clientTrackingWorkflowStatus({'workflowPhaseNumber': 7}),
+        'Your delivery is being arranged',
+      );
+      expect(
+        clientTrackingWorkflowStatus({'workflowPhaseNumber': 10}),
         'Your delivery is on its way',
       );
       expect(
-        clientTrackingWorkflowStatus({'workflowPhaseNumber': 8}),
+        clientTrackingWorkflowStatus({'workflowPhaseNumber': 11}),
         'Your delivery has arrived',
       );
       expect(
