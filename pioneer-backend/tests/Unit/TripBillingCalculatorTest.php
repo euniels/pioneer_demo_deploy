@@ -42,8 +42,10 @@ test('trip billing calculator labels exact fuel evidence and missing tolls clear
     expect($result['calculationStatus'])->toBe('ready_for_review')
         ->and($result['evidenceSummary']['fuel']['confidence'])->toBe('exact')
         ->and($result['evidenceSummary']['fuel']['source'])->toBe('geotab_fuel_transaction')
-        ->and($result['reviewFlags'])->toContain(fn (array $flag): bool => $flag['key'] === 'toll_unavailable')
         ->and($result['manifest']['scope'])->toBe('delivery_reference_only');
+    expect(collect($result['reviewFlags'])->contains(
+        fn (array $flag): bool => ($flag['key'] ?? null) === 'toll_unavailable'
+    ))->toBeTrue();
 });
 
 test('trip billing calculator keeps completed trips on pod hold until proof is verified', function (): void {

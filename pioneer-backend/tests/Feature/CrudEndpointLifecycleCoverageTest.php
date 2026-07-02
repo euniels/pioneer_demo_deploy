@@ -26,6 +26,23 @@ function crudVerifiedPodPayload(): array
     ];
 }
 
+function crudBillingStatusSignaturePayload(string $status, string $role = 'finance'): array
+{
+    return [
+        'billingSignatureRole' => $role,
+        'billingSignatureDataUrl' => json_encode([
+            'status' => $status,
+            'signedAt' => now()->toIso8601String(),
+            'strokes' => [
+                [
+                    ['x' => 0, 'y' => 0],
+                    ['x' => 12, 'y' => 8],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR),
+    ];
+}
+
 function crudSeedSnapshot(array $overrides = []): void
 {
     $snapshot = array_replace_recursive([
@@ -460,11 +477,13 @@ test('crud 6 invoices expose lifecycle and paid void dependency block', function
     $this->withHeaders(crudHeaders())->patchJson('/api/billing/invoices/'.$tripId, [
         'status' => 'approved',
         'approvalNote' => 'Completed trip and POD checked.',
+        ...crudBillingStatusSignaturePayload('approved', 'admin'),
     ])->assertOk()->assertJsonPath('data.status', 'approved');
 
     $this->withHeaders(crudHeaders())->patchJson('/api/billing/invoices/'.$tripId, [
         'status' => 'issued',
         'finalChargeBasis' => 'Final delivery charge confirmed from trip record.',
+        ...crudBillingStatusSignaturePayload('issued', 'admin'),
     ])->assertOk()->assertJsonPath('data.status', 'issued');
     crudSeedSnapshot(['trips' => [crudTripPayload([
         'tripId' => $tripId,

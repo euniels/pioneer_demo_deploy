@@ -6,7 +6,7 @@ use App\Models\BillingInvoiceReference;
 use App\Models\FleetClient;
 use App\Models\FleetRoute;
 use App\Models\FleetRouteStop;
-use App\Models\FleetTrip;
+use App\Models\FleetTrip;   
 use App\Models\GpsLog;
 use App\Models\MaintenanceHistory;
 use App\Models\ManualDriver;

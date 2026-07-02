@@ -45,6 +45,10 @@ test('dispatch status changes create stored notifications and publish realtime p
     $this->patchJson('/api/fleet/trips/TRP-REAL-DISPATCH', [
         'status' => 'dispatched',
         'workflowPhaseNumber' => 10,
+        'vehicle' => 'PTC-REAL',
+        'driver' => 'Realtime Driver',
+        'routeGeotabId' => 'route-real-dispatch',
+        'deviceGeotabId' => 'device-real-dispatch',
     ])
         ->assertOk()
         ->assertJsonPath('success', true);

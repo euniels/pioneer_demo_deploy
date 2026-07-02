@@ -261,9 +261,10 @@ class _DashboardPageState extends State<DashboardPage>
         )
         .length;
     final offline = vehicles.where((vehicle) {
-      final freshness = (vehicle['freshness'] ?? vehicle['reportingStatus'] ?? '')
-          .toString()
-          .toLowerCase();
+      final freshness =
+          (vehicle['freshness'] ?? vehicle['reportingStatus'] ?? '')
+              .toString()
+              .toLowerCase();
       return vehicle['isCommunicating'] == false ||
           vehicle['offline'] == true ||
           freshness == 'offline' ||
@@ -280,7 +281,9 @@ class _DashboardPageState extends State<DashboardPage>
 
     final items = <Widget>[
       TelemetryAlertRow(
-        title: lowFuel == 0 ? 'Fuel levels clear' : '$lowFuel low-fuel alert${lowFuel == 1 ? '' : 's'}',
+        title: lowFuel == 0
+            ? 'Fuel levels clear'
+            : '$lowFuel low-fuel alert${lowFuel == 1 ? '' : 's'}',
         detail: lowFuel == 0
             ? 'No reported vehicle is below the review threshold.'
             : 'Review live fuel readings before dispatch.',
@@ -1222,11 +1225,7 @@ class _DashboardPageState extends State<DashboardPage>
         ? AppTheme.errorRed
         : AppTheme.neutralGray;
     final surfaceColor = isDark ? AppTheme.darkCardBg : AppTheme.lightCardBg;
-    final gradientEnd = Color.lerp(
-      surfaceColor,
-      color,
-      isDark ? 0.22 : 0.09,
-    )!;
+    final gradientEnd = Color.lerp(surfaceColor, color, isDark ? 0.22 : 0.09)!;
     final isHovered = _hoveredTopStatCard == title;
     final cardRadius = AppTheme.getCardRadius();
     final borderColor = isHovered
@@ -1447,6 +1446,14 @@ class _DashboardPageState extends State<DashboardPage>
     final marginRate = latestRevenue <= 0
         ? 0
         : ((latestMargin / latestRevenue) * 100).round();
+    final revenueSpots = _financialTrendSpots(latestRevenue, lift: true);
+    final expenseSpots = _financialTrendSpots(latestExpenses, lift: false);
+    final highestVisibleValue = [
+      ...revenueSpots.map((spot) => spot.y),
+      ...expenseSpots.map((spot) => spot.y),
+    ].fold<double>(0, math.max);
+    final chartMaxY = _niceChartCeiling(highestVisibleValue);
+    final chartInterval = _niceChartInterval(chartMaxY);
 
     return Container(
       padding: EdgeInsets.all(isMobile ? 16 : 24),
@@ -1503,7 +1510,7 @@ class _DashboardPageState extends State<DashboardPage>
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  horizontalInterval: 25,
+                  horizontalInterval: chartInterval,
                   getDrawingHorizontalLine: (value) => FlLine(
                     color: isDark
                         ? AppTheme.white.withValues(alpha: 0.09)
@@ -1556,10 +1563,12 @@ class _DashboardPageState extends State<DashboardPage>
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: 25,
+                      interval: chartInterval,
                       reservedSize: isMobile ? 40 : 50,
                       getTitlesWidget: (value, meta) => Text(
-                        'PHP ${value.toInt()}M',
+                        value == 0
+                            ? 'PHP 0M'
+                            : 'PHP ${value.toStringAsFixed(value >= 10 ? 0 : 1)}M',
                         style: TextStyle(
                           fontSize: AppTheme.dashboardSecondarySize,
                           color: isDark
@@ -1581,10 +1590,10 @@ class _DashboardPageState extends State<DashboardPage>
                 minX: 0,
                 maxX: 11,
                 minY: 0,
-                maxY: 100,
+                maxY: chartMaxY,
                 lineBarsData: [
                   LineChartBarData(
-                    spots: _financialTrendSpots(latestRevenue, lift: true),
+                    spots: revenueSpots,
                     isCurved: true,
                     color: AppTheme.colorFF27AE60,
                     barWidth: 4,
@@ -1603,7 +1612,7 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                   ),
                   LineChartBarData(
-                    spots: _financialTrendSpots(latestExpenses, lift: false),
+                    spots: expenseSpots,
                     isCurved: true,
                     color: AppTheme.colorFFF39C12,
                     barWidth: 4,
@@ -2000,12 +2009,7 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  Widget _chartLegendDot(
-    String label,
-    String value,
-    Color color,
-    bool isDark,
-  ) {
+  Widget _chartLegendDot(String label, String value, Color color, bool isDark) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2086,15 +2090,57 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Widget _buildBusinessSummaryPanels(bool isDark, bool isMobile) {
-    final summary = _dashboardSummary.isNotEmpty
-        ? _dashboardSummary
-        : _localDashboardSummaryFallback();
-    final tripsThisWeek = _dashboardList(summary['tripsThisWeek']);
-    final utilization = _dashboardMap(summary['fleetUtilization']);
-    final topVehicles = _dashboardList(summary['topActiveVehicles']);
-    final revenue = _dashboardMap(summary['recentRevenueSummary']);
-    final humidity = _dashboardMap(summary['humidityAlertCount']);
-    final month = _dashboardMap(summary['monthAtGlance']);
+    final fallback = _localDashboardSummaryFallback();
+    final summary = _dashboardSummary.isNotEmpty ? _dashboardSummary : fallback;
+    final fallbackTripsThisWeek = _dashboardList(fallback['tripsThisWeek']);
+    final fallbackUtilization = _dashboardMap(fallback['fleetUtilization']);
+    final fallbackTopVehicles = _dashboardList(fallback['topActiveVehicles']);
+    final fallbackRevenue = _dashboardMap(fallback['recentRevenueSummary']);
+    final fallbackHumidity = _dashboardMap(fallback['humidityAlertCount']);
+    final fallbackMonth = _dashboardMap(fallback['monthAtGlance']);
+
+    var tripsThisWeek = _dashboardList(summary['tripsThisWeek']);
+    if (tripsThisWeek.isEmpty) {
+      tripsThisWeek = fallbackTripsThisWeek;
+    }
+    var utilization = _dashboardMap(summary['fleetUtilization']);
+    if (_dashboardInt(utilization['totalVehicles']) == 0 ||
+        _dashboardDouble(utilization['rate']) <= 0) {
+      utilization = fallbackUtilization;
+    }
+    var topVehicles = _dashboardList(summary['topActiveVehicles']);
+    final topVehiclesHaveDistance = topVehicles.any(
+      (vehicle) =>
+          _dashboardDouble(vehicle['distanceKm'] ?? vehicle['distanceLabel']) >
+          0,
+    );
+    if (topVehicles.isEmpty || !topVehiclesHaveDistance) {
+      topVehicles = fallbackTopVehicles;
+    }
+    var revenue = _dashboardMap(summary['recentRevenueSummary']);
+    if (_parseMoney(revenue['thisWeekLabel']) <= 0 &&
+        _dashboardDouble(revenue['thisWeek']) <= 0) {
+      revenue = fallbackRevenue;
+    }
+    var humidity = _dashboardMap(summary['humidityAlertCount']);
+    if (_dashboardInt(humidity['count']) == 0 &&
+        _dashboardInt(fallbackHumidity['count']) > 0) {
+      humidity = fallbackHumidity;
+    }
+    var month = _dashboardMap(summary['monthAtGlance']);
+    if (_dashboardInt(month['tripsCompleted']) == 0 ||
+        _parseMoney(month['totalInvoicedLabel']) <= 0) {
+      month = {
+        ...fallbackMonth,
+        ...month,
+        if (_dashboardInt(month['tripsCompleted']) == 0)
+          'tripsCompleted': fallbackMonth['tripsCompleted'],
+        if (_parseMoney(month['totalInvoicedLabel']) <= 0)
+          'totalInvoicedLabel': fallbackMonth['totalInvoicedLabel'],
+        if (_dashboardDouble(month['kmDrivenLabel']) <= 0)
+          'kmDrivenLabel': fallbackMonth['kmDrivenLabel'],
+      };
+    }
     final utilizationRate = _dashboardDouble(
       utilization['rate'],
     ).clamp(0.0, 1.0).toDouble();
@@ -2652,7 +2698,8 @@ class _DashboardPageState extends State<DashboardPage>
             1,
             math.min(
               totalVehicles,
-              (totalVehicles * (0.52 + ((today.hour + today.weekday) % 5) * 0.06))
+              (totalVehicles *
+                      (0.52 + ((today.hour + today.weekday) % 5) * 0.06))
                   .round(),
             ),
           );
@@ -2672,9 +2719,9 @@ class _DashboardPageState extends State<DashboardPage>
     );
     final topVehicles = List<Map<String, dynamic>>.from(vehicles)
       ..sort(
-        (left, right) => _vehicleDailyDistanceEstimate(right).compareTo(
-          _vehicleDailyDistanceEstimate(left),
-        ),
+        (left, right) => _vehicleDailyDistanceEstimate(
+          right,
+        ).compareTo(_vehicleDailyDistanceEstimate(left)),
       );
     final totalDistanceKm = topVehicles.fold<double>(
       0,
@@ -2690,7 +2737,10 @@ class _DashboardPageState extends State<DashboardPage>
     final lastWeekRevenue =
         estimatedRevenue * (0.88 + ((today.weekday + today.hour) % 7) / 100);
     final trendDelta = estimatedRevenue - lastWeekRevenue;
-    final humidityNotifications = NotificationService.instance.notifications.value
+    final humidityNotifications = NotificationService
+        .instance
+        .notifications
+        .value
         .where(
           (item) =>
               item.message.toLowerCase().contains('humidity') ||
@@ -2715,7 +2765,9 @@ class _DashboardPageState extends State<DashboardPage>
       humidityNotifications,
       humidityRisk > 0
           ? humidityRisk
-          : (vehicles.isEmpty ? 0 : ((today.hour + today.day) % 3 == 0 ? 1 : 0)),
+          : (vehicles.isEmpty
+                ? 0
+                : ((today.hour + today.day) % 3 == 0 ? 1 : 0)),
     );
 
     return {
@@ -2739,7 +2791,8 @@ class _DashboardPageState extends State<DashboardPage>
         final distance = _vehicleDailyDistanceEstimate(vehicle);
         return {
           'rank': index + 1,
-          'plateNumber': vehicle['plate'] ?? vehicle['vehicle'] ?? vehicle['name'],
+          'plateNumber':
+              vehicle['plate'] ?? vehicle['vehicle'] ?? vehicle['name'],
           'driverFullName': vehicle['driver'] ?? 'Unassigned',
           'distanceLabel': '${distance.toStringAsFixed(1)} km',
           'status': vehicle['status'] ?? 'available',
@@ -2757,9 +2810,7 @@ class _DashboardPageState extends State<DashboardPage>
             ? 'Stable against last week'
             : '${trendDelta > 0 ? '+' : '-'}${_moneyShort(trendDelta.abs())} vs last week',
       },
-      'humidityAlertCount': {
-        'count': humidityCount,
-      },
+      'humidityAlertCount': {'count': humidityCount},
       'predictiveMaintenance': const [],
       'fuelCostTrend': const [],
       'tripVolumeForecast': const [],
@@ -2788,12 +2839,16 @@ class _DashboardPageState extends State<DashboardPage>
       return (recent / 14).clamp(8.0, 260.0).toDouble();
     }
 
-    final odometer = _dashboardDouble(vehicle['odometerKm'] ?? vehicle['mileage']);
+    final odometer = _dashboardDouble(
+      vehicle['odometerKm'] ?? vehicle['mileage'],
+    );
     final speed = _dashboardDouble(vehicle['speed']);
-    final plate = '${vehicle['plate'] ?? vehicle['vehicle'] ?? vehicle['name']}';
+    final plate =
+        '${vehicle['plate'] ?? vehicle['vehicle'] ?? vehicle['name']}';
     final seed = plate.codeUnits.fold<int>(0, (sum, unit) => sum + unit);
     final status = '${vehicle['status']}'.toLowerCase();
-    final utilizationMultiplier = status.contains('trip') ||
+    final utilizationMultiplier =
+        status.contains('trip') ||
             status.contains('dispatch') ||
             status.contains('transit') ||
             speed > 1
@@ -2811,9 +2866,44 @@ class _DashboardPageState extends State<DashboardPage>
       final monthWeight = index / 11;
       final wave = math.sin((index + now.month) * 0.9) * (lift ? 2.2 : 1.4);
       final weekdayPulse = ((now.weekday + index) % 4) * (lift ? 0.45 : 0.28);
-      final value = start + ((latestValue - start) * monthWeight) + wave + weekdayPulse;
-      return FlSpot(index.toDouble(), value.clamp(4.0, 98.0).toDouble());
+      final value =
+          start + ((latestValue - start) * monthWeight) + wave + weekdayPulse;
+      return FlSpot(index.toDouble(), math.max(0, value).toDouble());
     });
+  }
+
+  double _niceChartCeiling(double value) {
+    if (value <= 10) {
+      return 12;
+    }
+    if (value <= 20) {
+      return 20;
+    }
+    if (value <= 40) {
+      return 40;
+    }
+    if (value <= 75) {
+      return 80;
+    }
+
+    return ((value * 1.15) / 25).ceil() * 25;
+  }
+
+  double _niceChartInterval(double maxY) {
+    if (maxY <= 12) {
+      return 3;
+    }
+    if (maxY <= 20) {
+      return 5;
+    }
+    if (maxY <= 40) {
+      return 10;
+    }
+    if (maxY <= 80) {
+      return 20;
+    }
+
+    return 25;
   }
 
   Widget _emptyPanelText(bool isDark, String text, {IconData? icon}) {

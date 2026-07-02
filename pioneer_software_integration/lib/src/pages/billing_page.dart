@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:math' as math;
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../services/backend_api.dart';
@@ -9,6 +13,7 @@ import '../utils/workflow_status_helper.dart';
 import '../widgets/admin_page_controls.dart';
 import '../widgets/dashboard_layout.dart';
 import '../widgets/page_skeletons.dart';
+import '../widgets/signature_pad.dart';
 import '../theme/app_theme.dart';
 
 class BillingPage extends StatefulWidget {
@@ -446,20 +451,18 @@ class _BillingPageState extends State<BillingPage> {
                             withBottomSpacing: false,
                           ),
                           const SizedBox(height: 12),
-                          if (_stringList(invoice['blockingReasons'])
-                              .isNotEmpty) ...[
+                          if (_stringList(
+                            invoice['blockingReasons'],
+                          ).isNotEmpty) ...[
                             Text(
                               'Blocking reasons',
-                              style: AppTheme.getDashboardBodyStyle(context)
-                                  .copyWith(fontWeight: FontWeight.w900),
+                              style: AppTheme.getDashboardBodyStyle(
+                                context,
+                              ).copyWith(fontWeight: FontWeight.w900),
                             ),
                             const SizedBox(height: AppTheme.space8),
                             ..._stringList(invoice['blockingReasons']).map(
-                              (reason) => _receiptRow(
-                                'Hold',
-                                reason,
-                                isDark,
-                              ),
+                              (reason) => _receiptRow('Hold', reason, isDark),
                             ),
                           ],
                           Wrap(
@@ -890,7 +893,8 @@ class _BillingPageState extends State<BillingPage> {
         .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
         .join(' ');
     final lower = value.toLowerCase();
-    final color = lower.contains('exact') ||
+    final color =
+        lower.contains('exact') ||
             lower.contains('geotab') ||
             lower.contains('confirmed')
         ? AppTheme.colorFF10B981
@@ -1039,7 +1043,7 @@ class _BillingPageState extends State<BillingPage> {
                   : 'Edit invoice override',
             ),
             content: SizedBox(
-              width: 520,
+              width: math.min(MediaQuery.of(context).size.width - 48, 520),
               child: SingleChildScrollView(
                 child: Form(
                   key: formKey,
@@ -1048,6 +1052,7 @@ class _BillingPageState extends State<BillingPage> {
                     children: [
                       DropdownButtonFormField<String>(
                         initialValue: selectedTripId,
+                        isExpanded: true,
                         hint: const Text('Select...'),
                         decoration: const InputDecoration(
                           labelText: 'Linked trip',
@@ -1095,37 +1100,56 @@ class _BillingPageState extends State<BillingPage> {
                         ),
                       ],
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _amountField(baseController, 'Base charge'),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _amountField(
-                              distanceController,
-                              'Distance charge',
-                            ),
-                          ),
-                        ],
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final stack = constraints.maxWidth < 430;
+                          final fields = [
+                            _amountField(baseController, 'Base charge'),
+                            _amountField(distanceController, 'Distance charge'),
+                          ];
+                          if (stack) {
+                            return Column(
+                              children: [
+                                fields[0],
+                                const SizedBox(height: 10),
+                                fields[1],
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: fields[0]),
+                              const SizedBox(width: 10),
+                              Expanded(child: fields[1]),
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _amountField(
-                              fuelController,
-                              'Fuel estimate',
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _amountField(
-                              surchargeController,
-                              'Surcharges',
-                            ),
-                          ),
-                        ],
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final stack = constraints.maxWidth < 430;
+                          final fields = [
+                            _amountField(fuelController, 'Fuel estimate'),
+                            _amountField(surchargeController, 'Surcharges'),
+                          ];
+                          if (stack) {
+                            return Column(
+                              children: [
+                                fields[0],
+                                const SizedBox(height: 10),
+                                fields[1],
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: fields[0]),
+                              const SizedBox(width: 10),
+                              Expanded(child: fields[1]),
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
@@ -1279,13 +1303,21 @@ class _BillingPageState extends State<BillingPage> {
               _dialogAmountCompareRow(
                 context,
                 'Current amount',
-                _peso(before['totalWithVat'] ?? invoice['totalWithVat'] ?? invoice['amount']),
+                _peso(
+                  before['totalWithVat'] ??
+                      invoice['totalWithVat'] ??
+                      invoice['amount'],
+                ),
               ),
               const SizedBox(height: AppTheme.space10),
               _dialogAmountCompareRow(
                 context,
                 'Recalculated amount',
-                _peso(after['totalWithVat'] ?? updated['totalWithVat'] ?? updated['amount']),
+                _peso(
+                  after['totalWithVat'] ??
+                      updated['totalWithVat'] ??
+                      updated['amount'],
+                ),
                 emphasized: true,
               ),
             ],
@@ -1365,9 +1397,9 @@ class _BillingPageState extends State<BillingPage> {
                       validator: approved
                           ? null
                           : (value) => FormValidation.requiredField(
-                                'Rejection reason',
-                                value,
-                              ),
+                              'Rejection reason',
+                              value,
+                            ),
                     ),
                   ],
                 ),
@@ -1461,7 +1493,9 @@ class _BillingPageState extends State<BillingPage> {
       text: DateTime.now().toIso8601String().substring(0, 10),
     );
     final formKey = GlobalKey<FormState>();
+    final signatureKey = GlobalKey<SignaturePadState>();
     var saving = false;
+    var signatureEmpty = true;
 
     final title = switch (status) {
       'approved' => 'Approve invoice',
@@ -1486,6 +1520,11 @@ class _BillingPageState extends State<BillingPage> {
       _ => 'notes',
     };
     final requiresText = status != 'overdue';
+    final requiresSignature = const {
+      'approved',
+      'issued',
+      'paid',
+    }.contains(status);
 
     try {
       await showDialog<void>(
@@ -1536,6 +1575,56 @@ class _BillingPageState extends State<BillingPage> {
                         'This keeps the invoice collectible and records an overdue audit timestamp.',
                         style: AppTheme.getBodyStyle(context),
                       ),
+                    if (requiresSignature) ...[
+                      const SizedBox(height: 14),
+                      _billingProofPanel(
+                        title: 'Finance digital signature',
+                        subtitle:
+                            'Sign to confirm this billing action was reviewed and authorized.',
+                        child: Column(
+                          children: [
+                            SignaturePad(
+                              key: signatureKey,
+                              height: 126,
+                              onChanged: (isEmpty) {
+                                setDialogState(() => signatureEmpty = isEmpty);
+                              },
+                            ),
+                            const SizedBox(height: AppTheme.space8),
+                            Row(
+                              children: [
+                                Icon(
+                                  signatureEmpty
+                                      ? Icons.edit_off_rounded
+                                      : Icons.verified_rounded,
+                                  size: 16,
+                                  color: signatureEmpty
+                                      ? AppTheme.colorFFF39C12
+                                      : AppTheme.colorFF27AE60,
+                                ),
+                                const SizedBox(width: AppTheme.space6),
+                                Expanded(
+                                  child: Text(
+                                    signatureEmpty
+                                        ? 'Signature required before confirming.'
+                                        : 'Signature captured.',
+                                    style: AppTheme.getDashboardSecondaryStyle(
+                                      context,
+                                    ),
+                                  ),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () =>
+                                      signatureKey.currentState?.clear(),
+                                  icon: const Icon(Icons.refresh_rounded),
+                                  label: const Text('Clear'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1551,13 +1640,35 @@ class _BillingPageState extends State<BillingPage> {
                           if (!(formKey.currentState?.validate() ?? false)) {
                             return;
                           }
+                          if (requiresSignature && signatureEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Please add a finance digital signature first.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
                           final payload = <String, dynamic>{'status': status};
                           if (requiresText) {
                             payload[fieldKey] = noteController.text.trim();
                           }
                           if (status == 'paid') {
-                            payload['paymentDate'] =
-                                paymentDateController.text.trim();
+                            payload['paymentDate'] = paymentDateController.text
+                                .trim();
+                          }
+                          if (requiresSignature) {
+                            payload['billingSignatureDataUrl'] = jsonEncode({
+                              'strokes':
+                                  signatureKey.currentState?.exportStrokes() ??
+                                  const [],
+                              'signedAt': DateTime.now().toIso8601String(),
+                              'status': status,
+                            });
+                            payload['billingSignatureRole'] = status == 'paid'
+                                ? 'finance'
+                                : 'admin';
                           }
                           setDialogState(() => saving = true);
                           try {
@@ -1646,7 +1757,9 @@ class _BillingPageState extends State<BillingPage> {
                   final reason = reasonController.text.trim();
                   if (tripId.isEmpty || reason.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('A void reason is required.')),
+                      const SnackBar(
+                        content: Text('A void reason is required.'),
+                      ),
                     );
                     return;
                   }
@@ -1672,6 +1785,44 @@ class _BillingPageState extends State<BillingPage> {
     }
   }
 
+  Widget _billingProofPanel({
+    required String title,
+    required String subtitle,
+    required Widget child,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppTheme.space12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? AppTheme.white.withValues(alpha: 0.04)
+            : AppTheme.colorFFF8FAFC,
+        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.white.withValues(alpha: 0.09)
+              : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: AppTheme.getDashboardBodyStyle(
+              context,
+            ).copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: AppTheme.space4),
+          Text(subtitle, style: AppTheme.getDashboardSecondaryStyle(context)),
+          const SizedBox(height: AppTheme.space10),
+          child,
+        ],
+      ),
+    );
+  }
+
   Future<void> _showManualTollDialog(
     Map<String, dynamic> invoice,
     bool isDark,
@@ -1682,6 +1833,35 @@ class _BillingPageState extends State<BillingPage> {
     final receiptController = TextEditingController();
     final formKey = GlobalKey<FormState>();
     var saving = false;
+    String? proofFileName;
+    String? proofFileType;
+    String? proofDataUrl;
+
+    Future<void> pickTollProof(
+      void Function(void Function()) setDialogState,
+    ) async {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
+        withData: true,
+      );
+      final file = result?.files.single;
+      if (file == null || file.bytes == null) {
+        return;
+      }
+      final extension = (file.extension ?? '').toLowerCase();
+      final mime = switch (extension) {
+        'jpg' || 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'pdf' => 'application/pdf',
+        _ => 'application/octet-stream',
+      };
+      setDialogState(() {
+        proofFileName = file.name;
+        proofFileType = mime;
+        proofDataUrl = 'data:$mime;base64,${base64Encode(file.bytes!)}';
+      });
+    }
 
     try {
       await showDialog<void>(
@@ -1717,6 +1897,42 @@ class _BillingPageState extends State<BillingPage> {
                             'Optional receipt number or document reference.',
                       ),
                     ),
+                    const SizedBox(height: AppTheme.space12),
+                    _billingProofPanel(
+                      title: 'Toll receipt proof',
+                      subtitle:
+                          'Attach the toll receipt image or PDF before saving.',
+                      child: Row(
+                        children: [
+                          Icon(
+                            proofDataUrl == null
+                                ? Icons.upload_file_rounded
+                                : Icons.verified_rounded,
+                            color: proofDataUrl == null
+                                ? AppTheme.colorFFF39C12
+                                : AppTheme.colorFF27AE60,
+                          ),
+                          const SizedBox(width: AppTheme.space10),
+                          Expanded(
+                            child: Text(
+                              proofFileName ?? 'No toll proof attached yet',
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTheme.getDashboardBodyStyle(context),
+                            ),
+                          ),
+                          const SizedBox(width: AppTheme.space8),
+                          OutlinedButton.icon(
+                            onPressed: saving
+                                ? null
+                                : () => pickTollProof(setDialogState),
+                            icon: const Icon(Icons.attach_file_rounded),
+                            label: Text(
+                              proofDataUrl == null ? 'Attach' : 'Replace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1743,14 +1959,34 @@ class _BillingPageState extends State<BillingPage> {
                             );
                             return;
                           }
+                          if (proofDataUrl == null ||
+                              proofFileName == null ||
+                              proofFileType == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Attach a toll receipt image or PDF first.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
                           setDialogState(() => saving = true);
                           try {
-                            await BackendApiService.addBillingManualToll(tripId, {
-                              'amount': amount,
-                              'description': descriptionController.text.trim(),
-                              'receiptReference': receiptController.text.trim(),
-                              'source': 'manual',
-                            });
+                            await BackendApiService.addBillingManualToll(
+                              tripId,
+                              {
+                                'amount': amount,
+                                'description': descriptionController.text
+                                    .trim(),
+                                'receiptReference': receiptController.text
+                                    .trim(),
+                                'proofFileName': proofFileName,
+                                'proofFileType': proofFileType,
+                                'proofDataUrl': proofDataUrl,
+                                'source': 'manual',
+                              },
+                            );
                             if (!mounted) return;
                             Navigator.pop(context);
                             _reload();
@@ -1824,14 +2060,15 @@ class _BillingPageState extends State<BillingPage> {
           ),
           Text(
             value,
-            style: AppTheme.getHeadingStyle(
-              context,
-              fontSize: emphasized ? 20 : 17,
-            ).copyWith(
-              color: emphasized
-                  ? AppTheme.colorFF10B981
-                  : AppTheme.textPrimary(context),
-            ),
+            style:
+                AppTheme.getHeadingStyle(
+                  context,
+                  fontSize: emphasized ? 20 : 17,
+                ).copyWith(
+                  color: emphasized
+                      ? AppTheme.colorFF10B981
+                      : AppTheme.textPrimary(context),
+                ),
           ),
         ],
       ),
@@ -2507,8 +2744,10 @@ class _BillingPageState extends State<BillingPage> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: _StatusDotPill(
-                    label: (invoice['billingStageLabel'] ?? (podReady ? 'Ready' : 'POD hold'))
-                        .toString(),
+                    label:
+                        (invoice['billingStageLabel'] ??
+                                (podReady ? 'Ready' : 'POD hold'))
+                            .toString(),
                     color: _billingStageColor(invoice),
                   ),
                 ),
@@ -2694,8 +2933,10 @@ class _BillingPageState extends State<BillingPage> {
     return switch (stage.isNotEmpty ? stage : status) {
       'paid' => AppTheme.colorFF10B981,
       'issued' || 'approved' || 'ready_for_review' => AppTheme.colorFF4B7BE5,
-      'pod_under_review' || 'waiting_for_pod' || 'review_required' || 'draft_estimate' =>
-        AppTheme.colorFFF59E0B,
+      'pod_under_review' ||
+      'waiting_for_pod' ||
+      'review_required' ||
+      'draft_estimate' => AppTheme.colorFFF59E0B,
       'pod_rejected' || 'rejected' || 'overdue' => AppTheme.colorFFEF4444,
       'voided' => AppTheme.colorFF64748B,
       _ => AppTheme.colorFF4B7BE5,

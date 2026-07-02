@@ -26,6 +26,23 @@ function billingVerifiedPodPayload(): array
     ];
 }
 
+function billingStatusSignaturePayload(string $status, string $role = 'finance'): array
+{
+    return [
+        'billingSignatureRole' => $role,
+        'billingSignatureDataUrl' => json_encode([
+            'status' => $status,
+            'signedAt' => now()->toIso8601String(),
+            'strokes' => [
+                [
+                    ['x' => 0, 'y' => 0],
+                    ['x' => 12, 'y' => 8],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR),
+    ];
+}
+
 test('fuel price settings can be saved and returned for estimates', function () {
     $this->putJson('/api/fleet/settings/fuel-prices', [
         'dieselPricePerLiter' => 63.45,
@@ -691,6 +708,7 @@ test('invoice status transitions references paid lock and voiding rules are enfo
     $this->patchJson('/api/billing/invoices/TRP-INVOICE-LIFE', [
         'status' => 'approved',
         'approvalNote' => 'GPS and POD evidence reviewed.',
+        ...billingStatusSignaturePayload('approved', 'admin'),
     ])->assertOk()
         ->assertJsonPath('data.status', 'approved')
         ->assertJsonPath('data.approvalNote', 'GPS and POD evidence reviewed.');
@@ -698,6 +716,7 @@ test('invoice status transitions references paid lock and voiding rules are enfo
     $this->patchJson('/api/billing/invoices/TRP-INVOICE-LIFE', [
         'status' => 'issued',
         'finalChargeBasis' => 'Final charge uses completed trip distance and signed POD.',
+        ...billingStatusSignaturePayload('issued', 'admin'),
     ])->assertOk()
         ->assertJsonPath('data.status', 'issued')
         ->assertJsonPath('data.finalChargeBasis', 'Final charge uses completed trip distance and signed POD.');
@@ -706,6 +725,7 @@ test('invoice status transitions references paid lock and voiding rules are enfo
         'status' => 'paid',
         'paymentReference' => 'OR-2026-0007',
         'paymentDate' => '2026-06-02',
+        ...billingStatusSignaturePayload('paid'),
     ])->assertOk()
         ->assertJsonPath('data.status', 'paid')
         ->assertJsonPath('data.paymentReference', 'OR-2026-0007');
@@ -751,11 +771,13 @@ test('issued invoices can be voided and remain visible in statement of accounts'
     $this->patchJson('/api/billing/invoices/TRP-INVOICE-VOID', [
         'status' => 'approved',
         'approvalNote' => 'Ready for invoice issue.',
+        ...billingStatusSignaturePayload('approved', 'admin'),
     ])->assertOk()->assertJsonPath('data.status', 'approved');
 
     $this->patchJson('/api/billing/invoices/TRP-INVOICE-VOID', [
         'status' => 'issued',
         'finalChargeBasis' => 'Completed trip with verified POD.',
+        ...billingStatusSignaturePayload('issued', 'admin'),
     ])->assertOk()->assertJsonPath('data.status', 'issued');
 
     $this->patchJson('/api/billing/invoices/TRP-INVOICE-VOID', [
